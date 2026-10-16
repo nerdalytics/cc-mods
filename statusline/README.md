@@ -51,6 +51,8 @@ With the `auto_handoff` option on, the mod runs it on its own once the session i
 
 ## Options
 
+<img width="2178" height="1100" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/8927759d-625a-4dd0-ac5f-7d6451cac108" />
+
 In `/config`, under the plugin:
 
 | Option | Default | What it does |
