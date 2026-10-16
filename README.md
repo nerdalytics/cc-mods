@@ -9,14 +9,11 @@ Mods for Claude Code, published as a plugin marketplace.
 
 ## Install a mod
 
-Each mod's README has an install block to paste into Claude Code, which installs the mod and checks what it needs. Or install it yourself, in a shell:
+In Claude Code:
 
-```sh
-claude plugin marketplace add nerdalytics/cc-mods
-claude plugin install <mod>@cc-mods
+```text
+/plugin install <mod> --marketplace nerdalytics/cc-mods
 ```
-
-Then type `/reload-plugins` in Claude Code, or start a new session. Adding the marketplace is needed once; after that, `claude plugin install <mod>@cc-mods` installs any mod listed here.
 
 Update with `claude plugin update <mod>@cc-mods`, remove with `claude plugin uninstall <mod>@cc-mods`.
 

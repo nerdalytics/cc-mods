@@ -4,35 +4,13 @@ A live status line for Claude Code, drawn around the prompt, and a handoff skill
 
 ## Install
 
-### Let Claude do it
-
-Paste this into Claude Code:
+In Claude Code:
 
 ```text
-Install and set up the statusline mod from the nerdalytics/cc-mods plugin marketplace.
-
-1. Run `claude --version` and tell me the version. Mods need Claude Code 2.1.287 or later: if mine is older, stop and tell me to update. The mod is built and tested against 2.1.296: if mine is between the two, tell me it is untested there before going on.
-2. Run `claude plugin marketplace add nerdalytics/cc-mods`, then `claude plugin install statusline@cc-mods`. If either command is blocked or fails, show me the exact command and its error, and tell me to run it myself with `!` in front.
-3. Run `claude plugin list` and confirm that `statusline@cc-mods` is enabled.
-4. Check what the status line needs and report each as present or missing:
-   - `git --version` (for the git row)
-   - `gh auth status` (only for pull request details; the rest works without it)
-   - a Nerd Font, for the subagent icon: list installed fonts whose name contains "Nerd" (macOS: ~/Library/Fonts and /Library/Fonts; Linux: `fc-list`). You cannot see which font my terminal uses, so ask me to confirm my terminal is set to one.
-5. Tell me to type `/reload-plugins`, then tell me that `/config` under the plugin turns each row and each segment of the status row on or off, places each row above or below the prompt, and turns the automatic handoff, the fresh-start line and compact spacing on or off.
+/plugin install statusline --marketplace nerdalytics/cc-mods
 ```
 
-### Do it yourself
-
-In a shell:
-
-```sh
-claude plugin marketplace add nerdalytics/cc-mods
-claude plugin install statusline@cc-mods
-```
-
-or inside a Claude Code session: `/plugin install statusline --marketplace nerdalytics/cc-mods`. Then type `/reload-plugins`, or start a new session.
-
-Then set up what it needs (see [Needs](#needs)): a Nerd Font in your terminal, `git`, and `gh auth login` if you want pull request details.
+It asks to add the marketplace, then installs the mod and asks for its options (see [Options](#options)); `/config` changes them later. Then set up what it needs (see [Needs](#needs)): a Nerd Font in your terminal, `git`, and `gh auth login` if you want pull request details.
 
 ### Update and remove
 
