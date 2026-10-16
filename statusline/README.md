@@ -2,7 +2,7 @@
 
 A live status line for Claude Code, drawn around the prompt, and a handoff skill that runs before the prompt cache goes cold.
 
-<img width="2124" height="112" alt="The git row (project folder, current folder, branch) above the status row (model, 7d and 5h limits, context, prompts, cost, cache)" src="https://github.com/user-attachments/assets/bc52a59b-5466-4615-a96d-e327a8fcf928" />
+<img width="1041" height="45" alt="The git row (project folder, current folder, branch) above the status row (model, 7d and 5h limits, context, prompts, cost, cache)" src="https://github.com/user-attachments/assets/a6a36fa3-bc46-4ebc-b493-13feb520410e" />
 
 ## Install
 
