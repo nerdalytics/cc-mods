@@ -158,7 +158,8 @@ let autoHandoff = false;
 let freshStart = false;
 // The columns between a row's tags: none with the compact option on.
 let gap = 1;
-// The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option.
+// The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
+// smart_zone option off.
 let smartZone = 200_000;
 // A main-conversation turn is in flight (from its first request to its end), so no handoff starts inside one.
 let busy = false;
@@ -180,7 +181,7 @@ export const register: Register = (on, options) => {
   ];
   aboveRows = rows.filter(([at]) => at === "above").map(([, row]) => row);
   belowRows = rows.filter(([at]) => at !== "above").map(([, row]) => row);
-  smartZone = typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
+  smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
     tick?.cancel();
@@ -856,16 +857,20 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
   const segments = ([
     // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
     [{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])],
-    [{
-      text: !g.branch
-        ? ""
-        : g.branch === g.defaultBranch
-          ? g.branch
-          : g.basedOff && g.basedOff !== g.defaultBranch && g.basedOff !== g.branch
-            ? `⎇${sp}${g.basedOff}${sp}⎇${sp}${g.branch}`
-            : `⎇${sp}${g.branch}`,
-      href: folder(g.top),
-    }],
+    [
+      // A bare branch name would run into the folder under compact spacing; a ⎇ before it parts them already.
+      { text: !gap && g.branch && g.branch === g.defaultBranch ? " " : "" },
+      {
+        text: !g.branch
+          ? ""
+          : g.branch === g.defaultBranch
+            ? g.branch
+            : g.basedOff && g.basedOff !== g.defaultBranch && g.basedOff !== g.branch
+              ? `⎇${sp}${g.basedOff}${sp}⎇${sp}${g.branch}`
+              : `⎇${sp}${g.branch}`,
+        href: folder(g.top),
+      },
+    ],
     // Hidden when the branch already names it.
     [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
     [{ text: pr ? `#${pr.number}` : "", href: pr?.url || undefined }],
@@ -967,7 +972,8 @@ function cells(pct: number, n: number): number {
 
 // The context window drawn as the limits draw theirs, its meaning as statusline.zsh's: the top half is the smart zone
 // left (the first `smart` tokens, where recall is precise), the bottom half the window left before auto-compaction;
-// past it the bottom refills red, a full bar per 25% over. Cells run red to green across the bar (zsh's _sl_gyr_ramp),
+// past it the bottom refills red, a full bar per 25% over. With no smart zone (`smart` 0) each cell is one full-height
+// block of the window left, the glyph a moon filling across the whole window. Cells run red to green across the bar (zsh's _sl_gyr_ramp),
 // and the badge is zsh's recall-zone glyph on the colour of the percentage used. Hovered, the tokens left (zsh's ↻).
 function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["context"], limit: number | undefined, smart: number) {
   if (context.tokens === undefined || context.window <= 0) return [];
@@ -983,13 +989,8 @@ function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["co
   const parts = [Text({ color: hex(contrast(badgeBg)), backgroundColor: hex(badgeBg), children: badge })];
   for (let i = 0; i < CONTEXT_CELLS; i++) {
     const lit = ramp(Math.trunc(((CONTEXT_CELLS - 1 - i) * 100) / CONTEXT_CELLS));
-    parts.push(
-      Text({
-        color: hex(i < top ? lit : EMPTY_FG),
-        backgroundColor: hex(i < bottom ? (overflow ? OVERFLOW_RED : lit) : EMPTY_FG),
-        children: "▀",
-      }),
-    );
+    const under = i < bottom ? (overflow ? OVERFLOW_RED : lit) : EMPTY_FG;
+    parts.push(Text({ color: hex(smart <= 0 ? under : i < top ? lit : EMPTY_FG), backgroundColor: hex(under), children: "▀" }));
   }
   const shown = `${formatTokens(remaining)} `.padStart(CONTEXT_CELLS);
   parts.push(

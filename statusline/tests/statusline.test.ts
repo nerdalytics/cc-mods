@@ -197,6 +197,23 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
+  test("draws the context bar as full-height blocks of the window left with the smart_zone option off", { options: { smart_zone: false } }, async ($, on) => {
+    stubHint(on);
+    // 300,000 of a 1,000,000 window: 30% used, 7 cells left, each both halves; the moon a quarter full (◔), not a diamond.
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 300_000, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await mountHint($);
+    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
+    const context = (await ui.findAll({ type: "Box", key: "context" }))[0];
+    expect(flat(context.children[0])).toBe(" ◔ ");
+    const cells = context.children.slice(1, -1);
+    expect(cells.map((t: any) => (t.props.backgroundColor !== "#373a48" ? "B" : "_")).join("")).toBe("BBBBBBB___");
+    expect(cells.every((t: any) => t.props.color === t.props.backgroundColor)).toBe(true);
+    await ui.unmount();
+  });
+
   test("draws each limit's time left on top, its usage left underneath, and the empty track to 100%", async ($, on) => {
     stubHint(on);
     const now = Date.now();
@@ -631,6 +648,38 @@ describe("statusline", () => {
     }
     expect(branch).toBeDefined();
     expect(await ui.find({ type: "Box", text: "⎇ trunk ⎇ feat" })).toBeUndefined();
+    await ui.unmount();
+  });
+
+  test("keeps a space before the default branch under compact spacing: no ⎇ parts it from the folder", { options: { compact: true } }, async ($, on) => {
+    stubHint(on);
+    const out: Record<string, string> = {
+      "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
+        "/r/cc-mods/.git\n/r/cc-mods/.git\n/r/cc-mods\ntrunk\n",
+      "config init.defaultBranch": "trunk\n",
+    };
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r/cc-mods" }));
+    on("session.cwd", () => ({ value: "/r/cc-mods" }));
+    on("fs.exists", () => ({ value: false }));
+    on("process.run", (_$, e) => {
+      const stdout = out[e.argv.slice(1).filter((a) => a !== "--no-optional-locks").join(" ")];
+      return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" } as any);
+    const ui = await $.ui.mount({
+      plugin: "statusline",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
+    } as any);
+
+    const glyphs = async () => (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
+    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(await glyphs()).toContain("cc-mods trunk");
     await ui.unmount();
   });
 

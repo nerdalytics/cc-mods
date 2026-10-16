@@ -105,6 +105,12 @@
       "description": "Once the cache is cold and this session wrote a handoff, a line under the prompt shows what the next message costs here and what a fresh session from the handoff costs, with a button that starts it.",
       "default": true
     },
+    "smart_zone": {
+      "type": "boolean",
+      "title": "Statusline: Smart zone on the context bar",
+      "description": "The context bar's top half shows the smart zone left. Off, the bar shows only the context window left, in full-height blocks.",
+      "default": true
+    },
     "smart_zone_tokens": {
       "type": "number",
       "title": "Statusline: Smart zone (tokens)",
