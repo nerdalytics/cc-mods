@@ -2,6 +2,8 @@
 
 A live status line for Claude Code, drawn around the prompt, and a handoff skill that runs before the prompt cache goes cold.
 
+<img width="2124" height="112" alt="CleanShot 2026-10-17 at 00 34 34@2x" src="https://github.com/user-attachments/assets/bc52a59b-5466-4615-a96d-e327a8fcf928" />
+
 ## Install
 
 In Claude Code:
