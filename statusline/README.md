@@ -94,7 +94,7 @@ After `/compact` the old cache has no use. The cache countdown and the handoff w
 
 ## Options
 
-<img width="2178" height="1100" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/8927759d-625a-4dd0-ac5f-7d6451cac108" />
+<img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
 
 Change these in `/config`, under the plugin. Each title there starts with `Statusline:`.
 
