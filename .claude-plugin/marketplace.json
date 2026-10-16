@@ -1,0 +1,19 @@
+{
+  "name": "cc-mods",
+  "description": "Mods for Claude Code by nerdalytics.",
+  "owner": {
+    "name": "nerdalytics"
+  },
+  "plugins": [
+    {
+      "name": "statusline",
+      "source": "./statusline",
+      "description": "A live status line around the prompt: limits, costs, prompt cache and git, plus a handoff before the cache goes cold."
+    },
+    {
+      "name": "debug",
+      "source": "./debug",
+      "description": "Marks every place in Claude Code's interface a mod can draw in, for mod authors."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "debug",
+  "displayName": "Debug",
+  "version": "0.1.0",
+  "description": "Marks every place in Claude Code's interface a mod can draw in: a red X and the site's name in front of what each draws, and a markers pane.",
+  "author": {
+    "name": "nerdalytics"
+  },
+  "homepage": "https://github.com/nerdalytics/cc-mods/tree/main/debug",
+  "repository": "https://github.com/nerdalytics/cc-mods",
+  "license": "MIT",
+  "keywords": ["debug", "mod", "render-sites"]
+}
