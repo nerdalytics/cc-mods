@@ -22,8 +22,8 @@ function stubHint(on: any): void {
   on("ui.render", { component: "PromptHint" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
   on("ui.render", { component: "AbovePrompt" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: "" }));
 }
-function mountHint($: any): Promise<any> {
-  return $.ui.mount({ plugin: "statusline", surface: "terminal", component: "PromptHint", props: { isDraft: false, isWorking: false, hint: "? for shortcuts" } });
+function mountHint($: any, isDraft = false): Promise<any> {
+  return $.ui.mount({ plugin: "statusline", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
@@ -495,6 +495,12 @@ describe("statusline", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("/work/HANDOFF-2026-10-16-1200.md");
     await ui.unmount();
+    // A draft in the prompt keeps the line, and its cross hides it.
+    const drafting = await mountHint($, true);
+    expect((await drafting.findAll({ type: "Button", key: "resume" }))[0]).toBeDefined();
+    await drafting.press({ key: "dismiss" });
+    expect((await drafting.findAll({ type: "Button", key: "resume" }))[0]).toBeUndefined();
+    await drafting.unmount();
   });
 
   for (const [title, tokens, offered, options, agents] of [
@@ -549,6 +555,12 @@ describe("statusline", () => {
     await ui.press({ key: "compact" });
     expect(ran).toEqual(["compact"]);
     await ui.unmount();
+    // A draft in the prompt keeps the line, and its cross hides it.
+    const drafting = await mountHint($, true);
+    expect((await drafting.findAll({ type: "Button", key: "compact" }))[0]).toBeDefined();
+    await drafting.press({ key: "dismiss" });
+    expect((await drafting.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
+    await drafting.unmount();
   });
 
   for (const [title, tokens, runs, options, agents] of [

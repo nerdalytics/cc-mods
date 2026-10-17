@@ -177,6 +177,9 @@ let promptAt = 0;
 let handoffAt = 0;
 // When the mod last started a compaction: one per stretch between prompts too.
 let compactedAt = 0;
+// When each offer was dismissed; it stays hidden until the person's next prompt.
+let freshDismissedAt = 0;
+let compactDismissedAt = 0;
 // The branch the shown PR belongs to and when it was fetched.
 let prFor: string | undefined;
 let prAt = 0;
@@ -288,13 +291,14 @@ export const register: Register = (on, options) => {
 
 
   // Under the prompt the hint line draws, then the status row, then a line of the mod's own for each offer that holds:
-  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. Left out while the person
-  // types or Claude works, so the lines stay theirs.
+  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. Left out while Claude
+  // works; a draft in the prompt keeps them, as a reminder not to keep going. Each has a button that hides it until the
+  // next prompt.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     const drawn = await next(e);
     const rows = await drawRows($, e, belowRows);
     const ui = $.ui.resolve(e) as Ui;
-    const offers = e.props.isDraft || e.props.isWorking ? [] : [await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
+    const offers = e.props.isWorking ? [] : [await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
     return rows.length + offers.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows, ...offers] });
   });
 
@@ -436,7 +440,7 @@ async function findHandoff($: EngineInterface): Promise<void> {
 // Once the cache is cold and this session wrote a handoff, the line that weighs the two ways on: the next prompt here,
 // which writes the whole conversation to the cache again, against a fresh session from the handoff file, a button.
 async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
-  if (!freshStart) return undefined;
+  if (!freshStart || freshDismissedAt > promptAt) return undefined;
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: handoff } = await $.state.get(HANDOFF);
   const { value: sent } = await $.state.get(SENT);
@@ -462,6 +466,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
           Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Start fresh " }),
         ],
       }),
+      dismissButton($, () => (freshDismissedAt = Date.now()), Button, Text),
     ],
   });
 }
@@ -471,7 +476,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
 async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) {
   const { value: usage } = await $.state.get(USAGE);
   const used = usage?.context.tokens;
-  if (!compactHint || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT || (await agentsAtWork($))) return undefined;
+  if (!compactHint || compactDismissedAt > promptAt || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT || (await agentsAtWork($))) return undefined;
   return Box({
     flexDirection: "row",
     children: [
@@ -488,7 +493,21 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
           Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Compact " }),
         ],
       }),
+      dismissButton($, () => (compactDismissedAt = Date.now()), Button, Text),
     ],
+  });
+}
+
+// A dim cross after an offer's button: hides the offer until the next prompt.
+function dismissButton($: EngineInterface, hide: () => void, Button: Ui["Button"], Text: Ui["Text"]) {
+  return Button({
+    key: "dismiss",
+    plain: true,
+    onPress: () => {
+      hide();
+      $.ui.invalidate("ui.render");
+    },
+    children: Text({ dimColor: true, children: " \u2715 " }),
   });
 }
 
