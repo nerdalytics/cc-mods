@@ -44,7 +44,8 @@ export type StatusPr = {
   url: string;
   // Each failed check's page, in GitHub's order; "" for one that gave no page.
   failedUrls: string[];
-  draft: boolean;
+  // GitHub's state, with an open pull request split by isDraft. Only an open or draft one shows its glyphs.
+  state: "open" | "draft" | "merged" | "closed";
   conflicting: boolean;
   review: string;
   comments: number;

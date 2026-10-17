@@ -88,6 +88,8 @@ const STEP_CYCLES_PER_SECOND = 1 / 9;
 const CONTEXT_CELLS = 10;
 // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
 const OVERFLOW_RED: RGB = [239, 68, 68];
+// A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.
+const PR_COLORS: Record<string, RGB> = { open: [250, 204, 21], draft: [240, 240, 245], merged: [168, 85, 247], closed: [130, 135, 152] };
 const LIMITS: { kind: string; badge: string; seconds: number; segments: number; from: RGB; to: RGB }[] = [
   { kind: "seven_day", badge: "7d", seconds: 604_800, segments: 7, from: [192, 132, 252], to: [100, 50, 150] },
   { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10, from: [34, 211, 238], to: [15, 140, 150] },
@@ -729,7 +731,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
 // Ported from statusline.zsh's sl_input_pr: the branch's pull request, null when it has none or gh fails.
 async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
   try {
-    const fields = "number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments";
+    const fields = "number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state";
     const { exitCode, stdout } = await $.process.run(["gh", "pr", "view", "--json", fields], { timeoutMs: 15_000 });
     if (exitCode !== 0) return null;
     const pr = JSON.parse(stdout);
@@ -749,7 +751,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
       number: pr.number,
       url,
       failedUrls: failed.map((c: any) => String(c.detailsUrl || c.targetUrl || "")),
-      draft: pr.isDraft === true,
+      state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft === true ? "draft" : "open",
       conflicting: pr.mergeable === "CONFLICTING",
       review: pr.reviewDecision ?? "",
       comments: pr.comments?.length ?? 0,
@@ -864,6 +866,8 @@ function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
 function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusGit, pr: StatusPr | null | undefined) {
   const mark = g.vsDefault ? "?" : "";
   const c = pr?.checks;
+  // A merged or closed pull request keeps only its number: its review, comments, conflict and checks no longer matter.
+  const live = pr?.state === "open" || pr?.state === "draft";
   const folder = (path: string) => (path ? `file://${encodeURI(path)}` : undefined);
   const name = (path: string) => path.split("/").pop() || "~";
   const sp = gap ? " " : "";
@@ -886,10 +890,10 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
     ],
     // Hidden when the branch already names it.
     [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
-    [{ text: pr ? `#${pr.number}` : "", href: pr?.url || undefined }],
-    pr?.draft ? ` ${DRAFT_MARK}` : "",
-    REVIEW_MARKS[pr?.review ?? ""] ?? "",
-    pr && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
+    [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? PR_COLORS[pr.state] : undefined }],
+    pr?.state === "draft" ? ` ${DRAFT_MARK}` : "",
+    live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : "",
+    pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
     // Behind links the remote branch's history, newest first, where the commits not pulled yet sit on top. Ahead
     // links nothing: those commits exist only here.
     [
@@ -897,10 +901,10 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
       { text: g.ahead > 0 && g.behind > 0 ? " " : "" },
       { text: g.behind > 0 ? `↓${g.behind}${mark}` : "", href: g.web ? `${g.web}/commits/${encodeURI(g.base)}` : undefined },
     ],
-    g.conflict || pr?.conflicting ? ` ${WARN_MARK}` : "",
+    g.conflict || (live && pr?.conflicting) ? ` ${WARN_MARK}` : "",
     // Running and passed as counts, linking the PR's checks tab; each failure a cross of its own, linking its check.
     (() => {
-      if (!c || !pr) return [];
+      if (!c || !pr || !live) return [];
       const tab = pr.url ? `${pr.url}/checks` : undefined;
       const groups: Piece[][] = [
         c.pending > 0 ? [{ text: `${OCT_DOT}${c.pending}`, href: tab }] : [],

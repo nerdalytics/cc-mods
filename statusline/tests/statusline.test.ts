@@ -720,7 +720,7 @@ describe("statusline", () => {
       "git symbolic-ref refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
       "git rev-list --left-right --count HEAD...origin/feat": "2\t1\n",
       "git remote get-url origin": "git@github.com:o/r.git\n",
-      "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments": JSON.stringify(pr),
+      "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
     };
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -755,7 +755,7 @@ describe("statusline", () => {
     expect(await href("https://github.com/o/r/commits/feat")).toBe(true);
     const links = (await ui.findAll({ type: "Link" })).map((l: any) => [l.props.href, l.children.map((t: any) => t.children[0]).join("")]);
     expect(links.filter(([h]: string[]) => h.startsWith("https://github.com/o/r/"))).toEqual([
-      ["https://github.com/o/r/pull/42", "#42"],
+      ["https://github.com/o/r/pull/42", "PR #42"],
       ["https://github.com/o/r/commits/feat", "↓1"],
       ["https://github.com/o/r/pull/42/checks", "\uf4441"],
       ["https://github.com/o/r/runs/7", "\uf467"],
@@ -778,6 +778,69 @@ describe("statusline", () => {
     expect((await ui.findAll({ type: "Link" })).every((l: any) => l.children.length > 0)).toBe(true);
     await ui.unmount();
   });
+
+  // A pull request's number is one colour by state; only an open or a draft one has its glyphs after it: the draft mark,
+  // the review's cross, the comments, the conflict and the checks.
+  const prStates = [
+    { name: "an open", colour: "#facc15", state: "OPEN", draft: false, shown: ["\uf467", "\uf0e0", "\uf071"], hidden: ["\uf040"], checks: true },
+    { name: "a draft", colour: "#f0f0f5", state: "OPEN", draft: true, shown: ["\uf040", "\uf467", "\uf0e0", "\uf071"], hidden: [], checks: true },
+    { name: "a merged", colour: "#a855f7", state: "MERGED", draft: false, shown: [], hidden: ["\uf040", "\uf467", "\uf0e0", "\uf071"], checks: false },
+    { name: "a closed", colour: "#828798", state: "CLOSED", draft: false, shown: [], hidden: ["\uf040", "\uf467", "\uf0e0", "\uf071"], checks: false },
+  ];
+  for (const { name, colour, state, draft, shown, hidden, checks } of prStates) {
+    test(`draws ${name} pull request's number whole in ${colour}, with${checks ? "" : "out"} its glyphs`, async ($, on) => {
+      stubHint(on);
+      mock.clock(on);
+      const pr = {
+        number: 7,
+        url: "https://github.com/o/r/pull/7",
+        state,
+        isDraft: draft,
+        mergeable: "CONFLICTING",
+        reviewDecision: "CHANGES_REQUESTED",
+        comments: [{}, {}],
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      };
+      const out: Record<string, string> = {
+        "git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
+          "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n",
+        "git symbolic-ref refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+        "git rev-list --left-right --count HEAD...origin/feat": "0\t0\n",
+        "git remote get-url origin": "git@github.com:o/r.git\n",
+        "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
+      };
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      on("session.root", () => ({ value: "/r" }));
+      on("session.cwd", () => ({ value: "/r" }));
+      on("fs.exists", () => ({ value: false }));
+      on("process.run", (_$, e) => {
+        const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
+        return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+      });
+
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+      const ui = await $.ui.mount({
+        plugin: "statusline",
+        surface: "terminal",
+        component: "AbovePrompt",
+        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
+      } as any);
+
+      const link = async () => (await ui.findAll({ type: "Link" })).find((l: any) => l.props.href === "https://github.com/o/r/pull/7");
+      for (let i = 0; i < 50 && !(await link()); i++) await new Promise((r) => setTimeout(r, 10));
+      const colours = (await link())!.children.map((t: any) => t.props.color);
+      expect(colours.length).toBe("PR #7".length);
+      expect(new Set(colours)).toEqual(new Set([colour]));
+      const glyphs = (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
+      for (const mark of shown) expect(glyphs).toContain(mark);
+      for (const mark of hidden) expect(glyphs).not.toContain(mark);
+      const tab = (await ui.findAll({ type: "Link" })).some((l: any) => l.props.href === "https://github.com/o/r/pull/7/checks");
+      expect(tab).toBe(checks);
+      await ui.unmount();
+    });
+  }
 
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
     stubHint(on);
