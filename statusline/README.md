@@ -18,10 +18,15 @@ Then install what the mod needs, listed under [Needs](#needs). That is a Nerd Fo
 
 ### Update and remove
 
-```sh
-claude plugin update statusline@cc-mods
-claude plugin uninstall statusline@cc-mods
+In Claude Code:
+
+```text
+/plugin marketplace update cc-mods
+/reload-plugins
+/plugin uninstall statusline@cc-mods
 ```
+
+The first command fetches the marketplace and installs the versions it bumps, and `/reload-plugins` loads them into the running session, so you don't need a new one. The last command removes the mod.
 
 ## What it shows
 
@@ -50,10 +55,10 @@ By default the git row sits above the prompt. Its parts, left to right:
 - The project folder. When you `cd` elsewhere, the current folder follows it.
 - The branch. The default branch shows bare, and any other branch after `⎇`. A branch made from a branch other than the default shows that branch first.
 - The worktree after `⎇`, unless the branch name already contains it.
-- The pull request number, then a pencil for a draft. A check means the review approved it, a cross means changes were requested, and `⋯` means a review is required. An envelope and a count show the comments.
+- The pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. An open or draft pull request is followed by its glyphs: a pencil for a draft, a check when the review approved it, a cross when changes were requested, `⋯` when a review is required, and an envelope and a count for the comments. A merged or closed pull request shows only its number.
 - `↑` and `↓` with the commits ahead and behind. A `?` after them means no remote has the branch, so the mod counts against the default branch.
-- A warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports the pull request as conflicting.
-- The pull request's checks as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
+- A warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
+- The checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
 - `+`, `-` and `~` with the lines added, the lines deleted and the files changed.
 
 Outside a repository the row shows only the folders.
@@ -65,7 +70,7 @@ A value on a grey background shows more when you hover over it. A value on no ba
 The git row is made of links, and a click opens them the way your terminal opens any link:
 
 - The folders, the branch and the worktree open their folder on disk in your default app.
-- The pull request number opens the pull request.
+- The pull request's `PR` and number open the pull request.
 - `↓` opens the branch's commit history on its remote's website. A count with `?` has no link.
 - A failed check's cross opens that check.
 - The running and passed counts open the pull request's checks.

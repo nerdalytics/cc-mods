@@ -15,7 +15,7 @@ In Claude Code:
 /plugin install <mod> --marketplace nerdalytics/cc-mods
 ```
 
-Update with `claude plugin update <mod>@cc-mods`, remove with `claude plugin uninstall <mod>@cc-mods`.
+Update with `/plugin marketplace update cc-mods` and then `/reload-plugins`, which loads the new version into the running session. Remove with `/plugin uninstall <mod>@cc-mods`.
 
 ## License
 
