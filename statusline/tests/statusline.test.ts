@@ -33,10 +33,18 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left.
   const clock = mock.clock(on);
   const ran: string[] = [];
+  // "5m-held": written for five minutes, yet read back whole after ten idle ones, 57 minutes ago: it outlived its label.
   const written = { ephemeral_5m_input_tokens: ttl === "5m" ? 1_000_000 : 0, ephemeral_1h_input_tokens: ttl === "1h" ? 1_000_000 : 0 };
   const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: written };
-  const ago = (ttl === "1h" ? 57 : 3) * 60_000;
-  const transcript = JSON.stringify({ type: "assistant", requestId: "r1", timestamp: new Date(Date.now() - ago).toISOString(), message: { model: "claude-opus-5-5", usage } });
+  const row = (id: string, minutesAgo: number, u: object) =>
+    JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: u } });
+  const transcript =
+    ttl === "5m-held"
+      ? [
+          row("r0", 67, { ...usage, cache_creation: { ephemeral_5m_input_tokens: 1_000_000, ephemeral_1h_input_tokens: 0 } }),
+          row("r1", 57, { ...usage, cache_read_input_tokens: 1_000_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } }),
+        ].join("\n")
+      : row("r1", ttl === "1h" ? 57 : 3, usage);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
   on("session.model", () => ({ value: model }));
@@ -497,6 +505,10 @@ describe("statusline", () => {
 
   test("runs no handoff on a five-minute cache", async ($, on) => {
     expect(await handoffRuns($, on, { ttl: "5m" })).toEqual([]);
+  });
+
+  test("runs the handoff on a five-minute-labelled cache that was read back after ten idle minutes", async ($, on) => {
+    expect(await handoffRuns($, on, { ttl: "5m-held" })).toEqual(["statusline:handoff"]);
   });
 
   test("runs no handoff at 98% of the 5h window", async ($, on) => {

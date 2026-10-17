@@ -80,7 +80,7 @@ Costs are estimates. The mod prices each request in the session's transcripts wi
 
 With the `auto_handoff` option on, the mod runs the handoff itself. It waits until the session is idle and the prompt cache is five minutes from expiring, so the handoff still reads the cache at the cheap rate.
 
-It does this only on the hour-long cache Claude Code gives the main conversation on a subscription. A five-minute cache goes cold at every short pause, and writing it again costs little.
+It does this only on a cache that lives an hour. Claude Code gives the main conversation one on a subscription, and the mod also counts a cache written for five minutes if a later request read it back whole after more than five idle minutes with no other request in between. A cache that really lasts five minutes goes cold at every short pause, and writing it again costs little.
 
 It runs once between two of your prompts. It does not run in these cases:
 

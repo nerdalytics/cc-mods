@@ -560,6 +560,10 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   let first: { at: number; prompt: number } | undefined;
   let ttl = 3_600;
   let ttlAt = -Infinity;
+  // Every request's time, and the main ones' prompt and cache read: the label above is what a write was billed as, not
+  // how long it lived, so a read after a long idle stretch settles the lifetime.
+  const stamps: number[] = [];
+  const mains: { at: number; prompt: number; read: number }[] = [];
   // A compaction swaps the conversation for its summary: the cached prefix before it is never read again.
   let compactedAt = -Infinity;
   const add = (line: string) => {
@@ -588,8 +592,10 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     const spend = row.agentId ? agents : main;
     if (row.agentId) agentIds.add(row.agentId);
     const at = Date.parse(row.timestamp ?? "");
+    if (Number.isFinite(at)) stamps.push(at);
     if (!row.agentId && Number.isFinite(at)) {
       const prompt = counts.inp + counts.read + counts.w5 + counts.w1;
+      mains.push({ at, prompt, read: counts.read });
       if (!last || at >= last.at) last = { at, prompt, model: String(row.message.model ?? ""), speed: u.speed };
       if (!first || at < first.at) first = { at, prompt };
       if ((counts.w5 > 0 || counts.w1 > 0) && at >= ttlAt) {
@@ -612,15 +618,22 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     lines.forEach(add);
   }
   add(rest);
-  return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, first?.prompt ?? 0) : undefined };
+  // A five-minute label whose cache a request read back whole after more than five minutes with no request of any kind
+  // in between lived longer than the label: Claude Code's 5m writes on a subscription were read at 45 and 59 minutes.
+  // ponytail: an hour is assumed, the longest the API offers; the read shows only that it outlived five minutes.
+  mains.sort((a, b) => a.at - b.at);
+  const outlived =
+    ttl === 300 && mains.some((m, i) => i > 0 && m.at - mains[i - 1].at > 300_000 && m.read >= 0.8 * mains[i - 1].prompt && !stamps.some((t) => t > mains[i - 1].at && t < m.at));
+  return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined };
 }
 
-// What the next prompt's cached prefix costs: read while the cache is warm, written again at the TTL's rate once cold.
-function cacheOf(last: { at: number; prompt: number; model: string; speed: unknown }, ttl: number, base: number): StatusCache {
+// What the next prompt's cached prefix costs: read while the cache is warm, written again at the label's rate once cold.
+// `ttl` is the label of the latest write, which prices it; `lives` how long the cache stays warm.
+function cacheOf(last: { at: number; prompt: number; model: string; speed: unknown }, ttl: number, lives: number, base: number): StatusCache {
   const none = { inp: 0, out: 0, read: 0, w5: 0, w1: 0 };
   return {
     at: last.at,
-    ttl,
+    ttl: lives,
     read: requestCost(last.model, last.speed, { ...none, read: last.prompt }),
     write: requestCost(last.model, last.speed, ttl === 300 ? { ...none, w5: last.prompt } : { ...none, w1: last.prompt }),
     prompt: last.prompt,
