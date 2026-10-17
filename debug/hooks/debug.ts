@@ -2,6 +2,33 @@
 // opened at the session's start to show its own. For finding where a mod should hook in; uninstall it once found.
 import type { Elements, EngineInterface, Register } from "claude-code";
 
+const PROBE = "probe";
+const COLS = 32;
+const ROWS = 6;
+const PX = 64;
+const PY = 32;
+
+// Raster: a colour ramp of full blocks, each cell a [code point, foreground, background] u32 triplet.
+const cells = (() => {
+  const words = new Uint32Array(COLS * ROWS * 3);
+  for (let y = 0; y < ROWS; y++)
+    for (let x = 0; x < COLS; x++) {
+      const i = (y * COLS + x) * 3;
+      words[i] = 0x2588;
+      words[i + 1] = (Math.round((x / (COLS - 1)) * 255) << 16) | (0x80 << 8) | Math.round((y / (ROWS - 1)) * 255);
+      words[i + 2] = 0x01000000;
+    }
+  return new Uint8Array(words.buffer).toBase64();
+})();
+
+// Image: a 64x32 RGBA gradient.
+const rgba = (() => {
+  const px = new Uint8Array(PX * PY * 4);
+  for (let y = 0; y < PY; y++)
+    for (let x = 0; x < PX; x++) px.set([Math.round((x / (PX - 1)) * 255), Math.round((y / (PY - 1)) * 255), 160, 255], (y * PX + x) * 4);
+  return px.toBase64();
+})();
+
 async function mark($: EngineInterface, e: any, next: (e: any) => Promise<any>) {
   const drawn = await next(e);
   const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
@@ -12,7 +39,27 @@ export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     const result = await next(e);
     await $.ui.open({ id: "markers", title: "markers" });
+    await $.command.register({ name: "probe", description: "Open a pane that draws text, a Raster and an Image" });
     return result;
+  });
+  on("command.run", { command: "probe" }, async ($) => {
+    const opened = await $.ui.open({ id: PROBE, title: "probe" });
+    return { text: opened.isPlaced ? "Probe pane opened." : `Probe pane not placed: ${opened.reason}` };
+  });
+  on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e) => {
+    const { Box, Text, Raster, Image } = $.ui.resolve(e) as Elements["terminal"];
+    return Box({
+      flexDirection: "column",
+      children: [
+        Text({ bold: true, children: "Text" }),
+        Text({ color: "#ff8800", children: "orange" }),
+        Text({ dimColor: true, children: "dim" }),
+        Text({ bold: true, children: "Raster" }),
+        Raster({ key: "ramp", columns: COLS, rows: ROWS, cells }),
+        Text({ bold: true, children: "Image" }),
+        Image({ key: "img", source: { rgba, width: PX, height: PY }, columns: 32, rows: 8, alt: "[image not drawn: alt text]" }),
+      ],
+    });
   });
   on("ui.render", { component: "AskUserQuestion" }, mark);
   on("ui.render", { component: "UserMessage" }, mark);
