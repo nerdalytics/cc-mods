@@ -1,7 +1,7 @@
 {
   "name": "debug",
   "displayName": "Debug",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Marks every place in Claude Code's interface a mod can draw in: a red X and the site's name in front of what each draws, a markers pane, and /probe, a pane that draws text, a Raster and an Image to show what the terminal supports.",
   "author": {
     "name": "nerdalytics"
