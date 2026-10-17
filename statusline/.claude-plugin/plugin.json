@@ -121,7 +121,7 @@
     "turn_rate": {
       "type": "boolean",
       "title": "Statusline: Turn line › tokens per second",
-      "description": "The tokens a turn generated per second, after the line that closes it (Cooked for 7s · done 11:22 PM).",
+      "description": "The tokens a turn generated per second, in the line that closes it (Cooked at 52 tok/s for 7s · done 11:22 PM).",
       "default": true
     }
   }

@@ -172,7 +172,7 @@ let handoffAt = 0;
 let prFor: string | undefined;
 let prAt = 0;
 // The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
-// line that closes it; and the text each such line got, by instance, so a redraw after a later turn keeps its own.
+// line that closes it; and the rate each such line got, by instance, so a redraw after a later turn keeps its own.
 let turnRate = false;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
@@ -258,23 +258,21 @@ export const register: Register = (on, options) => {
     return result;
   });
 
-  // The line that closes a turn (✻ Cooked for 7s · done 11:22 PM) gets the tokens the turn generated per second after
-  // it, in the units of the rest of the row. It takes the last turn's count once, and only a line of about that length drawn
-  // within seconds of the turn's end, so a redraw of an older line never takes a later turn's.
+  // The line that closes a turn (✻ Cooked for 7s · done 11:22 PM) gets the tokens the turn generated per second in its
+  // verb: ✻ Cooked at 52 tok/s for 7s · done 11:22 PM, in the units of the rest of the row. The engine draws the line
+  // as a Box of width 100%, so nothing beside it sits against its text, and it builds the rest of it from the verb and
+  // the duration alone: the verb is the one place the engine's own text takes ours. The line takes the last turn's count
+  // once, and only a line of about that length drawn within seconds of the turn's end, so a redraw of an older line
+  // never takes a later turn's.
   on("ui.render", { component: "TurnDuration" }, async ($, e, next) => {
-    const drawn = await next(e);
-    if (!turnRate) return drawn;
-    let text = turnRates.get(e.requestId);
-    if (text === undefined && lastTurn && Date.now() - lastTurn.at < 5_000 && Math.abs(lastTurn.durationMs - e.props.durationMs) < 1_000) {
-      text = ` · ${formatTokens(Math.floor((lastTurn.tokens * 1_000) / lastTurn.durationMs))} tok/s`;
-      turnRates.set(e.requestId, text);
+    if (!turnRate) return next(e);
+    let rate = turnRates.get(e.requestId);
+    if (rate === undefined && lastTurn && Date.now() - lastTurn.at < 5_000 && Math.abs(lastTurn.durationMs - e.props.durationMs) < 1_000) {
+      rate = formatTokens(Math.floor((lastTurn.tokens * 1_000) / lastTurn.durationMs));
+      turnRates.set(e.requestId, rate);
       lastTurn = undefined;
     }
-    if (text === undefined) return drawn;
-    const { Box, Text } = $.ui.resolve(e) as Ui;
-    // The engine draws the line as a Box of width 100%: beside it directly, the rate is squeezed to the row's end. Held
-    // in a Box of no width of its own, the line is as wide as its text and the rate follows it.
-    return Box({ flexDirection: "row", children: [Box({ children: [drawn] }), Box({ flexShrink: 0, children: [Text({ dimColor: true, children: text })] })] });
+    return rate === undefined ? next(e) : next({ ...e, props: { ...e.props, word: `${e.props.word} at ${rate} tok/s` } });
   });
 
 
