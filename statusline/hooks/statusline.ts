@@ -86,6 +86,11 @@ const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high:
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
 const CONTEXT_CELLS = 10;
+// The share of the smart zone the context has used when the line offering a compaction appears.
+const COMPACT_HINT_AT = 0.9;
+const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
+// How far into the dumb zone the context is, by its size over the smart zone's: the further, the sloppier the model.
+const DUMB_ZONE_DEPTHS: [number, string][] = [[1.25, "just into"], [1.5, "well into"], [2, "deep into"], [Infinity, "very deep into"]];
 // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
 const OVERFLOW_RED: RGB = [239, 68, 68];
 // A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.
@@ -158,6 +163,8 @@ let tokensStale = false;
 // The person's options, set as the module registers.
 let autoHandoff = false;
 let freshStart = false;
+let compactHint = false;
+let autoCompact = false;
 // The columns between a row's tags: none with the compact option on.
 let gap = 1;
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -168,6 +175,8 @@ let busy = false;
 // When the person last sent a prompt, and when the mod last started a handoff: one handoff per stretch between prompts.
 let promptAt = 0;
 let handoffAt = 0;
+// When the mod last started a compaction: one per stretch between prompts too.
+let compactedAt = 0;
 // The branch the shown PR belongs to and when it was fetched.
 let prFor: string | undefined;
 let prAt = 0;
@@ -181,6 +190,8 @@ export const register: Register = (on, options) => {
   // The person's options, from /config; a change there loads the module again with the new ones.
   autoHandoff = options.auto_handoff === true;
   freshStart = options.fresh_start === true;
+  compactHint = options.compact_hint === true;
+  autoCompact = options.auto_compact === true;
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
   const rows: [unknown, Layout][] = [
@@ -276,45 +287,15 @@ export const register: Register = (on, options) => {
   });
 
 
-  // Once the cache is cold and this session wrote a handoff, the hint line under the prompt weighs the two ways on: the
-  // next prompt here, which writes the whole conversation to the cache again, against a fresh session from the handoff
-  // file, a button. Left out while the person types, so the line stays theirs.
+  // Under the prompt the hint line draws, then the status row, then a line of the mod's own for each offer that holds:
+  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. Left out while the person
+  // types or Claude works, so the lines stay theirs.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     const drawn = await next(e);
     const rows = await drawRows($, e, belowRows);
-    const { Box, Text, Button } = $.ui.resolve(e) as Ui;
-    const below = (...extra: ReturnType<Ui["Box"]>[]) =>
-      rows.length + extra.length === 0 ? drawn : Box({ flexDirection: "column", children: [drawn, ...rows, ...extra] });
-    if (!freshStart || e.props.isDraft || e.props.isWorking) return below();
-    const { value: tokens } = await $.state.get(TOKENS);
-    const { value: handoff } = await $.state.get(HANDOFF);
-    const { value: sent } = await $.state.get(SENT);
-    const c = tokens?.cache;
-    if (!c || !handoff || cacheLeft(c, sent, Math.floor(Date.now() / 1000)) > 0 || (await agentsAtWork($))) return below();
-    // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system
-    // prompt is likely read from a cache other sessions keep warm, so this is an upper bound.
-    const fresh = c.write === undefined || c.prompt === 0 ? undefined : (c.write * (c.base + handoff.bytes / 4)) / c.prompt;
-    // A line of its own under the engine's, a red $ in the column of its mode glyph. The prices are the context; the
-    // button names the action alone.
-    return below(
-      Box({
-        flexDirection: "row",
-        children: [
-          Text({ color: hex(COLD_CHIP.from), children: "$" }),
-          Text({ dimColor: true, children: ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` }),
-          // A button as the chips are drawn: the icon on the action's colour, the label on BUTTON_BG.
-          Button({
-            key: "resume",
-            plain: true,
-            onPress: () => void resumeFrom($, handoff.path),
-            children: [
-              Text({ color: hex(contrast(WARM_CHIP.to)), backgroundColor: hex(WARM_CHIP.to), children: " \uf15c " }),
-              Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Start fresh " }),
-            ],
-          }),
-        ],
-      }),
-    );
+    const ui = $.ui.resolve(e) as Ui;
+    const offers = e.props.isDraft || e.props.isWorking ? [] : [await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
+    return rows.length + offers.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows, ...offers] });
   });
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
@@ -354,6 +335,7 @@ async function drawRows($: EngineInterface, e: any, layout: Layout[]): Promise<R
 
 function poll($: EngineInterface): void {
   void maybeHandoff($);
+  void maybeCompact($);
   void $.session.usage().then((u) => $.state.set(USAGE, { context: u.context, rateLimits: u.rateLimits }));
   serial("handoff", () => findHandoff($));
   refreshGit($);
@@ -368,14 +350,7 @@ function poll($: EngineInterface): void {
 // request refreshes the cache, so it waits for the person's next prompt before it may run again.
 async function maybeHandoff($: EngineInterface): Promise<void> {
   if (!autoHandoff || busy || handoffAt >= promptAt || (await agentsAtWork($))) return;
-  // A limit reached refuses the handoff's request, and one nearly reached is better left to the person's own
-  // prompts: Fable and Mythos stop at 90% of the 5h window, the others at 98%.
-  const { value: usage } = await $.state.get(USAGE);
-  const { value: rejected } = await $.state.get(REJECTED);
-  const { value: model = "" } = await $.state.get(MODEL);
-  const cap = /fable|mythos/i.test(model) ? 90 : 98;
-  const limits = limitsOf(usage?.rateLimits ?? [], rejected, Date.now());
-  if (limits.some((r) => r.percentUsed >= 100 || (r.kind === "five_hour" && r.percentUsed >= cap))) return;
+  if (await limitsNear($)) return;
   const { value: tokens } = await $.state.get(TOKENS);
   const cache = tokens?.cache;
   if (cache?.ttl !== 3_600) return;
@@ -388,6 +363,26 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   } catch (err) {
     $.ui.toast(`statusline: the handoff before the cache goes cold did not start: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+// Runs /compact when the session is idle and the context has used COMPACT_HINT_AT of the smart zone, the point where
+// the line offering it appears. Its own request counts, so it waits for the person's next prompt before it may run again.
+async function maybeCompact($: EngineInterface): Promise<void> {
+  if (!autoCompact || smartZone <= 0 || busy || compactedAt >= promptAt || (await agentsAtWork($))) return;
+  const { value: usage } = await $.state.get(USAGE);
+  if (usage?.context.tokens === undefined || usage.context.tokens < smartZone * COMPACT_HINT_AT || (await limitsNear($))) return;
+  compactedAt = Date.now();
+  await compactSession($);
+}
+
+// A limit reached refuses the request of a handoff or a compaction, and one nearly reached is better left to the
+// person's own prompts: Fable and Mythos stop at 90% of the 5h window, the others at 98%.
+async function limitsNear($: EngineInterface): Promise<boolean> {
+  const { value: usage } = await $.state.get(USAGE);
+  const { value: rejected } = await $.state.get(REJECTED);
+  const { value: model = "" } = await $.state.get(MODEL);
+  const cap = /fable|mythos/i.test(model) ? 90 : 98;
+  return limitsOf(usage?.rateLimits ?? [], rejected, Date.now()).some((r) => r.percentUsed >= 100 || (r.kind === "five_hour" && r.percentUsed >= cap));
 }
 
 // A subagent still at work keeps the session alive: its answer comes back to the main conversation, which writes the
@@ -436,6 +431,73 @@ async function findHandoff($: EngineInterface): Promise<void> {
     .filter((f) => f.kind === "file" && /^HANDOFF-.*\.md$/.test(f.name) && f.mtimeMs >= startedAt)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
   await $.state.set(HANDOFF, newest ? { path: `${root}/${newest.name}`, bytes: newest.size } : null);
+}
+
+// Once the cache is cold and this session wrote a handoff, the line that weighs the two ways on: the next prompt here,
+// which writes the whole conversation to the cache again, against a fresh session from the handoff file, a button.
+async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
+  if (!freshStart) return undefined;
+  const { value: tokens } = await $.state.get(TOKENS);
+  const { value: handoff } = await $.state.get(HANDOFF);
+  const { value: sent } = await $.state.get(SENT);
+  const c = tokens?.cache;
+  if (!c || !handoff || cacheLeft(c, sent, Math.floor(Date.now() / 1000)) > 0 || (await agentsAtWork($))) return undefined;
+  // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system
+  // prompt is likely read from a cache other sessions keep warm, so this is an upper bound.
+  const fresh = c.write === undefined || c.prompt === 0 ? undefined : (c.write * (c.base + handoff.bytes / 4)) / c.prompt;
+  // A line of its own under the engine's, a red $ in the column of its mode glyph. The prices are the context; the
+  // button names the action alone.
+  return Box({
+    flexDirection: "row",
+    children: [
+      Text({ color: hex(COLD_CHIP.from), children: "$" }),
+      Text({ dimColor: true, children: ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` }),
+      // A button as the chips are drawn: the icon on the action's colour, the label on BUTTON_BG.
+      Button({
+        key: "resume",
+        plain: true,
+        onPress: () => void resumeFrom($, handoff.path),
+        children: [
+          Text({ color: hex(contrast(WARM_CHIP.to)), backgroundColor: hex(WARM_CHIP.to), children: " \uf15c " }),
+          Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Start fresh " }),
+        ],
+      }),
+    ],
+  });
+}
+
+// From the context having used COMPACT_HINT_AT of the smart zone on, the line that offers to compact: recall is precise
+// only inside the zone, and a compaction swaps the conversation for its summary. Not drawn with no smart zone.
+async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) {
+  const { value: usage } = await $.state.get(USAGE);
+  const used = usage?.context.tokens;
+  if (!compactHint || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT || (await agentsAtWork($))) return undefined;
+  return Box({
+    flexDirection: "row",
+    children: [
+      Text({ color: hex(AGENTS_CHIP.from), children: "\u25c6" }),
+      Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
+      Link({ href: SMART_ZONE_URL, children: Text({ color: hex(AGENTS_CHIP.from), underline: true, children: "Smart zone" }) }),
+      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)![1]} the dumb zone now. ` : ". " }),
+      Button({
+        key: "compact",
+        plain: true,
+        onPress: () => void compactSession($),
+        children: [
+          Text({ color: hex(contrast(WARM_CHIP.to)), backgroundColor: hex(WARM_CHIP.to), children: " \uf066 " }),
+          Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Compact " }),
+        ],
+      }),
+    ],
+  });
+}
+
+async function compactSession($: EngineInterface): Promise<void> {
+  try {
+    await $.command.run({ command: "compact" });
+  } catch (err) {
+    $.ui.toast(`statusline: compacting failed: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 // The cold cache's button: rather than write the whole conversation to the cache again, a fresh session that starts

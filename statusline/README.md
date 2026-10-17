@@ -48,6 +48,10 @@ By default the status row sits under the prompt, below Claude Code's hint line. 
 
 Once the cache is cold and this session has written a handoff, a line appears under Claude Code's hint line. It shows what the next message costs in this session and an estimate of what a fresh start from the handoff costs. The `Start fresh` button next to it clears the session and starts a new one from the handoff file. The line hides while you type, while Claude is working, and while a subagent is still running.
 
+Once the context has used 90% of the smart zone, another line appears there: `You're nearly out of the Smart zone.`, with `Smart zone` linking to its [definition](https://www.aihero.dev/ai-coding-dictionary/smart-zone), and a `Compact` button that runs `/compact`. Past the smart zone it reads `You're out of the Smart zone. Same model, just into the dumb zone now.`, and the further the context grows the further in it says: `just into` up to 1.25 times the smart zone, then `well into`, `deep into` from 1.5 times and `very deep into` from 2 times. The line follows the `smart_zone_tokens` option. It hides while you type, while Claude is working, and while a subagent is still running. The `compact_hint` option turns it off, and with the `smart_zone` option off it never appears.
+
+With the `auto_compact` option on, the mod runs `/compact` itself, without the button. It waits until the session is idle and the context has used 90% of the smart zone, the point where the line appears. It runs once between two of your prompts. Like the handoff, it does not run while a subagent is at work, with a usage limit used up, or with the 5h limit at 98%, or 90% on Fable and Mythos. The option is off by default, because a compaction replaces the conversation with its summary.
+
 ### Git row
 
 By default the git row sits above the prompt. Its parts, left to right:
@@ -117,6 +121,8 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the cold-cache line with the `Start fresh` button. |
+| Compact when the smart zone is nearly used | `auto_compact` | false | Runs `/compact` as described under [Status row](#status-row). |
+| Offer a compaction when the smart zone is nearly used | `compact_hint` | true | Shows the line with the `Compact` button once the context has used 90% of the smart zone, as described under [Status row](#status-row). |
 | Smart zone on the context bar | `smart_zone` | true | Set to false, the context bar drops the smart zone. Each cell becomes a full-height block of the context left before auto-compaction. The glyph becomes a moon that fills across the whole window, and `⊙` past the threshold. |
 | Smart zone (tokens) | `smart_zone_tokens` | 200000 | The size of the smart zone that the context bar's top half shows. 0 draws the bar as if `smart_zone` were off. |
 | Turn line › tokens per second | `turn_rate` | true | Shows the tokens per second in the line that closes a turn, as described under [End of turn](#end-of-turn). |

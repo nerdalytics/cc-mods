@@ -103,6 +103,8 @@ describe("statusline", () => {
       },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
+    // 797,100 tokens is past the smart zone, so the line offering a compaction asks which subagents run.
+    on("agent.list", () => ({ value: [] }));
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
     const ui = await mountHint($);
@@ -492,6 +494,105 @@ describe("statusline", () => {
     expect(ran).toEqual(["clear"]);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("/work/HANDOFF-2026-10-16-1200.md");
+    await ui.unmount();
+  });
+
+  for (const [title, tokens, offered, options, agents] of [
+    ["offers a compaction once 90% of the smart zone is used", 190_000, true, {}, idle],
+    ["offers one past the smart zone too", 250_000, true, {}, idle],
+    ["words just past the smart zone as just into the dumb zone", 220_000, true, {}, idle],
+    ["words 2.25 times the smart zone as very deep into the dumb zone", 450_000, true, {}, idle],
+    ["offers none below 90% of the smart zone", 170_000, false, {}, idle],
+    ["sizes the offer by the smart_zone_tokens option", 95_000, true, { smart_zone_tokens: 100_000 }, idle],
+    ["offers none when the person turned compact_hint off", 190_000, false, { compact_hint: false }, idle],
+    ["offers none with the smart zone off", 190_000, false, { smart_zone: false }, idle],
+    ["offers none while a subagent is at work", 190_000, false, {}, working],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    const ran: string[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("agent.list", () => ({ value: agents }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      return { value: { code: 0, signal: null } };
+    });
+    on("command.run", (_$, e) => {
+      ran.push(e.command);
+      return { text: "" };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await mountHint($);
+    let button;
+    for (let i = 0; i < (offered ? 50 : 5) && !button; i++) {
+      await clock.advance(2_000);
+      await new Promise((r) => setTimeout(r, 10));
+      button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
+    }
+    if (!offered) {
+      expect(button).toBeUndefined();
+      return ui.unmount();
+    }
+    expect(button).toBeDefined();
+    expect(await ui.find({ type: "Link", href: "https://www.aihero.dev/ai-coding-dictionary/smart-zone" })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: tokens >= 200_000 ? /^ You're out of the $/ : /^ You're nearly out of the $/ })).toBeDefined();
+    expect(JSON.stringify(button)).toContain(" Compact ");
+    expect(JSON.stringify(button)).toContain("#14532d");
+    const depth = { 220_000: "just into", 250_000: "well into", 450_000: "very deep into" }[tokens as number];
+    if (depth) expect(await ui.find({ type: "Text", text: `. Same model, ${depth} the dumb zone now. ` })).toBeDefined();
+    await ui.press({ key: "compact" });
+    expect(ran).toEqual(["compact"]);
+    await ui.unmount();
+  });
+
+  for (const [title, tokens, runs, options, agents] of [
+    ["compacts once while idle when 90% of the smart zone is used", 190_000, ["compact"], { auto_compact: true }, idle],
+    ["compacts nothing below 90% of the smart zone", 170_000, [], { auto_compact: true }, idle],
+    ["compacts nothing with auto_compact off", 190_000, [], {}, idle],
+    ["compacts nothing with the smart zone off", 190_000, [], { auto_compact: true, smart_zone: false }, idle],
+    ["compacts nothing while a subagent is at work", 190_000, [], { auto_compact: true }, working],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    const ran: string[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("agent.list", () => ({ value: agents }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      return { value: { code: 0, signal: null } };
+    });
+    on("command.run", (_$, e) => {
+      ran.push(e.command);
+      return { text: "" };
+    });
+    on("prompt.submit", (_$, e) => ({ text: e.text }));
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await mountHint($);
+    const polls = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await clock.advance(2_000);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    };
+    // No prompt of the person's since the mod loaded: nothing runs.
+    await polls(2);
+    expect(ran).toEqual([]);
+    // A prompt typed at the composer: one compaction, and the polls after it do not run another.
+    await $.prompt.submit({ text: "hi", origin: { kind: "composer" } } as any);
+    await polls(3);
+    expect(ran).toEqual(runs);
     await ui.unmount();
   });
 
