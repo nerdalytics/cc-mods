@@ -842,6 +842,47 @@ describe("statusline", () => {
     });
   }
 
+  // The line that closes a turn gets the tokens the turn generated per second after it: its output tokens over the
+  // seconds, in the status row's units (plain under 1000, K to a tenth, M to a hundredth).
+  const turnLine = async ($: any, on: any, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: object }) => {
+    stubHint(on);
+    on("ui.render", { component: "TurnDuration" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
+    on("turn.complete", (_$: any, e: any) => ({ text: e.answer }));
+    if (turn) await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", ...turn });
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "TurnDuration", props } as any);
+    const text = async () => (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
+    for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await new Promise((r) => setTimeout(r, 10));
+    const drawn = await text();
+    await ui.unmount();
+    return drawn;
+  };
+  const used = (output: number, others = 0) => ({ input_tokens: others, output_tokens: output, cache_read_input_tokens: others, cache_creation_input_tokens: others, model: "claude-opus-5-5" });
+  for (const [tokens, rate] of [[7_000, "1.0K"], [700, "100"], [14_500 * 1_000, "2.07M"], [7_000_000, "1.00M"], [6_999, "999"]] as [number, string][]) {
+    test(`draws ${rate} tok/s after the closing line for ${tokens} output tokens over 7 s`, async ($, on) => {
+      mock.clock(on);
+      const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(tokens) });
+      expect(drawn).toBe(`Cooked for 7s · ${rate} tok/s`);
+    });
+  }
+
+  test("counts only the output tokens: the input, the cache read and the cache write are not tokens generated", async ($, on) => {
+    mock.clock(on);
+    const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(350, 1_000_000) });
+    expect(drawn).toBe("Cooked for 7s · 50 tok/s");
+  });
+
+  test("draws no rate when the person turned turn_rate off", { options: { turn_rate: false } }, async ($, on) => {
+    mock.clock(on);
+    const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(7_000) });
+    expect(drawn).toBe("Cooked for 7s");
+  });
+
+  test("gives a closing line of another length none: it is an older turn's", async ($, on) => {
+    mock.clock(on);
+    const drawn = await turnLine($, on, { word: "Cooked", durationMs: 30_000 }, { durationMs: 7_000, usage: used(7_000) });
+    expect(drawn).toBe("Cooked for 7s");
+  });
+
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
     stubHint(on);
     const clock = mock.clock(on);

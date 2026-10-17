@@ -75,6 +75,10 @@ The git row is made of links, and a click opens them the way your terminal opens
 - A failed check's cross opens that check.
 - The running and passed counts open the pull request's checks.
 
+### End of turn
+
+The line that closes a turn, `✻ Cooked for 7s · done 11:22 PM`, gets the tokens per second the turn generated after it: `· 52 tok/s`. The count is the output tokens of the main conversation's requests in that turn, divided by the turn's length. The input, the cache reads and writes, and a subagent's tokens are not in it. It uses the status row's units: a plain number under 1000, `K` with one decimal and `M` with two. The `turn_rate` option turns it off.
+
 ### Costs
 
 Costs are estimates. The mod prices each request in the session's transcripts with Anthropic's published rates. It fetches the rates from the pricing page at the session's first token count, and again at each later count until a fetch succeeds. Fast mode on Opus 5.5, Opus 5 and Opus 4.8 costs twice the rate. A `~` before a cost means some requests had no price, and `$?` means none had.
@@ -115,6 +119,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the cold-cache line with the `Start fresh` button. |
 | Smart zone on the context bar | `smart_zone` | true | Set to false, the context bar drops the smart zone. Each cell becomes a full-height block of the context left before auto-compaction. The glyph becomes a moon that fills across the whole window, and `⊙` past the threshold. |
 | Smart zone (tokens) | `smart_zone_tokens` | 200000 | The size of the smart zone that the context bar's top half shows. 0 draws the bar as if `smart_zone` were off. |
+| Turn line › tokens per second | `turn_rate` | true | Shows the tokens per second after the line that closes a turn, as described under [End of turn](#end-of-turn). |
 
 ## Needs
 

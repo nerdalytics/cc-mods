@@ -171,12 +171,18 @@ let handoffAt = 0;
 // The branch the shown PR belongs to and when it was fetched.
 let prFor: string | undefined;
 let prAt = 0;
+// The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
+// line that closes it; and the text each such line got, by instance, so a redraw after a later turn keeps its own.
+let turnRate = false;
+let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
+const turnRates = new Map<string, string>();
 
 export const register: Register = (on, options) => {
   // The person's options, from /config; a change there loads the module again with the new ones.
   autoHandoff = options.auto_handoff === true;
   freshStart = options.fresh_start === true;
   gap = options.compact === true ? 0 : 1;
+  turnRate = options.turn_rate === true;
   const rows: [unknown, Layout][] = [
     [options.row_git_position, options.row_git === true ? GIT_ROW : []],
     [options.row_status_position, options.row_status === true ? STATUS_ROW.filter((name) => options[`segment_${name}`] === true) : []],
@@ -240,11 +246,33 @@ export const register: Register = (on, options) => {
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
     if (!e.agentId) busy = false;
+    if (turnRate && !e.agentId && e.usage && e.durationMs > 0) {
+      lastTurn = { tokens: e.usage.output_tokens, durationMs: e.durationMs, at: Date.now() };
+      // The closing line may have drawn before this event: draw it again, now its tokens are known.
+      $.ui.invalidate("ui.render");
+    }
     if (!e.agentId) await refresh($);
     // A subagent's turn ends too, so its tokens and its edits show while the main turn still runs.
     refreshTokens($);
     refreshGit($);
     return result;
+  });
+
+  // The line that closes a turn (✻ Cooked for 7s · done 11:22 PM) gets the tokens the turn generated per second after
+  // it, in the units of the rest of the row. It takes the last turn's count once, and only a line of about that length drawn
+  // within seconds of the turn's end, so a redraw of an older line never takes a later turn's.
+  on("ui.render", { component: "TurnDuration" }, async ($, e, next) => {
+    const drawn = await next(e);
+    if (!turnRate) return drawn;
+    let text = turnRates.get(e.requestId);
+    if (text === undefined && lastTurn && Date.now() - lastTurn.at < 5_000 && Math.abs(lastTurn.durationMs - e.props.durationMs) < 1_000) {
+      text = ` · ${formatTokens(Math.floor((lastTurn.tokens * 1_000) / lastTurn.durationMs))} tok/s`;
+      turnRates.set(e.requestId, text);
+      lastTurn = undefined;
+    }
+    if (text === undefined) return drawn;
+    const { Box, Text } = $.ui.resolve(e) as Ui;
+    return Box({ flexDirection: "row", children: [drawn, Text({ dimColor: true, children: text })] });
   });
 
 
