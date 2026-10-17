@@ -272,7 +272,9 @@ export const register: Register = (on, options) => {
     }
     if (text === undefined) return drawn;
     const { Box, Text } = $.ui.resolve(e) as Ui;
-    return Box({ flexDirection: "row", children: [drawn, Text({ dimColor: true, children: text })] });
+    // The engine draws the line as a Box of width 100%: beside it directly, the rate is squeezed to the row's end. Held
+    // in a Box of no width of its own, the line is as wide as its text and the rate follows it.
+    return Box({ flexDirection: "row", children: [Box({ children: [drawn] }), Box({ flexShrink: 0, children: [Text({ dimColor: true, children: text })] })] });
   });
 
 
