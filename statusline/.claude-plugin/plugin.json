@@ -22,13 +22,13 @@
     "row_git": {
       "type": "boolean",
       "title": "Statusline: Git row",
-      "description": "The project folder, branch, worktree, pull request and changes, above the prompt.",
+      "description": "The project folder, branch, worktree, pull request and changes, above the prompt. true (default) / false",
       "default": true
     },
     "row_git_position": {
       "type": "string",
       "title": "Statusline: Git row › position",
-      "description": "Where the git row draws: above the prompt, or under it below Claude Code's hint line.",
+      "description": "Where the git row draws: above the prompt, or under it below Claude Code's hint line. above (default) / below",
       "options": [
         "above",
         "below"
@@ -38,13 +38,13 @@
     "row_status": {
       "type": "boolean",
       "title": "Statusline: Status row",
-      "description": "The model, limits, context, turns, costs and cache, under the prompt.",
+      "description": "The model, limits, context, turns, costs and cache, under the prompt. true (default) / false",
       "default": true
     },
     "row_status_position": {
       "type": "string",
       "title": "Statusline: Status row › position",
-      "description": "Where the status row draws: above the prompt, or under it below Claude Code's hint line.",
+      "description": "Where the status row draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
       "options": [
         "above",
         "below"
@@ -54,93 +54,100 @@
     "segment_model": {
       "type": "boolean",
       "title": "Statusline: Status row › model",
-      "description": "The main loop's model.",
+      "description": "The main loop's model. true (default) / false",
       "default": true
     },
     "segment_limits": {
       "type": "boolean",
       "title": "Statusline: Status row › limits",
-      "description": "The 7d and 5h limit bars.",
+      "description": "The 7d and 5h limit bars. true (default) / false",
       "default": true
     },
     "segment_context": {
       "type": "boolean",
       "title": "Statusline: Status row › context",
-      "description": "The context window bar.",
+      "description": "The context window bar. true (default) / false",
       "default": true
     },
     "segment_turns": {
       "type": "boolean",
       "title": "Statusline: Status row › turns",
-      "description": "Prompts sent and the model requests made for them.",
+      "description": "Prompts sent and the model requests made for them. true (default) / false",
       "default": true
     },
     "segment_tokens": {
       "type": "boolean",
       "title": "Statusline: Status row › costs",
-      "description": "What the main conversation and its subagents cost.",
+      "description": "What the main conversation and its subagents cost. true (default) / false",
       "default": true
     },
     "segment_cache": {
       "type": "boolean",
       "title": "Statusline: Status row › cache",
-      "description": "The prompt cache's time left and what it costs.",
+      "description": "The prompt cache's time left and what it costs. true (default) / false",
       "default": true
     },
     "compact": {
       "type": "boolean",
       "title": "Statusline: Compact spacing",
-      "description": "No space between the tags of the status row, nor in the git row's folders, branch and worktree.",
+      "description": "No space between the tags of the status row, nor in the git row's folders, branch and worktree. true / false (default)",
       "default": false
     },
     "auto_handoff": {
       "type": "boolean",
       "title": "Statusline: Hand off before the cache goes cold",
-      "description": "Runs /statusline:handoff once while the session is idle, a few minutes before the prompt cache expires, and writes HANDOFF-<date-time>.md at the project's root. It runs again only after your next prompt.",
+      "description": "Runs /statusline:handoff once while the session is idle, a few minutes before the prompt cache expires, and writes HANDOFF-<date-time>.md at the project's root. It runs again only after your next prompt. true (default) / false",
       "default": true
+    },
+    "keep_warm_pings": {
+      "type": "number",
+      "title": "Statusline: Keep the cache warm (pings)",
+      "description": "How many minimal prompts the mod sends while the session is idle, each just before the prompt cache expires, to keep it warm; the handoff runs after the last one, on a 5-minute cache too. About 25 pings cost as much as writing a 5-minute cache once, and a fresh session from the handoff is usually cheaper and answers faster, so keep this low. (default: 0)",
+      "default": 0,
+      "min": 0
     },
     "fresh_start": {
       "type": "boolean",
       "title": "Statusline: Offer a fresh start from the handoff",
-      "description": "Once the cache is cold and this session wrote a handoff, a line under the prompt shows what the next message costs here and what a fresh session from the handoff costs, with a button that starts it.",
+      "description": "Once the cache is cold and this session wrote a handoff, a line under the prompt shows what the next message costs here and what a fresh session from the handoff costs, with a button that starts it. true (default) / false",
       "default": true
     },
     "auto_compact": {
       "type": "boolean",
       "title": "Statusline: Compact when the smart zone is nearly used",
-      "description": "Runs /compact once while the session is idle, as soon as the context has used 90% of the smart zone. It runs again only after your next prompt.",
+      "description": "Runs /compact once while the session is idle, as soon as the context has used 90% of the smart zone. It runs again only after your next prompt. true / false (default)",
       "default": false
     },
     "compact_hint": {
       "type": "boolean",
       "title": "Statusline: Offer a compaction when the smart zone is nearly used",
-      "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does.",
+      "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does. true (default) / false",
       "default": true
     },
     "dismiss_minutes": {
       "type": "number",
       "title": "Statusline: Dismissed offers stay hidden (minutes)",
-      "description": "How long the cross on the fresh-start and compaction lines hides its line. 0 hides it for the rest of the session.",
+      "description": "How long the cross on the fresh-start and compaction lines hides its line. 0 hides it for the rest of the session. (default: 0)",
       "default": 0,
       "min": 0
     },
     "smart_zone": {
       "type": "boolean",
       "title": "Statusline: Smart zone on the context bar",
-      "description": "The context bar's top half shows the smart zone left. Off, the bar shows only the context window left, in full-height blocks.",
+      "description": "The context bar's top half shows the smart zone left. Off, the bar shows only the context window left, in full-height blocks. true (default) / false",
       "default": true
     },
     "smart_zone_tokens": {
       "type": "number",
       "title": "Statusline: Smart zone (tokens)",
-      "description": "The context size up to which recall stays precise; the context bar's top half shows how much of it is left.",
+      "description": "The context size up to which recall stays precise; the context bar's top half shows how much of it is left. (default: 200000)",
       "default": 200000,
       "min": 0
     },
     "turn_rate": {
       "type": "boolean",
       "title": "Statusline: Turn line › tokens per second",
-      "description": "The tokens a turn generated per second, in the line that closes it (Cooked at 52 tok/s for 7s · done 11:22 PM).",
+      "description": "The tokens a turn generated per second, in the line that closes it (Cooked at 52 tok/s for 7s · done 11:22 PM). true (default) / false",
       "default": true
     }
   }

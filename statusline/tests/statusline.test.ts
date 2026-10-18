@@ -28,13 +28,14 @@ function mountHint($: any, isDraft = false): Promise<any> {
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLimits = [] as object[], ttl = "1h", agents = [] as object[] } = {}): Promise<string[]> {
+async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLimits = [] as object[], ttl = "1h", agents = [] as object[], after = 3 } = {}): Promise<string[]> {
   stubHint(on);
-  // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left.
+  // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
+  // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
   const clock = mock.clock(on);
   const ran: string[] = [];
   // "5m-held": written for five minutes, yet read back whole after ten idle ones, 57 minutes ago: it outlived its label.
-  const written = { ephemeral_5m_input_tokens: ttl === "5m" ? 1_000_000 : 0, ephemeral_1h_input_tokens: ttl === "1h" ? 1_000_000 : 0 };
+  const written = { ephemeral_5m_input_tokens: ttl === "5m" || ttl === "5m-late" ? 1_000_000 : 0, ephemeral_1h_input_tokens: ttl === "1h" ? 1_000_000 : 0 };
   const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: written };
   const row = (id: string, minutesAgo: number, u: object) =>
     JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: u } });
@@ -44,7 +45,7 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
           row("r0", 67, { ...usage, cache_creation: { ephemeral_5m_input_tokens: 1_000_000, ephemeral_1h_input_tokens: 0 } }),
           row("r1", 57, { ...usage, cache_read_input_tokens: 1_000_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } }),
         ].join("\n")
-      : row("r1", ttl === "1h" ? 57 : 3, usage);
+      : row("r1", ttl === "1h" ? 57 : ttl === "5m-late" ? 4.5 : 3, usage);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
   on("session.model", () => ({ value: model }));
@@ -60,7 +61,11 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
     ran.push(e.command);
     return { text: "" };
   });
-  on("prompt.submit", (_$, e) => ({ text: e.text }));
+  // A prompt the mod submits itself is a ping.
+  on("prompt.submit", (_$, e) => {
+    if (e.origin.kind === "plugin") ran.push("ping");
+    return { text: e.text };
+  });
 
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
   const ui = await mountHint($);
@@ -80,7 +85,7 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
 
   // A prompt typed at the composer: the next poll runs the handoff, and the ones after it do not run it again.
   await $.prompt.submit({ text: "hi", origin: { kind: "composer" } } as any);
-  await polls(3);
+  await polls(after);
   await ui.unmount();
   return ran;
 }
@@ -657,6 +662,30 @@ describe("statusline", () => {
     expect(await handoffRuns($, on)).toEqual([]);
   });
 
+  test("sends no ping at keep_warm_pings 0, the default: the handoff alone runs", async ($, on) => {
+    expect(await handoffRuns($, on, { after: 14 })).toEqual(["statusline:handoff"]);
+  });
+
+  test("pings an hour's cache as often as keep_warm_pings allows, then runs the handoff", { options: { keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { after: 14 })).toEqual(["ping", "ping", "statusline:handoff"]);
+  });
+
+  test("pings a five-minute cache a minute before it expires, and runs the handoff after the last ping", { options: { keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { ttl: "5m-late", after: 14 })).toEqual(["ping", "ping", "statusline:handoff"]);
+  });
+
+  test("pings a five-minute cache no earlier than a minute before it expires", { options: { keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { ttl: "5m", after: 14 })).toEqual([]);
+  });
+
+  test("sends no ping and no handoff after it while a subagent is at work", { options: { keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { after: 14, agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }] })).toEqual([]);
+  });
+
+  test("sends no ping at 98% of the 5h window", { options: { keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { after: 14, rateLimits: [{ kind: "five_hour", percentUsed: 98 }] })).toEqual([]);
+  });
+
   test("runs no handoff on a five-minute cache", async ($, on) => {
     expect(await handoffRuns($, on, { ttl: "5m" })).toEqual([]);
   });
@@ -993,6 +1022,46 @@ describe("statusline", () => {
       const tab = (await ui.findAll({ type: "Link" })).some((l: any) => l.props.href === "https://github.com/o/r/pull/7/checks");
       expect(tab).toBe(checks);
       await ui.unmount();
+    });
+  }
+
+  // gh goes over the network: once a minute, but every 10 s while a check is running or queued.
+  for (const { name, status, calls } of [
+    { name: "queued checks", status: "QUEUED", calls: 2 },
+    { name: "finished checks", status: "COMPLETED", calls: 1 },
+  ]) {
+    test(`asks gh again within 10 s for ${name}: ${calls - 1} more asks`, async ($, on) => {
+      stubHint(on);
+      const clock = mock.clock(on);
+      const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
+      const out: Record<string, string> = {
+        "git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
+          "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n",
+        "git symbolic-ref refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+        "git rev-list --left-right --count HEAD...origin/feat": "0\t0\n",
+        "git remote get-url origin": "git@github.com:o/r.git\n",
+        "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
+      };
+      let asks = 0;
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      on("session.root", () => ({ value: "/r" }));
+      on("session.cwd", () => ({ value: "/r" }));
+      on("fs.exists", () => ({ value: false }));
+      on("process.run", (_$, e) => {
+        if (e.argv[0] === "gh") asks++;
+        const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
+        return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+      });
+
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+      for (let i = 0; i < 50 && asks === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      for (let i = 0; i < 6; i++) {
+        await clock.advance(2_000);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(asks).toBe(calls);
     });
   }
 

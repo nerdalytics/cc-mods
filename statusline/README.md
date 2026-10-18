@@ -105,6 +105,24 @@ Claude Code can switch the main conversation to five-minute caches on its own, a
 
 After `/compact` the old cache has no use. The cache countdown and the handoff wait for the next request.
 
+### Keeping the cache warm
+
+Claude Code's documentation says it requests the one-hour cache only on a Claude subscription within the plan's included usage. Past the plan's limit, on an API key or on a cloud provider, the main conversation gets five minutes, and subagents get five minutes everywhere. See [which TTL each request gets](https://code.claude.com/docs/en/prompt-caching#which-ttl-each-request-gets). On a five-minute cache the handoff above does not run on its own.
+
+The `keep_warm_pings` option, 0 by default, sends minimal prompts of its own to keep the cache warm. It sends one just before the cache expires (five minutes ahead on a one-hour cache, a minute ahead on a five-minute one), up to the number you set between two of your prompts, and runs the handoff after the last one. The handoff then also runs on a five-minute cache. A read restarts the cache's timer at the read price, and the clock runs from the start of the request. See [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
+The pings are turns in your conversation: each adds a short message and a one-word answer to it, and they show in the transcript. They do not run before your first prompt after the mod loads, nor while a subagent is at work or the 5h window is near its limit, the same cases as the handoff. A `/compact` ends them, because it empties the cache.
+
+**Avoid pings where you can.** A fresh session from the handoff starts with a small context, so each message in it costs less and answers sooner than in a long conversation, which the pings only keep warm. The `Start fresh` button does this. A ping is a cache read, so a count of pings costs as much as writing the cache again once at the write price divided by the read price:
+
+| Model | Read price | 5-minute cache, writes at 1.25 times | 1-hour cache, writes at 2 times |
+|---|---|---|---|
+| Opus 5.5, Sonnet 5.5 | 0.05 times | 25 pings, about 1h40 | 40 pings, about 37 hours |
+| Other models | 0.1 times | 12 pings, about 50 minutes | 20 pings, about 18 hours |
+| Fable 5.1, Mythos 5.1 | 0.025 times | 50 pings, about 3h20 | 80 pings, about 73 hours |
+
+The prices are the API's multipliers from the prompt caching page. The count leaves out the pings' own output tokens and the messages they add, and the times assume a ping every 4 minutes on a five-minute cache and every 55 on a one-hour one. On a subscription the limit is usage rather than dollars, and the documentation does not say how cache reads count toward it.
+
 ## Options
 
 <img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
@@ -120,6 +138,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
+| Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the cold-cache line with the `Start fresh` button. |
 | Compact when the smart zone is nearly used | `auto_compact` | false | Runs `/compact` as described under [Status row](#status-row). |
 | Offer a compaction when the smart zone is nearly used | `compact_hint` | true | Shows the line with the `Compact` button once the context has used 90% of the smart zone, as described under [Status row](#status-row). |
@@ -138,7 +157,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 The mod reads the session's transcripts under `~/.claude/projects/` to count tokens and requests. When `$CLAUDE_CONFIG_DIR` is set, it reads `$CLAUDE_CONFIG_DIR/projects/` instead. It also reads the end of every transcript written in the last five hours, to find a limit any of your sessions was refused on. It runs `git` in the project folder.
 
-Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that, while the branch is on a remote and is not the default branch. Nothing else leaves the machine.
+Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that (every 10 seconds while its checks are running or queued), while the branch is on a remote and is not the default branch. Nothing else leaves the machine.
 
 ## License
 

@@ -73,15 +73,23 @@ const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md
 // The tick also paces the animations: $.ui.invalidate caps the band at thirty redraws a second.
 const FRAME_MS = 100;
 // What no event announces is polled: limits (other sessions spend them too) and git (edits and branch switches from
-// anywhere). One poll is about 0.15 s of git work. The PR goes over the network, so on a branch change or once a minute.
+// anywhere). One poll is about 0.15 s of git work. The PR goes over the network, so on a branch change or once a minute,
+// and every 10 s while its checks are running or queued.
 const POLL_MS = 2_000;
 const PR_POLL_MS = 60_000;
+const PR_BUSY_POLL_MS = 10_000;
 // Other sessions' transcripts, for a limit one of them was refused on: a few hours of them read, so less often.
 const REJECTED_POLL_MS = 10_000;
 // Before the cache goes cold the mod runs the plugin's own handoff skill, once per idle stretch, when the person's
 // auto_handoff option (plugin.json userConfig, a /config row) is on: while the cache is warm the handoff reads it at
 // the hit price, and the document it leaves lets the next session start without it.
 const HANDOFF_COMMAND = "statusline:handoff";
+// With the keep_warm_pings option on, a minimal prompt of the mod's own reads the cache just before it expires, which
+// restarts its TTL at the read price. The lead is how many seconds before expiry the ping goes out, by TTL; the gap
+// keeps one ping from going out twice before its turn has started.
+const PING_TEXT = "The prompt cache needs a request to stay warm. Reply with the single word ok and use no tools.";
+const PING_LEAD_S: Record<number, number> = { 3_600: 300, 300: 60 };
+const PING_GAP_MS = 10_000;
 // Sweep speed per effort, linear: each step adds a ninth of a cycle a second, so high (3) sweeps once every 3 s.
 // "none" is a request sent without effort; a level missing here (a numeric budget) sweeps as high.
 const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
@@ -167,6 +175,12 @@ let autoHandoff = false;
 let freshStart = false;
 let compactHint = false;
 let autoCompact = false;
+// The most pings per idle stretch, the keep_warm_pings option; 0 sends none.
+let keepWarm = 0;
+// The pings sent in the stretch since the person's prompt at pingFor, and when the last went out.
+let pings = 0;
+let pingFor = 0;
+let pingAt = -Infinity;
 // The columns between a row's tags: none with the compact option on.
 let gap = 1;
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -184,6 +198,8 @@ let dismissFor = 0;
 // The branch the shown PR belongs to and when it was fetched.
 let prFor: string | undefined;
 let prAt = 0;
+// Whether the shown PR had checks running or queued, which a push or a finished run changes within seconds.
+let prBusy = false;
 // The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
 // line that closes it; and the rate each such line got, by instance, so a redraw after a later turn keeps its own.
 let turnRate = false;
@@ -196,6 +212,7 @@ export const register: Register = (on, options) => {
   freshStart = options.fresh_start === true;
   compactHint = options.compact_hint === true;
   autoCompact = options.auto_compact === true;
+  keepWarm = typeof options.keep_warm_pings === "number" ? Math.max(0, Math.floor(options.keep_warm_pings)) : 0;
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
@@ -340,6 +357,7 @@ async function drawRows($: EngineInterface, e: any, layout: Layout[]): Promise<R
 }
 
 function poll($: EngineInterface): void {
+  void maybeKeepWarm($);
   void maybeHandoff($);
   void maybeCompact($);
   void $.session.usage().then((u) => $.state.set(USAGE, { context: u.context, rateLimits: u.rateLimits }));
@@ -351,18 +369,53 @@ function poll($: EngineInterface): void {
   }
 }
 
-// Runs the handoff skill when the session is idle, the cache still warm and within five minutes of going cold. Only on
-// an hour's TTL: a five-minute cache goes cold at every short pause, and rewriting it costs little. The handoff's own
-// request refreshes the cache, so it waits for the person's next prompt before it may run again.
+// The seconds the warm cache has left, and the lead before expiry at which the mod acts on it; undefined when none is warm.
+async function cacheClock($: EngineInterface): Promise<{ ttl: number; left: number; lead: number } | undefined> {
+  const { value: tokens } = await $.state.get(TOKENS);
+  const cache = tokens?.cache;
+  if (!cache) return undefined;
+  const { value: sent } = await $.state.get(SENT);
+  const left = cacheLeft(cache, sent, Math.floor(Date.now() / 1000));
+  return left > 0 ? { ttl: cache.ttl, left, lead: PING_LEAD_S[cache.ttl] ?? 300 } : undefined;
+}
+
+// With keep_warm_pings on, sends a minimal prompt of the mod's own just before the cache expires, up to that many
+// between two of the person's prompts; the handoff follows the last. The pings are the mod's own prompts, so they do
+// not start a new stretch. None before the person's first prompt, as with the handoff; a usage limit nearly reached, a
+// subagent at work or a turn running leaves them out.
+async function maybeKeepWarm($: EngineInterface): Promise<void> {
+  if (keepWarm <= 0 || promptAt === 0 || busy || (await agentsAtWork($)) || (await limitsNear($))) return;
+  if (pingFor !== promptAt) {
+    pingFor = promptAt;
+    pings = 0;
+  }
+  if (pings >= keepWarm) return;
+  const cache = await cacheClock($);
+  if (!cache || cache.left > cache.lead) return;
+  const now = await $.clock.now();
+  if (now - pingAt < PING_GAP_MS) return;
+  pingAt = now;
+  pings++;
+  try {
+    await $.prompt.submit({ text: PING_TEXT });
+  } catch (err) {
+    // No more pings this stretch: the handoff, which has a try of its own, goes next.
+    pings = keepWarm;
+    $.ui.toast(`statusline: the ping that keeps the cache warm did not start: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+// Runs the handoff skill when the session is idle, the cache still warm and within its lead of going cold. Only on an
+// hour's TTL: a five-minute cache goes cold at every short pause, and rewriting it costs little. With keep_warm_pings
+// on it runs on either TTL, after the last ping. The handoff's own request refreshes the cache, so it waits for the
+// person's next prompt before it may run again.
 async function maybeHandoff($: EngineInterface): Promise<void> {
   if (!autoHandoff || busy || handoffAt >= promptAt || (await agentsAtWork($))) return;
   if (await limitsNear($)) return;
-  const { value: tokens } = await $.state.get(TOKENS);
-  const cache = tokens?.cache;
-  if (cache?.ttl !== 3_600) return;
-  const { value: sent } = await $.state.get(SENT);
-  const left = (Math.max(cache.at, sent ?? 0) - Date.now()) / 1000 + cache.ttl;
-  if (left <= 0 || left > 300) return;
+  const cache = await cacheClock($);
+  if (!cache || cache.left > cache.lead || (cache.ttl !== 3_600 && keepWarm <= 0)) return;
+  // With pings on, the handoff waits for the last of them.
+  if (keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)) return;
   handoffAt = Date.now();
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
@@ -584,11 +637,20 @@ type Price = Rate & { over?: { above: number; rate: Rate } };
 // The background jobs running now, by name; `again` asks one to run once more when it ends.
 const running = new Map<string, { again: boolean }>();
 
+// TEMPORARY: the PR fetches, read by the debug mod's /pr-trace pane; remove with the calls to trace.
+const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
+const traceLog: string[] = [];
+function trace($: EngineInterface, msg: string): void {
+  traceLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
+  void $.state.set(PR_TRACE, traceLog.slice(-200));
+}
+
 // One run of a job at a time, in the background; a request during one runs it again once it ends.
-function serial(name: string, job: () => Promise<void>): void {
+function serial(name: string, job: () => Promise<void>, onSkip?: () => void): void {
   const current = running.get(name);
   if (current) {
     current.again = true;
+    onSkip?.();
     return;
   }
   const state = { again: false };
@@ -622,11 +684,15 @@ function refreshGit($: EngineInterface): void {
     // so the git parts draw first.
     const named = git.branch !== "" && git.branch !== "HEAD" && git.branch !== git.defaultBranch;
     const branch = named && !git.vsDefault ? `${git.top}:${git.branch}` : "";
-    if (branch === prFor && Date.now() - prAt < PR_POLL_MS) return;
+    const now = await $.clock.now();
+    if (branch === prFor && now - prAt < (prBusy ? PR_BUSY_POLL_MS : PR_POLL_MS)) return;
     prFor = branch;
-    prAt = Date.now();
-    await $.state.set(PR, branch ? await fetchPr($) : null);
-  });
+    prAt = now;
+    const pr = branch ? await fetchPr($) : null;
+    prBusy = (pr?.checks.pending ?? 0) > 0;
+    trace($, `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
+    await $.state.set(PR, pr);
+  }, () => trace($, "git job still running; poll folded into again"));
 }
 
 async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | undefined> {
@@ -851,8 +917,11 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
 async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
   try {
     const fields = "number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state";
-    const { exitCode, stdout } = await $.process.run(["gh", "pr", "view", "--json", fields], { timeoutMs: 15_000 });
-    if (exitCode !== 0) return null;
+    const { exitCode, stdout, stderr } = await $.process.run(["gh", "pr", "view", "--json", fields], { timeoutMs: 15_000 });
+    if (exitCode !== 0) {
+      trace($, `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
+      return null;
+    }
     const pr = JSON.parse(stdout);
     if (typeof pr?.number !== "number") return null;
     const checks = { pending: 0, failure: 0, success: 0 };
@@ -876,7 +945,8 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
       comments: pr.comments?.length ?? 0,
       checks,
     };
-  } catch {
+  } catch (err) {
+    trace($, `fetchPr threw: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }

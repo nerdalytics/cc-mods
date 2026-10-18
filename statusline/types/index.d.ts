@@ -70,6 +70,8 @@ declare module "claude-code" {
       // The handoff file written since this session started: its absolute path and size.
       handoff: { path: string; bytes: number } | null;
       tick: number;
+      // TEMPORARY: the PR fetch trace, read by the debug mod's /pr-trace pane.
+      prTrace: string[];
       // When the latest copy of the module loaded: an older copy's tick stops once it reads a newer one.
       load: number;
     };
