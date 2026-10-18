@@ -127,9 +127,9 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 `/statusline-order` opens a pane with two lists. Press a row, drag it, release to drop it.
 
-- **Rows:** git + pull request and status, around a `prompt` marker. Above the marker draws above the prompt, below it draws under it. A drop writes `row_git_position`, `row_status_position` and `row_order`.
+- **Rows:** git + pull request and status, around the `━━ your prompt ━━` marker, drawn in bold cyan. A row above the marker draws above the prompt, below it draws under it. A drop writes `row_git_position`, `row_status_position` and `row_order`.
 - **Status row:** the tags in the order they draw. A drop writes `segment_order`.
-- **Hidden:** a row or tag dropped after a list's `hidden` marker is switched off (`row_git`, `row_status` or `segment_<name>` becomes false); dragged back out, it is switched on. The markers do not drag.
+- **Hidden:** a row or tag dropped under a list's dim `╌╌ hidden: switched off ╌╌` marker is switched off (`row_git`, `row_status` or `segment_<name>` becomes false) and drawn dim and struck through; dragged back out, it is switched on. The markers do not drag.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -144,7 +144,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
 | Status row | `row_status` | true | Shows the status row. |
-| Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. When both rows share a place, the git row comes first. |
+| Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. When both rows share a place, the git row comes first, unless `row_order` is `status_first`. |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
 | Rows › order | `row_order` | git_first | Which row comes first when both draw on the same side of the prompt: `git_first` or `status_first`. |
 | Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
