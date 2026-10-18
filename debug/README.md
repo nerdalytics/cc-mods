@@ -15,6 +15,7 @@ A mod for mod authors. It shows where in Claude Code's interface a mod can draw,
   - Text: bold, orange and dim.
   - A `Raster`: a 32 by 6 grid of coloured blocks.
   - An `Image`: a 64 by 32 pixel gradient in a box 32 columns wide and 8 rows tall. On a terminal that draws pictures, the gradient shows. On one that doesn't, the box shows `[image not drawn: alt text]`.
+- **The PR trace pane.** `/pr-trace` opens a pane that lists the statusline mod's PR fetches: the time, the branch, and the PR's pending, passed and failed checks, or the `gh` error. It needs the statusline mod's trace, which only a build that writes it provides, and shows `No PR fetch yet.` until the first fetch.
 
 In Warp, the Raster draws and the Image shows its alt text. The mod doesn't say why. The API types name kitty and Ghostty as terminals that draw an `Image`.
 

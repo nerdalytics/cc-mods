@@ -3,6 +3,9 @@
 import type { Elements, EngineInterface, Register } from "claude-code";
 
 const PROBE = "probe";
+const PR_TRACE_PANE = "pr-trace";
+// The statusline mod's PR fetch log; its owner writes it, any plugin may read it.
+const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
 const COLS = 32;
 const ROWS = 6;
 const PX = 64;
@@ -40,11 +43,23 @@ export const register: Register = (on) => {
     const result = await next(e);
     await $.ui.open({ id: "markers", title: "markers" });
     await $.command.register({ name: "probe", description: "Open a pane that draws text, a Raster and an Image" });
+    await $.command.register({ name: "pr-trace", description: "Open a pane that shows the statusline mod's PR fetches" });
     return result;
   });
   on("command.run", { command: "probe" }, async ($) => {
     const opened = await $.ui.open({ id: PROBE, title: "probe" });
     return { text: opened.isPlaced ? "Probe pane opened." : `Probe pane not placed: ${opened.reason}` };
+  });
+  on("command.run", { command: "pr-trace" }, async ($) => {
+    const opened = await $.ui.open({ id: PR_TRACE_PANE, title: "PR trace" });
+    return { text: opened.isPlaced ? "PR trace pane opened." : `PR trace pane not placed: ${opened.reason}` };
+  });
+  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
+    const { value } = await $.state.get(PR_TRACE);
+    const lines = (value as string[] | undefined) ?? [];
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 4);
+    return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: "No PR fetch yet." })] });
   });
   on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e) => {
     const { Box, Text, Raster, Image } = $.ui.resolve(e) as Elements["terminal"];
