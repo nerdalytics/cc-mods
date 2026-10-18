@@ -67,8 +67,8 @@ declare module "claude-code" {
       dismissed: { fresh?: number; compact?: number };
       // Limits a session of this account was refused on: the window's kind, and when it resets (ms).
       rejected: Record<string, number>;
-      // The handoff file written since this session started: its absolute path and size.
-      handoff: { path: string; bytes: number } | null;
+      // The handoff file written since this session started: its absolute path, size and when it was written (ms).
+      handoff: { path: string; bytes: number; at: number } | null;
       tick: number;
       // TEMPORARY: the PR fetch trace, read by the debug mod's /pr-trace pane.
       prTrace: string[];

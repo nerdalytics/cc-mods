@@ -489,18 +489,21 @@ async function findHandoff($: EngineInterface): Promise<void> {
   const newest = (await $.fs.list(root))
     .filter((f) => f.kind === "file" && /^HANDOFF-.*\.md$/.test(f.name) && f.mtimeMs >= startedAt)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-  await $.state.set(HANDOFF, newest ? { path: `${root}/${newest.name}`, bytes: newest.size } : null);
+  await $.state.set(HANDOFF, newest ? { path: `${root}/${newest.name}`, bytes: newest.size, at: newest.mtimeMs } : null);
 }
 
-// Once the cache is cold and this session wrote a handoff, the line that weighs the two ways on: the next prompt here,
-// which writes the whole conversation to the cache again, against a fresh session from the handoff file, a button.
+// Once this session wrote a handoff, the line that weighs the two ways on: the next prompt here, which writes the whole
+// conversation to the cache again, against a fresh session from the handoff file, a button. While the cache is warm it
+// shows only until the person's next prompt, which a handoff written while they were away has not met yet.
 async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
   if (!freshStart || (await dismissed($, "fresh"))) return undefined;
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: handoff } = await $.state.get(HANDOFF);
   const { value: sent } = await $.state.get(SENT);
   const c = tokens?.cache;
-  if (!c || !handoff || cacheLeft(c, sent, Math.floor(Date.now() / 1000)) > 0 || (await agentsAtWork($))) return undefined;
+  if (!c || !handoff) return undefined;
+  const cold = cacheLeft(c, sent, Math.floor(Date.now() / 1000)) <= 0;
+  if ((!cold && handoff.at < promptAt) || (await agentsAtWork($))) return undefined;
   // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system
   // prompt is likely read from a cache other sessions keep warm, so this is an upper bound.
   const fresh = c.write === undefined || c.prompt === 0 ? undefined : (c.write * (c.base + handoff.bytes / 4)) / c.prompt;
@@ -510,7 +513,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
     flexDirection: "row",
     children: [
       Text({ color: hex(COLD_CHIP.from), children: "$" }),
-      Text({ dimColor: true, children: ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` }),
+      Text({ dimColor: true, children: cold ? ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` : ` Handoff written: fresh start ~${usd(fresh)} ` }),
       // A button as the chips are drawn: the icon on the action's colour, the label on BUTTON_BG.
       Button({
         key: "resume",
