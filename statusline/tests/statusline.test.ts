@@ -1244,4 +1244,64 @@ describe("statusline", () => {
     expect(await ui.find({ text: "Fable 5.1" })).toBeDefined();
     await ui.unmount();
   });
+
+  // The order pane: a drag in a Client of the pane posts the new order; the mod writes the /config options it changed.
+  const ROWS = [
+    { key: "statusline.row_git", value: true },
+    { key: "statusline.row_git_position", value: "above" },
+    { key: "statusline.row_status", value: true },
+    { key: "statusline.row_status_position", value: "below" },
+    { key: "statusline.row_order", value: "git_first" },
+    { key: "statusline.segment_order", value: "model,limits,context,turns,tokens,cache" },
+    ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => ({ key: `statusline.segment_${name}`, value: true })),
+  ];
+  async function dragIn(on: any, $: any, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
+    const written: [string, unknown][] = [];
+    on("config.list", () => ({ value: ROWS }));
+    on("config.set", (_$: any, e: any) => {
+      written.push([e.key.replace("statusline.", ""), e.value]);
+      return { value: e.value };
+    });
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: {} } as any);
+    await ui.pointer({ type: "down", x: 2, y: from, button: "left", in: list });
+    await ui.pointer({ type: "move", x: 2, y: to, button: "left", in: list });
+    await ui.pointer({ type: "up", x: 2, y: to, button: "left", in: list });
+    await ui.unmount();
+    return written;
+  }
+  const PINNED = { row_git: true, row_status: true, row_git_position: "above", row_status_position: "below", row_order: "git_first" };
+
+  test("dragging the git row below the prompt marker saves its side and the row order", { options: PINNED }, async ($, on) => {
+    // git, ── prompt ──, status, ── hidden ──: git dropped on status's row goes below the prompt, after status.
+    const written = await dragIn(on, $, PINNED, "rows", 0, 2);
+    expect(written).toEqual([["row_git_position", "below"], ["row_order", "status_first"]]);
+  });
+
+  test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
+    // model, limits, context, turns, tokens, cache, ── hidden ──: the model tag dropped on the marker's row.
+    const written = await dragIn(on, $, PINNED, "segments", 0, 6);
+    expect(written).toEqual([["segment_model", false], ["segment_order", "limits,context,turns,tokens,cache,model"]]);
+  });
+
+  test("dragging a hidden tag out turns it back on", { options: { ...PINNED, segment_model: false, segment_order: "limits,context,turns,tokens,cache,model" } }, async ($, on) => {
+    // limits..cache are shown (rows 0-4), ── hidden ── is row 5, model row 6: model dropped to the top.
+    const written = await dragIn(on, $, PINNED, "segments", 6, 0);
+    expect(written).toEqual([["segment_model", true], ["segment_order", "model,limits,context,turns,tokens,cache"]]);
+  });
+
+  test("dragging a row into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 2, 3)).toEqual([["row_status", false]]);
+  });
+
+  test("a drop that changes nothing writes nothing", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 0, 0)).toEqual([]);
+  });
+
+  test("the order pane lists the rows around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", row_order: "status_first", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: {} } as any);
+    const items = async (key: string) => ((await ui.find({ type: "Client", key })) as any).props.props.items;
+    expect(await items("rows")).toEqual(["status", "git", "prompt", "hidden"]);
+    expect(await items("segments")).toEqual(["cache", "model", "context", "turns", "tokens", "hidden", "limits"]);
+    await ui.unmount();
+  });
 });

@@ -123,6 +123,16 @@ The pings are turns in your conversation: each adds a short message and a one-wo
 
 The prices are the API's multipliers from the prompt caching page. The count leaves out the pings' own output tokens and the messages they add, and the times assume a ping every 4 minutes on a five-minute cache and every 55 on a one-hour one. On a subscription the limit is usage rather than dollars, and the documentation does not say how cache reads count toward it.
 
+## Order and hide
+
+`/statusline-order` opens a pane with two lists. Press a row, drag it, release to drop it.
+
+- **Rows:** git + pull request and status, around a `prompt` marker. Above the marker draws above the prompt, below it draws under it. A drop writes `row_git_position`, `row_status_position` and `row_order`.
+- **Status row:** the tags in the order they draw. A drop writes `segment_order`.
+- **Hidden:** a row or tag dropped after a list's `hidden` marker is switched off (`row_git`, `row_status` or `segment_<name>` becomes false); dragged back out, it is switched on. The markers do not drag.
+
+Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
+
 ## Options
 
 <img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
@@ -136,6 +146,8 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. When both rows share a place, the git row comes first. |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
+| Rows › order | `row_order` | git_first | Which row comes first when both draw on the same side of the prompt: `git_first` or `status_first`. |
+| Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
 | Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |

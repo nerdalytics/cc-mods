@@ -51,6 +51,16 @@
       ],
       "default": "below"
     },
+    "row_order": {
+      "type": "string",
+      "title": "Statusline: Rows › order",
+      "description": "Which row comes first when both draw on the same side of the prompt. git_first (default) / status_first. Set by dragging in /statusline-order.",
+      "options": [
+        "git_first",
+        "status_first"
+      ],
+      "default": "git_first"
+    },
     "segment_model": {
       "type": "boolean",
       "title": "Statusline: Status row › model",
@@ -86,6 +96,12 @@
       "title": "Statusline: Status row › cache",
       "description": "The prompt cache's time left and what it costs. true (default) / false",
       "default": true
+    },
+    "segment_order": {
+      "type": "string",
+      "title": "Statusline: Status row › order",
+      "description": "The status row's tags, left to right, as a comma list of model, limits, context, turns, tokens, cache. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline-order. (default: model,limits,context,turns,tokens,cache)",
+      "default": "model,limits,context,turns,tokens,cache"
     },
     "compact": {
       "type": "boolean",

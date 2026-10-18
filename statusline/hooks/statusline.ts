@@ -47,12 +47,65 @@ const SEGMENTS = {
 
 // The two rows' segments, left to right. Each row, and each segment of the status row, is a /config toggle (row_git,
 // row_status, segment_<name>), and each row's place a picker (row_git_position, row_status_position): above the prompt,
-// or under it below the engine's hint line. Two rows in one place stack git first. Applied in register.
+// or under it below the engine's hint line. Two rows in one place stack git first, unless row_order says status first;
+// the status row's tags follow segment_order. /statusline-order writes all three by dragging. Applied in register.
 type Layout = (keyof typeof SEGMENTS)[];
 const GIT_ROW: Layout = ["git"];
 const STATUS_ROW: Layout = ["model", "limits", "context", "turns", "tokens", "cache"];
 let aboveRows: Layout[] = [GIT_ROW];
 let belowRows: Layout[] = [STATUS_ROW];
+
+// The /statusline-order pane: the two rows around a prompt marker, then the status row's tags, each a list to drag. What
+// stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
+const ORDER_PANE = "statusline-order";
+const LABELS: Record<string, string> = {
+  git: "git + pull request",
+  status: "status",
+  model: "model",
+  limits: "limits",
+  context: "context",
+  turns: "turns",
+  tokens: "costs",
+  cache: "cache",
+  prompt: "━━ your prompt ━━",
+  hidden: "╌╌ hidden: switched off ╌╌",
+};
+const ROW_MARKERS = ["prompt", "hidden"];
+const SEGMENT_MARKERS = ["hidden"];
+let rowList: string[] = ["git", "prompt", "status", "hidden"];
+let segmentList: string[] = [...STATUS_ROW, "hidden"];
+
+// A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their default order.
+function ordered(option: unknown, defaults: readonly string[]): string[] {
+  const named = typeof option === "string" ? option.split(",").map((name) => name.trim()) : [];
+  return [...new Set([...named.filter((name) => defaults.includes(name)), ...defaults])];
+}
+
+// A list's names by zone: before the first marker, between the markers, after the last.
+function zonesOf(list: string[], markers: string[]): string[][] {
+  const zones: string[][] = [[]];
+  for (const name of list) markers.includes(name) ? zones.push([]) : zones[zones.length - 1].push(name);
+  return zones;
+}
+
+// What a row list says, as the /config options it is saved in: whether each row shows, a shown row's side of the prompt,
+// and which comes first (only when both show: the order of the list).
+function rowOptions(list: string[]): Record<string, string | boolean> {
+  const [above, below, hidden] = zonesOf(list, ROW_MARKERS);
+  const shown = [...above, ...below];
+  const saved: Record<string, string | boolean> = { row_git: !hidden.includes("git"), row_status: !hidden.includes("status") };
+  for (const name of shown) saved[`row_${name}_position`] = above.includes(name) ? "above" : "below";
+  if (shown.includes("git") && shown.includes("status")) saved.row_order = shown.indexOf("git") < shown.indexOf("status") ? "git_first" : "status_first";
+  return saved;
+}
+
+// The same for the status row's tags: each tag's toggle, and every tag in order, the hidden ones last.
+function segmentOptions(list: string[]): Record<string, string | boolean> {
+  const [shown, hidden] = zonesOf(list, SEGMENT_MARKERS);
+  const saved: Record<string, string | boolean> = { segment_order: [...shown, ...hidden].join(",") };
+  for (const name of STATUS_ROW) saved[`segment_${name}`] = shown.includes(name);
+  return saved;
+}
 
 const USAGE = { plugin: "statusline", key: "usage" } as const;
 const MODEL = { plugin: "statusline", key: "model" } as const;
@@ -216,12 +269,19 @@ export const register: Register = (on, options) => {
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
-  const rows: [unknown, Layout][] = [
-    [options.row_git_position, options.row_git === true ? GIT_ROW : []],
-    [options.row_status_position, options.row_status === true ? STATUS_ROW.filter((name) => options[`segment_${name}`] === true) : []],
-  ];
-  aboveRows = rows.filter(([at]) => at === "above").map(([, row]) => row);
-  belowRows = rows.filter(([at]) => at !== "above").map(([, row]) => row);
+  const tags = ordered(options.segment_order, STATUS_ROW);
+  const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
+  segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
+  const rows: Record<string, Layout> = {
+    git: options.row_git === true ? GIT_ROW : [],
+    status: options.row_status === true ? (shownTags as Layout) : [],
+  };
+  const stacked = options.row_order === "status_first" ? ["status", "git"] : ["git", "status"];
+  const shownRows = stacked.filter((name) => options[`row_${name}`] === true);
+  const isAbove = (name: string) => (name === "git" ? options.row_git_position : options.row_status_position) === "above";
+  aboveRows = shownRows.filter(isAbove).map((name) => rows[name]);
+  belowRows = shownRows.filter((name) => !isAbove(name)).map((name) => rows[name]);
+  rowList = [...shownRows.filter(isAbove), "prompt", ...shownRows.filter((name) => !isAbove(name)), "hidden", ...stacked.filter((name) => !shownRows.includes(name))];
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
@@ -248,7 +308,62 @@ export const register: Register = (on, options) => {
     refreshTokens($);
     refreshGit($);
     refreshRejected($);
+    await $.command.register({ name: ORDER_PANE, description: "Drag the status line's rows and tags into the order you want" });
     return result;
+  });
+
+  on("command.run", { command: ORDER_PANE }, async ($) => {
+    await $.ui.open({ id: ORDER_PANE, title: "Statusline order" });
+    return { text: "Statusline order pane opened." };
+  });
+
+  on("ui.render", { component: "Pane", requestId: ORDER_PANE }, ($, e) => {
+    const { Box, Text, Client } = $.ui.resolve(e) as Ui;
+    const list = (key: string, items: string[], fixed: string[]) => Client({ key, module: "./order-list.ts", props: { items, labels: LABELS, fixed, rev: 0 } });
+    const gap = () => Box({ height: 1 });
+    return Box({
+      flexDirection: "column",
+      children: [
+        Text({ bold: true, children: "Statusline order" }),
+        Text({ dimColor: true, children: "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off." }),
+        gap(),
+        Text({ bold: true, children: "Rows" }),
+        Text({ dimColor: true, children: "Above the prompt marker draws above your prompt, below it draws under it." }),
+        list("rows", rowList, ROW_MARKERS),
+        gap(),
+        Text({ bold: true, children: "Status row" }),
+        Text({ dimColor: true, children: "The tags draw left to right in this order." }),
+        list("segments", segmentList, SEGMENT_MARKERS),
+      ],
+    });
+  });
+
+  // Each drop writes the /config options it changed, switches first: one write per option, since a write loads the module again.
+  on("ui.message", { requestId: ORDER_PANE }, async ($, e, next) => {
+    const isRows = e.element === "rows";
+    const current = isRows ? rowList : e.element === "segments" ? segmentList : undefined;
+    const markers = isRows ? ROW_MARKERS : SEGMENT_MARKERS;
+    const data = e.data;
+    const isOrder =
+      current !== undefined &&
+      Array.isArray(data) &&
+      data.length === current.length &&
+      current.every((name) => data.includes(name)) &&
+      markers.every((name, i) => i === 0 || data.indexOf(markers[i - 1]) < data.indexOf(name));
+    if (!isOrder) return next(e);
+    const wanted = (isRows ? rowOptions : segmentOptions)(data);
+    const changed = Object.entries(wanted).filter(([field, value]) => value !== options[field]);
+    changed.sort(([, a], [, b]) => Number(typeof b === "boolean") - Number(typeof a === "boolean"));
+    const known = await $.config.list();
+    for (const [field, value] of changed) {
+      const key = known.find((row) => row.key.endsWith(`.${field}`))?.key;
+      const { deny } = key ? await $.config.set({ key, value }) : { deny: `no /config row ${field}` };
+      if (deny) {
+        $.ui.toast(`Statusline order: ${deny}`);
+        return { props: { items: current, labels: LABELS, fixed: markers, rev: Date.now() } };
+      }
+    }
+    return { props: { items: data, labels: LABELS, fixed: markers, rev: Date.now() } };
   });
 
   on("turn.step", async function* ($, e, next) {
