@@ -512,7 +512,7 @@ describe("statusline", () => {
     ["sizes the offer by the smart_zone_tokens option", 95_000, true, { smart_zone_tokens: 100_000 }, idle],
     ["offers none when the person turned compact_hint off", 190_000, false, { compact_hint: false }, idle],
     ["offers none with the smart zone off", 190_000, false, { smart_zone: false }, idle],
-    ["offers none while a subagent is at work", 190_000, false, {}, working],
+    ["offers one while a subagent is at work: the command queues until the session is idle", 190_000, true, {}, working],
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
@@ -561,6 +561,47 @@ describe("statusline", () => {
     await drafting.press({ key: "dismiss" });
     expect((await drafting.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
     await drafting.unmount();
+  });
+
+  for (const [title, options, minutes, shown] of [
+    ["keeps a dismissed compaction line hidden for the rest of the session", {}, 11, false],
+    ["brings a dismissed compaction line back after dismiss_minutes", { dismiss_minutes: 10 }, 11, true],
+    ["keeps it hidden within dismiss_minutes", { dismiss_minutes: 10 }, 9, false],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("agent.list", () => ({ value: idle }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      return { value: { code: 0, signal: null } };
+    });
+    on("prompt.submit", (_$, e) => ({ text: e.text }));
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    const ui = await mountHint($);
+    let button;
+    for (let i = 0; i < 50 && !button; i++) {
+      await clock.advance(2_000);
+      await new Promise((r) => setTimeout(r, 10));
+      button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
+    }
+    expect(button).toBeDefined();
+    await ui.press({ key: "dismiss" });
+    expect((await ui.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
+    // A prompt of the person's does not bring it back.
+    await $.prompt.submit({ text: "go on", origin: { kind: "composer" } } as any);
+    await clock.advance(minutes * 60_000);
+    await new Promise((r) => setTimeout(r, 10));
+    await ui.unmount();
+    const again = await mountHint($);
+    expect(((await again.findAll({ type: "Button", key: "compact" }))[0] !== undefined)).toBe(shown);
+    await again.unmount();
   });
 
   for (const [title, tokens, runs, options, agents] of [

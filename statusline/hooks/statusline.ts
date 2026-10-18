@@ -59,6 +59,8 @@ const MODEL = { plugin: "statusline", key: "model" } as const;
 const TOKENS = { plugin: "statusline", key: "tokens" } as const;
 const TURNS = { plugin: "statusline", key: "turns" } as const;
 const COMPACT_AT = { plugin: "statusline", key: "compactAt" } as const;
+type Offer = "fresh" | "compact";
+const DISMISSED = { plugin: "statusline", key: "dismissed" } as const;
 const SENT = { plugin: "statusline", key: "sent" } as const;
 const GIT = { plugin: "statusline", key: "git" } as const;
 const PR = { plugin: "statusline", key: "pr" } as const;
@@ -177,9 +179,8 @@ let promptAt = 0;
 let handoffAt = 0;
 // When the mod last started a compaction: one per stretch between prompts too.
 let compactedAt = 0;
-// When each offer was dismissed; it stays hidden until the person's next prompt.
-let freshDismissedAt = 0;
-let compactDismissedAt = 0;
+// How long a dismissed offer stays hidden, in ms; 0 for the rest of the session.
+let dismissFor = 0;
 // The branch the shown PR belongs to and when it was fetched.
 let prFor: string | undefined;
 let prAt = 0;
@@ -195,6 +196,7 @@ export const register: Register = (on, options) => {
   freshStart = options.fresh_start === true;
   compactHint = options.compact_hint === true;
   autoCompact = options.auto_compact === true;
+  dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
   const rows: [unknown, Layout][] = [
@@ -291,14 +293,14 @@ export const register: Register = (on, options) => {
 
 
   // Under the prompt the hint line draws, then the status row, then a line of the mod's own for each offer that holds:
-  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. Left out while Claude
-  // works; a draft in the prompt keeps them, as a reminder not to keep going. Each has a button that hides it until the
-  // next prompt.
+  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. A draft in the prompt keeps them, as a reminder
+  // not to keep going. The fresh start waits while Claude works; the compaction does not, for the command queues and runs
+  // once the session is idle. Each has a button that hides it, for the rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     const drawn = await next(e);
     const rows = await drawRows($, e, belowRows);
     const ui = $.ui.resolve(e) as Ui;
-    const offers = e.props.isWorking ? [] : [await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
+    const offers = [e.props.isWorking ? undefined : await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
     return rows.length + offers.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows, ...offers] });
   });
 
@@ -440,7 +442,7 @@ async function findHandoff($: EngineInterface): Promise<void> {
 // Once the cache is cold and this session wrote a handoff, the line that weighs the two ways on: the next prompt here,
 // which writes the whole conversation to the cache again, against a fresh session from the handoff file, a button.
 async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
-  if (!freshStart || freshDismissedAt > promptAt) return undefined;
+  if (!freshStart || (await dismissed($, "fresh"))) return undefined;
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: handoff } = await $.state.get(HANDOFF);
   const { value: sent } = await $.state.get(SENT);
@@ -466,7 +468,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
           Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Start fresh " }),
         ],
       }),
-      dismissButton($, () => (freshDismissedAt = Date.now()), Button, Text),
+      dismissButton($, "fresh", Button, Text),
     ],
   });
 }
@@ -476,7 +478,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
 async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) {
   const { value: usage } = await $.state.get(USAGE);
   const used = usage?.context.tokens;
-  if (!compactHint || compactDismissedAt > promptAt || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT || (await agentsAtWork($))) return undefined;
+  if (!compactHint || (await dismissed($, "compact")) || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT) return undefined;
   return Box({
     flexDirection: "row",
     children: [
@@ -493,18 +495,26 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
           Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Compact " }),
         ],
       }),
-      dismissButton($, () => (compactDismissedAt = Date.now()), Button, Text),
+      dismissButton($, "compact", Button, Text),
     ],
   });
 }
 
-// A dim cross after an offer's button: hides the offer until the next prompt.
-function dismissButton($: EngineInterface, hide: () => void, Button: Ui["Button"], Text: Ui["Text"]) {
+// Whether the person dismissed this offer, and the dismissal still holds: for the rest of the session, or dismissFor ms.
+async function dismissed($: EngineInterface, offer: Offer): Promise<boolean> {
+  const { value } = await $.state.get(DISMISSED);
+  const at = value?.[offer];
+  return at !== undefined && (dismissFor === 0 || (await $.clock.now()) - at < dismissFor);
+}
+
+// A dim cross after an offer's button: hides the offer. The state is the session's, so a reload keeps it hidden.
+function dismissButton($: EngineInterface, offer: Offer, Button: Ui["Button"], Text: Ui["Text"]) {
   return Button({
     key: "dismiss",
     plain: true,
-    onPress: () => {
-      hide();
+    onPress: async () => {
+      const { value } = await $.state.get(DISMISSED);
+      await $.state.set(DISMISSED, { ...value, [offer]: await $.clock.now() });
       $.ui.invalidate("ui.render");
     },
     children: Text({ dimColor: true, children: " \u2715 " }),

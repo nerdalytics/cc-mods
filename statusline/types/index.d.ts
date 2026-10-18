@@ -63,6 +63,8 @@ declare module "claude-code" {
       turns: number;
       compactAt: number;
       sent: number;
+      // When each offer under the prompt was dismissed (ms).
+      dismissed: { fresh?: number; compact?: number };
       // Limits a session of this account was refused on: the window's kind, and when it resets (ms).
       rejected: Record<string, number>;
       // The handoff file written since this session started: its absolute path and size.

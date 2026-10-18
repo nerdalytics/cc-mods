@@ -117,6 +117,13 @@
       "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does.",
       "default": true
     },
+    "dismiss_minutes": {
+      "type": "number",
+      "title": "Statusline: Dismissed offers stay hidden (minutes)",
+      "description": "How long the cross on the fresh-start and compaction lines hides its line. 0 hides it for the rest of the session.",
+      "default": 0,
+      "min": 0
+    },
     "smart_zone": {
       "type": "boolean",
       "title": "Statusline: Smart zone on the context bar",
