@@ -286,6 +286,8 @@ let promptAt = 0;
 let handoffAt = 0;
 // When the mod last started a compaction: one per stretch between prompts too.
 let compactedAt = 0;
+// The main conversation is being compacted, by whoever started it; the offer to compact is not drawn meanwhile.
+let compacting = false;
 // How long a dismissed offer stays hidden, in ms; 0 for the rest of the session.
 let dismissFor = 0;
 // The branch the shown PR belongs to and when it was fetched.
@@ -424,6 +426,24 @@ export const register: Register = (on, options) => {
   on("session.measure", async ($, e, next) => {
     await $.state.set(USAGE, { context: e.context, rateLimits: e.rateLimits });
     return next(e);
+  });
+
+  // The offer to compact leaves while a compaction runs and returns if it ends without one: `next` rejects or answers a
+  // skip when the person cancels it, and its signal aborts when the interrupt cuts the dispatch. A precompute installs
+  // nothing and a subagent's compaction is not the conversation's, so neither counts.
+  on("session.compact", async ($, e, next) => {
+    if (e.agentId || e.trigger === "precompute") return next(e);
+    const set = (value: boolean) => {
+      compacting = value;
+      $.ui.invalidate("ui.render");
+    };
+    set(true);
+    next.signal.addEventListener("abort", () => set(false), { once: true });
+    try {
+      return await next(e);
+    } finally {
+      set(false);
+    }
   });
 
   on("prompt.submit", async (_$, e, next) => {
@@ -691,7 +711,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
 async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) {
   const { value: usage } = await $.state.get(USAGE);
   const used = usage?.context.tokens;
-  if (!compactHint || (await dismissed($, "compact")) || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT) return undefined;
+  if (!compactHint || compacting || (await dismissed($, "compact")) || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT) return undefined;
   return Box({
     flexDirection: "row",
     children: [

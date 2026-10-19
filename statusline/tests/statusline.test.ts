@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
+import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionCompactResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test } from "claude-code/testing";
 
 // The test host has setTimeout, but the API's globals leave it out; a test waits on it for the hooks it started.
@@ -659,6 +659,45 @@ describe("statusline", () => {
     await drafting.press({ key: "dismiss" });
     expect((await drafting.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
     await drafting.unmount();
+  });
+
+  for (const [title, end] of [
+    ["answers a skip", (finish: (r: SessionCompactResult) => void) => finish({ skip: "cancelled" })],
+    ["rejects", (_finish: (r: SessionCompactResult) => void, fail: (e: Error) => void) => fail(new Error("cancelled"))],
+  ] as const)
+  test(`hides the compaction offer while one runs, and draws it again when it ends without compacting: ${title}`, async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("agent.list", () => ({ value: idle }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      return { value: { code: 0, signal: null } };
+    });
+    let finish!: (r: SessionCompactResult) => void;
+    let fail!: (e: Error) => void;
+    on("session.compact", () => new Promise<SessionCompactResult>((resolve, reject) => ((finish = resolve), (fail = reject))));
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const offer = async () => (await ui.findAll({ type: "Button", key: "compact" }))[0];
+    for (let i = 0; i < 50 && !(await offer()); i++) {
+      await clock.advance(2_000);
+      await settle();
+    }
+    expect(await offer()).toBeDefined();
+    const running = $.session.compact({ trigger: "manual", messages: [{ role: "user", text: "hi", toolUses: [] }] }).catch(() => undefined);
+    await settle();
+    expect(await offer()).toBeUndefined();
+    end(finish, fail);
+    await running;
+    await settle();
+    expect(await offer()).toBeDefined();
+    await ui.unmount();
   });
 
   for (const [title, options, minutes, shown] of [
