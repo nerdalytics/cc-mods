@@ -585,9 +585,10 @@ describe("statusline", () => {
     // (The cost chips draw their own $ glyphs, on the chips' grey; this one stands bare.)
     const marks = await ui.findAll({ type: "Text", text: "$" });
     expect(marks.some((t) => t.props.color === "#f87171" && t.props.backgroundColor === undefined)).toBe(true);
-    // A chip-like button: an icon tag, then the label on the button background; no brackets.
-    expect(JSON.stringify(button)).toContain(" Start fresh ");
-    expect(JSON.stringify(button)).toContain("#14532d");
+    // The button's face is one Text, half-block bars at both ends, so a pointer over it inverts all of it.
+    expect((await ui.find({ type: "Text", text: /^▌ .* Start fresh ▐$/ }))?.props).toMatchObject({ color: "#c7d2fe", backgroundColor: "#4f46e5" });
+    // The cross after it is the secondary look.
+    expect((await ui.find({ type: "Text", text: "▌ ✕ ▐" }))?.props).toMatchObject({ color: "#cbd5e1", backgroundColor: "#334155" });
     await ui.press({ key: "resume" });
     expect(ran).toEqual(["clear"]);
     expect(sent).toHaveLength(1);
@@ -646,8 +647,7 @@ describe("statusline", () => {
     expect(button).toBeDefined();
     expect((await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://www.aihero.dev/ai-coding-dictionary/smart-zone")).toBe(true);
     expect(await ui.find({ type: "Text", text: tokens >= 200_000 ? /^ You're out of the $/ : /^ You're nearly out of the $/ })).toBeDefined();
-    expect(JSON.stringify(button)).toContain(" Compact ");
-    expect(JSON.stringify(button)).toContain("#14532d");
+    expect((await ui.find({ type: "Text", text: /^▌ .* Compact ▐$/ }))?.props).toMatchObject({ color: "#c7d2fe", backgroundColor: "#4f46e5" });
     const depth = new Map([[220_000, "just into"], [250_000, "well into"], [450_000, "very deep into"]]).get(tokens);
     if (depth) expect(await ui.find({ type: "Text", text: `. Same model, ${depth} the dumb zone now. ` })).toBeDefined();
     await ui.press({ key: "compact" });

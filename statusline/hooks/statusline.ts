@@ -209,9 +209,14 @@ const EMPTY_FG: RGB = [55, 58, 72];
 // - hoverable: a tag, then the value on the grey above (EMPTY_FG), which a hover lays its own value over;
 // - data without a hover: a tag, then the value on no background;
 // - plain text: coloured or dim, on no background;
-// - a button: a tag, then the label on BUTTON_BG, a background nothing else uses;
+// - a button: icon and label on one fill, between two half-block bars, in a colour no chip uses (BUTTON);
 // - a link: gradient text on no background, opened by a click.
-const BUTTON_BG: RGB = [20, 83, 45];
+type ButtonLook = { fill: RGB; label: RGB };
+// main: the action an offer makes; secondary: the cross that hides it.
+const BUTTON: Record<"main" | "secondary", ButtonLook> = {
+  main: { fill: [79, 70, 229], label: [199, 210, 254] },
+  secondary: { fill: [51, 65, 85], label: [203, 213, 225] },
+};
 type ModelStyle = { from: RGB; to: RGB; bold?: true };
 // A window one palette step wide that slides from cyan towards pink as the family gets stronger.
 // Mythos is Fable's model without Fable's safeguards: Fable's colours, bold.
@@ -675,16 +680,7 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
     children: [
       Text({ color: hex(COLD_CHIP.from), children: "$" }),
       Text({ dimColor: true, children: cold ? ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` : ` Handoff written: fresh start ~${usd(fresh)} ` }),
-      // A button as the chips are drawn: the icon on the action's colour, the label on BUTTON_BG.
-      Button({
-        key: "resume",
-        plain: true,
-        onPress: () => void resumeFrom($, handoff.path),
-        children: [
-          Text({ color: hex(contrast(WARM_CHIP.to)), backgroundColor: hex(WARM_CHIP.to), children: " \uf15c " }),
-          Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Start fresh " }),
-        ],
-      }),
+      Button({ key: "resume", plain: true, onPress: () => void resumeFrom($, handoff.path), children: buttonLabel(Text, BUTTON.main, "\uf15c", "Start fresh") }),
       dismissButton($, "fresh", Button, Text),
     ],
   });
@@ -703,15 +699,7 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
       Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
       Link({ href: SMART_ZONE_URL, children: Text({ color: hex(AGENTS_CHIP.from), underline: true, children: "Smart zone" }) }),
       Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? "very deep into"} the dumb zone now. ` : ". " }),
-      Button({
-        key: "compact",
-        plain: true,
-        onPress: () => void compactSession($),
-        children: [
-          Text({ color: hex(contrast(WARM_CHIP.to)), backgroundColor: hex(WARM_CHIP.to), children: " \uf066 " }),
-          Text({ color: hex(WARM_CHIP.from), backgroundColor: hex(BUTTON_BG), children: " Compact " }),
-        ],
-      }),
+      Button({ key: "compact", plain: true, onPress: () => void compactSession($), children: buttonLabel(Text, BUTTON.main, "\uf066", "Compact") }),
       dismissButton($, "compact", Button, Text),
     ],
   });
@@ -724,7 +712,13 @@ async function dismissed($: EngineInterface, offer: Offer): Promise<boolean> {
   return at !== undefined && (dismissFor === 0 || (await $.clock.now()) - at < dismissFor);
 }
 
-// A dim cross after an offer's button: hides the offer. The state is the session's, so a reload keeps it hidden.
+// A button's face as one Text, so a pointer over it inverts the whole of it, bars included: the half blocks are its first
+// and last characters, the label's colour against the fill.
+function buttonLabel(Text: Ui["Text"], look: ButtonLook, icon: string, label?: string) {
+  return Text({ color: hex(look.label), backgroundColor: hex(look.fill), children: `▌ ${icon}${label ? ` ${label}` : ""} ▐` });
+}
+
+// The secondary button after an offer's: hides the offer. The state is the session's, so a reload keeps it hidden.
 function dismissButton($: EngineInterface, offer: Offer, Button: Ui["Button"], Text: Ui["Text"]) {
   return Button({
     key: "dismiss",
@@ -734,7 +728,7 @@ function dismissButton($: EngineInterface, offer: Offer, Button: Ui["Button"], T
       await $.state.set(DISMISSED, { ...value, [offer]: await $.clock.now() });
       $.ui.invalidate("ui.render");
     },
-    children: Text({ dimColor: true, children: " \u2715 " }),
+    children: buttonLabel(Text, BUTTON.secondary, "\u2715"),
   });
 }
 
