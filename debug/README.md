@@ -16,16 +16,7 @@ A mod for mod authors. It shows where in Claude Code's interface a mod can draw,
   - A `Raster`: a 32 by 6 grid of coloured blocks.
   - An `Image`: a 64 by 32 pixel gradient in a box 32 columns wide and 8 rows tall. On a terminal that draws pictures, the gradient shows. On one that doesn't, the box shows `[image not drawn: alt text]`.
 - **The PR trace pane.** `/debug:pr-trace` opens a pane that lists the statusline mod's PR fetches: the time, the branch, and the PR's pending, passed and failed checks, or the `gh` error. It needs the statusline mod's trace, which only a build that writes it provides, and shows `No PR fetch yet.` until the first fetch.
-- **The handoff trace pane.** `/debug:handoff-trace` opens a pane that shows, with the time, why the statusline mod's handoff ran or did not in the minutes before the cache expires. Each line is one of these reasons:
-  - A turn is running.
-  - You have not sent a prompt since the mod loaded.
-  - A handoff already ran since your last prompt.
-  - A subagent is at work. The line gives its type and status.
-  - A usage limit is nearly reached.
-  - The keep-warm pings are not done.
-  - The handoff started, with the seconds of cache left.
-
-  The pane shows `No handoff window yet.` until the cache comes within minutes of expiring.
+- **The handoff trace pane.** `/debug:handoff-trace` opens a pane that shows, with the time, why the statusline mod's handoff ran or did not in the minutes before the cache expires. Each line names the gate that held, for example a subagent at work with its type and status, or says the handoff started. The pane shows `No handoff window yet.` until the cache comes within minutes of expiring.
 
 In Warp, the Raster draws and the Image shows its alt text. The mod doesn't say why. The API types name kitty and Ghostty as terminals that draw an `Image`.
 

@@ -58,8 +58,6 @@ let belowRows: Layout[] = [STATUS_ROW];
 // The /statusline:order pane: the two rows around a prompt marker, then the status row's tags, each a list to drag. What
 // stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
 const ORDER_PANE = "statusline-order";
-// The command is the plugin's own file, commands/order.md, which Claude Code lists under the plugin's name.
-const ORDER_COMMAND = "statusline:order";
 const LABELS: Record<string, string> = {
   git: "git + pull request",
   status: "status",
@@ -313,7 +311,7 @@ export const register: Register = (on, options) => {
     return result;
   });
 
-  on("command.run", { command: ORDER_COMMAND }, async ($) => {
+  on("command.run", { command: "statusline:order" }, async ($) => {
     await $.ui.open({ id: ORDER_PANE, title: "Statusline order" });
     return { text: "Statusline order pane opened." };
   });
@@ -530,28 +528,20 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   if (!autoHandoff) return;
   const cache = await cacheClock($);
   if (!cache || cache.left > cache.lead || (cache.ttl !== 3_600 && keepWarm <= 0)) return;
+  const no = (why: string) => traceHandoff($, `cache window open, no handoff: ${why}`);
+  if (busy) return no("a turn is running");
+  if (promptAt === 0) return no("no prompt of yours since the mod loaded");
+  if (handoffAt >= promptAt) return no("a handoff already ran since your last prompt");
   const working = await agentsWorking($);
-  const gate = busy
-    ? "a turn is running"
-    : promptAt === 0
-      ? "no prompt of yours since the mod loaded"
-      : handoffAt >= promptAt
-        ? "a handoff already ran since your last prompt"
-        : working.length > 0
-          ? `a subagent is at work: ${working.map((a) => `${a.type} ${a.status}`).join(", ")}`
-          : (await limitsNear($))
-            ? "a usage limit is nearly reached"
-            // With pings on, the handoff waits for the last of them.
-            : keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)
-              ? "the keep-warm pings are not done"
-              : undefined;
-  if (gate) return traceHandoff($, `cache window open, no handoff: ${gate}`);
+  if (working.length > 0) return no(`a subagent is at work: ${working.map((a) => `${a.type} ${a.status}`).join(", ")}`);
+  if (await limitsNear($)) return no("a usage limit is nearly reached");
+  // With pings on, the handoff waits for the last of them.
+  if (keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)) return no("the keep-warm pings are not done");
   handoffAt = Date.now();
   traceHandoff($, `${Math.round(cache.left)} s of cache left, handoff started`);
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
   } catch (err) {
-    traceHandoff($, `handoff did not start: ${err instanceof Error ? err.message : err}`);
     $.ui.toast(`statusline: the handoff before the cache goes cold did not start: ${err instanceof Error ? err.message : err}`);
   }
 }

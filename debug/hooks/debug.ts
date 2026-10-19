@@ -4,11 +4,7 @@ import type { Elements, EngineInterface, Register } from "claude-code";
 
 const PROBE = "probe";
 const PR_TRACE_PANE = "pr-trace";
-// The commands are the plugin's own files under commands/, which Claude Code lists under the plugin's name.
-const PROBE_COMMAND = "debug:probe";
-const PR_TRACE_COMMAND = "debug:pr-trace";
 const HANDOFF_TRACE_PANE = "handoff-trace";
-const HANDOFF_TRACE_COMMAND = "debug:handoff-trace";
 // The statusline mod's PR fetch log; its owner writes it, any plugin may read it.
 const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
 // Why the statusline mod's handoff did or did not run while its window was open.
@@ -59,15 +55,15 @@ export const register: Register = (on) => {
     await $.ui.open({ id: "markers", title: "markers" });
     return result;
   });
-  on("command.run", { command: PROBE_COMMAND }, async ($) => {
+  on("command.run", { command: "debug:probe" }, async ($) => {
     const opened = await $.ui.open({ id: PROBE, title: "probe" });
     return { text: opened.isPlaced ? "Probe pane opened." : `Probe pane not placed: ${opened.reason}` };
   });
-  on("command.run", { command: PR_TRACE_COMMAND }, async ($) => {
+  on("command.run", { command: "debug:pr-trace" }, async ($) => {
     const opened = await $.ui.open({ id: PR_TRACE_PANE, title: "PR trace" });
     return { text: opened.isPlaced ? "PR trace pane opened." : `PR trace pane not placed: ${opened.reason}` };
   });
-  on("command.run", { command: HANDOFF_TRACE_COMMAND }, async ($) => {
+  on("command.run", { command: "debug:handoff-trace" }, async ($) => {
     const opened = await $.ui.open({ id: HANDOFF_TRACE_PANE, title: "Handoff trace" });
     return { text: opened.isPlaced ? "Handoff trace pane opened." : `Handoff trace pane not placed: ${opened.reason}` };
   });
