@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionRateLimit, TurnUsage } from "claude-code";
+import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test } from "claude-code/testing";
 
 // The test host has setTimeout, but the API's globals leave it out; a test waits on it for the hooks it started.
@@ -21,23 +21,24 @@ function must<T>(found: T | undefined, what: string): T {
   if (found === undefined) throw new Error(`${what} did not draw`);
   return found;
 }
-// A summary breakdown at 797,100 tokens, auto-compaction starting at 900,000. The mod reads only the threshold, whether it is on, and the raw window; the rest fills the type.
-const BREAKDOWN = {
-  categories: [],
-  totalTokens: 797_100,
-  maxTokens: 1_000_000,
-  rawMaxTokens: 1_000_000,
-  autocompactSource: "model-default",
-  percentage: 80,
-  gridRows: [],
-  model: "claude-opus-5-5",
-  memoryFiles: [],
-  mcpTools: [],
-  agents: [],
-  autoCompactThreshold: 900_000,
-  isAutoCompactEnabled: true,
-  apiUsage: null,
-} satisfies SessionContextBreakdown;
+// A summary breakdown for a window and what is in it; auto-compaction starts at `threshold`, or is off when none is given.
+// The mod reads the threshold, whether it is on, and the raw window; the rest fills the type as its docs define it.
+const breakdownOf = (window: number, used: number, threshold?: number) =>
+  ({
+    categories: [],
+    totalTokens: used,
+    maxTokens: window,
+    rawMaxTokens: window,
+    autocompactSource: "model-default",
+    percentage: Math.round((used * 100) / window),
+    gridRows: [],
+    model: "claude-opus-5-5",
+    memoryFiles: [],
+    mcpTools: [],
+    agents: [],
+    ...(threshold === undefined ? { isAutoCompactEnabled: false } : { isAutoCompactEnabled: true, autoCompactThreshold: threshold }),
+    apiUsage: null,
+  }) satisfies SessionContextBreakdown;
 const subagent = (status: AgentStatus): AgentInfo => ({ id: "a1", description: "d", type: "Explore", status });
 
 // Numbers from the screenshot this mod replaces: 797.1K tokens in a 1M window,
@@ -147,7 +148,7 @@ describe("statusline", () => {
       value: {
         startedAt: 0,
         // Auto-compaction at 900,000 tokens, as Claude Code's summary breakdown reports it.
-        context: { tokens: 797_100, window: 1_000_000, breakdown: BREAKDOWN },
+        context: { tokens: 797_100, window: 1_000_000, breakdown: breakdownOf(1_000_000, 797_100, 900_000) },
         rateLimits: [
           { kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() },
           { kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() },
@@ -270,6 +271,68 @@ describe("statusline", () => {
     const cells = elements(context.children.slice(1, -1));
     expect(cells.map((t) => (t.props.backgroundColor !== "#373a48" ? "B" : "_")).join("")).toBe("BBBBBBB___");
     expect(cells.every((t) => t.props.color === t.props.backgroundColor)).toBe(true);
+    await ui.unmount();
+  });
+
+  // The context bar's limit is the one the session reports, whatever the model's window or the person's settings make it:
+  // the compaction threshold when auto-compaction is on, else the raw window, else the window the usage names. Each case
+  // names the window, the tokens and the breakdown, and the bar is the arithmetic on them: the tokens left, the share of
+  // them underneath (B both halves lit, T the smart zone's top half, U the bottom half), and the glyph for the zone.
+  const contextBar = async (ui: Mounted<"terminal", "PromptHint">, left: string) => {
+    const dim = "#373a48";
+    for (let i = 0; i < 50; i++) {
+      const chip = await ui.find({ type: "Box", key: "context" });
+      if (chip && flat(chip.children.at(-1)).trim() === left) {
+        const lit = elements(chip.children.slice(1, -1))
+          .map((t) => {
+            const top = t.props.color !== dim;
+            const bottom = t.props.backgroundColor !== dim;
+            return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
+          })
+          .join("");
+        return { badge: flat(chip.children[0]), lit };
+      }
+      await settle();
+    }
+    throw new Error(`the context bar never said ${left} left`);
+  };
+  const smartZone = { smart_zone_tokens: 150_000 };
+  for (const [title, options, context, left, bar] of [
+    // 675,000 of the 1,350,000 before compaction is 50%: 5 cells left. Against the 1,500,000 window it would be 825.0K left.
+    // Past the smart zone, so nothing on top; (675,000 - 150,000) of the 1,200,000 beyond it is the moon's third quarter step.
+    ["measures a 1.5M window against the compaction threshold the breakdown reports", smartZone, { tokens: 675_000, window: 1_500_000, breakdown: breakdownOf(1_500_000, 675_000, 1_350_000) }, "675.0K", { badge: " ◑ ", lit: "UUUUU_____" }],
+    // A 200,000 window with auto-compaction off: the raw window is the limit, 100,000 left, half of it used. 50,000 of the
+    // 150,000-token smart zone is left, 3 cells on top; past half of it, the filled diamond.
+    ["measures a 200k window against the window itself when auto-compaction is off", smartZone, { tokens: 100_000, window: 200_000, breakdown: breakdownOf(200_000, 100_000) }, "100.0K", { badge: " ◆ ", lit: "BBBUU_____" }],
+    // No breakdown: the window the usage names is the limit. 750,000 of 1,500,000 is 50%; the default 200,000-token smart zone is spent.
+    ["measures a window with no breakdown against the whole window", {}, { tokens: 750_000, window: 1_500_000 }, "750.0K", { badge: " ◑ ", lit: "UUUUU_____" }],
+  ] satisfies [string, Record<string, number>, SessionContextUsage, string, { badge: string; lit: string }][])
+    test(title, { options }, async ($, on) => {
+      stubHint(on);
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context, rateLimits: [] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+      const ui = await mountHint($);
+      expect(await contextBar(ui, left)).toEqual(bar);
+      await ui.unmount();
+    });
+
+  test("reads the compaction threshold again when a turn ends", { options: smartZone }, async ($, on) => {
+    stubHint(on);
+    // The threshold the session reports changes between turns, as a setting or a different model's window would change it.
+    let threshold = 1_350_000;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 675_000, window: 1_500_000, breakdown: breakdownOf(1_500_000, 675_000, threshold) }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    expect(await contextBar(ui, "675.0K")).toEqual({ badge: " ◑ ", lit: "UUUUU_____" });
+    // Against 900,000: 225,000 left, 75% used, 2 cells left; (675,000 - 150,000) of the 750,000 beyond the smart zone is the fourth moon.
+    threshold = 900_000;
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
+    expect(await contextBar(ui, "225.0K")).toEqual({ badge: " ◕ ", lit: "UU________" });
     await ui.unmount();
   });
 
