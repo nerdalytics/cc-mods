@@ -21,6 +21,23 @@ function must<T>(found: T | undefined, what: string): T {
   if (found === undefined) throw new Error(`${what} did not draw`);
   return found;
 }
+// A summary breakdown at 797,100 tokens, auto-compaction starting at 900,000. The mod reads only the threshold, whether it is on, and the raw window; the rest fills the type.
+const BREAKDOWN = {
+  categories: [],
+  totalTokens: 797_100,
+  maxTokens: 900_000,
+  rawMaxTokens: 1_000_000,
+  autocompactSource: "model-default",
+  percentage: 88,
+  gridRows: [],
+  model: "claude-opus-5-5",
+  memoryFiles: [],
+  mcpTools: [],
+  agents: [],
+  autoCompactThreshold: 900_000,
+  isAutoCompactEnabled: true,
+  apiUsage: null,
+} satisfies SessionContextBreakdown;
 const subagent = (status: AgentStatus): AgentInfo => ({ id: "a1", description: "d", type: "Explore", status });
 
 // Numbers from the screenshot this mod replaces: 797.1K tokens in a 1M window,
@@ -51,7 +68,8 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [] as SessionRateLimit[], ttl = "1h", agents = [] as AgentInfo[], after = 3, trace = [] as string[] } = {}): Promise<string[]> {
+type Scenario = { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[] };
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [] }: Scenario = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -72,7 +90,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   // The handoff trace as the mod last wrote it.
   let traced: string[] = [];
   on("state.set", { plugin: "statusline", key: "handoffTrace" }, ($, e, next) => {
-    traced = e.value as string[];
+    traced = Array.isArray(e.value) ? e.value.map(String) : [];
     return next(e);
   });
   on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -129,7 +147,7 @@ describe("statusline", () => {
       value: {
         startedAt: 0,
         // Auto-compaction at 900,000 tokens, as Claude Code's summary breakdown reports it.
-        context: { tokens: 797_100, window: 1_000_000, breakdown: { isAutoCompactEnabled: true, autoCompactThreshold: 900_000, rawMaxTokens: 1_000_000 } as SessionContextBreakdown },
+        context: { tokens: 797_100, window: 1_000_000, breakdown: BREAKDOWN },
         rateLimits: [
           { kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() },
           { kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() },
@@ -583,7 +601,7 @@ describe("statusline", () => {
     expect(await ui.find({ type: "Text", text: tokens >= 200_000 ? /^ You're out of the $/ : /^ You're nearly out of the $/ })).toBeDefined();
     expect(JSON.stringify(button)).toContain(" Compact ");
     expect(JSON.stringify(button)).toContain("#14532d");
-    const depth = { 220_000: "just into", 250_000: "well into", 450_000: "very deep into" }[tokens as number];
+    const depth = new Map([[220_000, "just into"], [250_000, "well into"], [450_000, "very deep into"]]).get(tokens);
     if (depth) expect(await ui.find({ type: "Text", text: `. Same model, ${depth} the dumb zone now. ` })).toBeDefined();
     await ui.press({ key: "compact" });
     expect(ran).toEqual(["compact"]);
@@ -1128,7 +1146,8 @@ describe("statusline", () => {
     return drawn;
   };
   const used = (output: number, others = 0) => ({ input_tokens: others, output_tokens: output, cache_read_input_tokens: others, cache_creation_input_tokens: others, model: "claude-opus-5-5" });
-  for (const [tokens, rate] of [[7_000, "1.0K"], [700, "100"], [14_500 * 1_000, "2.07M"], [7_000_000, "1.00M"], [6_999, "999"]] as [number, string][]) {
+  const RATES: [number, string][] = [[7_000, "1.0K"], [700, "100"], [14_500 * 1_000, "2.07M"], [7_000_000, "1.00M"], [6_999, "999"]];
+  for (const [tokens, rate] of RATES) {
     test(`draws ${rate} tok/s in the closing line for ${tokens} output tokens over 7 s`, async ($, on) => {
       mock.clock(on);
       const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(tokens) });

@@ -1,5 +1,5 @@
 // Much of this ports statusline.zsh, the shell status line it replaces: https://github.com/nerdalytics/claude-statusline
-import type { Elements, EngineInterface, Register, ResolveInput } from "claude-code";
+import type { Elements, EngineInterface, Register } from "claude-code";
 import type { StatusCache, StatusGit, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
 
 type Ui = Elements["terminal"];
@@ -349,8 +349,9 @@ export const register: Register = (on, options) => {
     return { text: "Statusline order pane opened." };
   });
 
-  on("ui.render", { component: "Pane", requestId: ORDER_PANE }, ($, e) => {
-    const { Box, Text, Client } = $.ui.resolve(e) as Ui;
+  on("ui.render", { component: "Pane", requestId: ORDER_PANE }, ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
+    const { Box, Text, Client } = $.ui.resolve(e);
     const list = (key: string, items: string[], fixed: string[]) => Client({ key, module: "./order-list.ts", props: { items, labels: LABELS, fixed, rev: 0 } });
     const gap = () => Box({ height: 1 });
     return Box({
@@ -461,23 +462,25 @@ export const register: Register = (on, options) => {
   // not to keep going. The fresh start waits while Claude works; the compaction does not, for the command queues and runs
   // once the session is idle. Each has a button that hides it, for the rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
     const drawn = await next(e);
-    const rows = await drawRows($, e, belowRows);
-    const ui = $.ui.resolve(e) as Ui;
+    const ui = $.ui.resolve(e);
+    const rows = await drawRows($, ui, belowRows);
     const offers = [e.props.isWorking ? undefined : await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
     return rows.length + offers.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows, ...offers] });
   });
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e);
-    const rows = await drawRows($, e, aboveRows);
+    if (e.surface !== "terminal" || e.props.hasSurvey) return next(e);
+    const ui = $.ui.resolve(e);
+    const rows = await drawRows($, ui, aboveRows);
     if (rows.length === 0) return next(e);
-    return ($.ui.resolve(e) as Ui).Box({ flexDirection: "column", paddingX: 1, children: rows });
+    return ui.Box({ flexDirection: "column", paddingX: 1, children: rows });
   });
 };
 
 // The rows from the state, none until the first usage reading; read every frame (the tick), so they move live.
-async function drawRows($: EngineInterface, e: ResolveInput, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {
+async function drawRows($: EngineInterface, ui: Ui, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return [];
@@ -489,7 +492,6 @@ async function drawRows($: EngineInterface, e: ResolveInput, layout: Layout[]): 
   const { value: git } = await $.state.get(GIT);
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
-  const ui = $.ui.resolve(e) as Ui;
   const s: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
   return (
     layout
@@ -1276,7 +1278,7 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
       return groups.flatMap((g, k): Piece[] => (k > 0 ? [{ text: " " }, ...g] : g));
     })(),
     (g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : ""),
-  ] as (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
+  ] satisfies (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
   const shown = segments.map((pieces, k) => ({ pieces, path: k < 3 })).filter(({ pieces }) => pieces.some((p) => p.text !== ""));
   const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => lerp(stop(i + 1), stop(i + 2), j, n)) }));
   // The folders, branch and worktree are one path: compact spacing closes it up; the row's gap parts what follows.

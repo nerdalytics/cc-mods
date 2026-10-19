@@ -1,6 +1,6 @@
 // Marks every render site a mod can draw in: a red X and the site's name in front of what the site draws, and a Pane
 // opened at the session's start to show its own. For finding where a mod should hook in; uninstall it once found.
-import type { Elements, EngineInterface, Register } from "claude-code";
+import type { Elements, EngineInterface, Register, RenderElement, RenderInput } from "claude-code";
 
 const PROBE = "probe";
 const PR_TRACE_PANE = "pr-trace";
@@ -35,16 +35,15 @@ const rgba = (() => {
   return px.toBase64();
 })();
 
-async function mark($: EngineInterface, e: any, next: (e: any) => Promise<any>) {
+async function mark<E extends RenderInput>($: EngineInterface, e: E, next: (e: E) => Promise<RenderElement>) {
   const drawn = await next(e);
-  const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
+  const { Box, Text } = $.ui.resolve(e);
   return Box({ flexDirection: "row", children: [Text({ color: "#ff0000", bold: true, children: `X ${e.component} ` }), drawn] });
 }
 
 // The newest lines of a statusline trace that fit the pane, or what to say while it has none.
-function traceLines($: EngineInterface, e: any, value: unknown, empty: string) {
-  const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
-  const lines = (value as string[] | undefined) ?? [];
+function traceLines({ Box, Text }: Elements["terminal"], e: { viewport?: { rows: number } }, value: unknown, empty: string) {
+  const lines = Array.isArray(value) ? value.map(String) : [];
   const room = Math.max(1, (e.viewport?.rows ?? 24) - 4);
   return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: empty })] });
 }
@@ -67,10 +66,17 @@ export const register: Register = (on) => {
     const opened = await $.ui.open({ id: HANDOFF_TRACE_PANE, title: "Handoff trace" });
     return { text: opened.isPlaced ? "Handoff trace pane opened." : `Handoff trace pane not placed: ${opened.reason}` };
   });
-  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e) => traceLines($, e, (await $.state.get(PR_TRACE)).value, "No PR fetch yet."));
-  on("ui.render", { component: "Pane", requestId: HANDOFF_TRACE_PANE }, async ($, e) => traceLines($, e, (await $.state.get(HANDOFF_TRACE)).value, "No handoff window yet."));
-  on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e) => {
-    const { Box, Text, Raster, Image } = $.ui.resolve(e) as Elements["terminal"];
+  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
+    return traceLines($.ui.resolve(e), e, (await $.state.get(PR_TRACE)).value, "No PR fetch yet.");
+  });
+  on("ui.render", { component: "Pane", requestId: HANDOFF_TRACE_PANE }, async ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
+    return traceLines($.ui.resolve(e), e, (await $.state.get(HANDOFF_TRACE)).value, "No handoff window yet.");
+  });
+  on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
+    const { Box, Text, Raster, Image } = $.ui.resolve(e);
     return Box({
       flexDirection: "column",
       children: [
