@@ -25,10 +25,10 @@ function must<T>(found: T | undefined, what: string): T {
 const BREAKDOWN = {
   categories: [],
   totalTokens: 797_100,
-  maxTokens: 900_000,
+  maxTokens: 1_000_000,
   rawMaxTokens: 1_000_000,
   autocompactSource: "model-default",
-  percentage: 88,
+  percentage: 80,
   gridRows: [],
   model: "claude-opus-5-5",
   memoryFiles: [],
