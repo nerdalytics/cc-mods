@@ -9,5 +9,31 @@
   "homepage": "https://github.com/nerdalytics/cc-mods/tree/main/debug",
   "repository": "https://github.com/nerdalytics/cc-mods",
   "license": "MIT",
-  "keywords": ["debug", "mod", "render-sites"]
+  "keywords": ["debug", "mod", "render-sites"],
+  "userConfig": {
+    "markers": {
+      "type": "boolean",
+      "title": "Debug: Render-site markers",
+      "description": "A red X and the site's name in front of what each render site draws, and the markers pane that opens when the session starts. true (default) / false",
+      "default": true
+    },
+    "probe": {
+      "type": "boolean",
+      "title": "Debug: Probe pane",
+      "description": "/debug:probe, a pane that draws text, a Raster and an Image. true (default) / false",
+      "default": true
+    },
+    "pr_trace": {
+      "type": "boolean",
+      "title": "Debug: PR trace pane",
+      "description": "/debug:pr-trace, a pane that lists the statusline mod's PR fetches. true (default) / false",
+      "default": true
+    },
+    "handoff_trace": {
+      "type": "boolean",
+      "title": "Debug: Handoff trace pane",
+      "description": "/debug:handoff-trace, a pane that shows why the statusline mod's handoff ran or did not. true (default) / false",
+      "default": true
+    }
+  }
 }

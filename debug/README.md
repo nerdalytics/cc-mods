@@ -18,6 +18,17 @@ A mod for mod authors. It shows where in Claude Code's interface a mod can draw,
 - **The PR trace pane.** `/debug:pr-trace` opens a pane that lists the statusline mod's PR fetches: the time, the branch, and the PR's pending, passed and failed checks, or the `gh` error. It needs the statusline mod's trace, which only a build that writes it provides, and shows `No PR fetch yet.` until the first fetch.
 - **The handoff trace pane.** `/debug:handoff-trace` opens a pane that shows, with the time, why the statusline mod's handoff ran or did not in the minutes before the cache expires. Each line names the gate that held, for example a subagent at work with its type and status, or says the handoff started. The pane shows `No handoff window yet.` until the cache comes within minutes of expiring.
 
+## Options
+
+Each tool has an option in `/config`, on by default. Switching one off stops the mod drawing it. Its command then answers that the pane is off and names the option.
+
+| Option | Key | Default | Controls |
+| --- | --- | --- | --- |
+| Debug: Render-site markers | `markers` | true | The red `X` and site name on every render site, and the `markers` pane at the session start. |
+| Debug: Probe pane | `probe` | true | `/debug:probe`. |
+| Debug: PR trace pane | `pr_trace` | true | `/debug:pr-trace`. |
+| Debug: Handoff trace pane | `handoff_trace` | true | `/debug:handoff-trace`. |
+
 In Warp, the Raster draws and the Image shows its alt text. The mod doesn't say why. The API types name kitty and Ghostty as terminals that draw an `Image`.
 
 ## License

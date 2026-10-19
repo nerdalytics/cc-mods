@@ -5,6 +5,12 @@ import type { Elements, EngineInterface, Register, RenderElement, RenderInput } 
 const PROBE = "probe";
 const PR_TRACE_PANE = "pr-trace";
 const HANDOFF_TRACE_PANE = "handoff-trace";
+// Each pane command, with the option in plugin.json that turns it on and the name its output gives the pane.
+const PANES = [
+  { option: "probe", command: "debug:probe", id: PROBE, title: "probe", name: "Probe pane" },
+  { option: "pr_trace", command: "debug:pr-trace", id: PR_TRACE_PANE, title: "PR trace", name: "PR trace pane" },
+  { option: "handoff_trace", command: "debug:handoff-trace", id: HANDOFF_TRACE_PANE, title: "Handoff trace", name: "Handoff trace pane" },
+] as const;
 // The statusline mod's PR fetch log; its owner writes it, any plugin may read it.
 const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
 // Why the statusline mod's handoff did or did not run while its window was open.
@@ -48,48 +54,55 @@ function traceLines({ Box, Text }: Elements["terminal"], e: { viewport?: { rows:
   return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: empty })] });
 }
 
-export const register: Register = (on) => {
-  on("session.start", async ($, e, next) => {
-    const result = await next(e);
-    await $.ui.open({ id: "markers", title: "markers" });
-    return result;
-  });
-  on("command.run", { command: "debug:probe" }, async ($) => {
-    const opened = await $.ui.open({ id: PROBE, title: "probe" });
-    return { text: opened.isPlaced ? "Probe pane opened." : `Probe pane not placed: ${opened.reason}` };
-  });
-  on("command.run", { command: "debug:pr-trace" }, async ($) => {
-    const opened = await $.ui.open({ id: PR_TRACE_PANE, title: "PR trace" });
-    return { text: opened.isPlaced ? "PR trace pane opened." : `PR trace pane not placed: ${opened.reason}` };
-  });
-  on("command.run", { command: "debug:handoff-trace" }, async ($) => {
-    const opened = await $.ui.open({ id: HANDOFF_TRACE_PANE, title: "Handoff trace" });
-    return { text: opened.isPlaced ? "Handoff trace pane opened." : `Handoff trace pane not placed: ${opened.reason}` };
-  });
-  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e, next) => {
-    if (e.surface !== "terminal") return next(e);
-    return traceLines($.ui.resolve(e), e, (await $.state.get(PR_TRACE)).value, "No PR fetch yet.");
-  });
-  on("ui.render", { component: "Pane", requestId: HANDOFF_TRACE_PANE }, async ($, e, next) => {
-    if (e.surface !== "terminal") return next(e);
-    return traceLines($.ui.resolve(e), e, (await $.state.get(HANDOFF_TRACE)).value, "No handoff window yet.");
-  });
-  on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e, next) => {
-    if (e.surface !== "terminal") return next(e);
-    const { Box, Text, Raster, Image } = $.ui.resolve(e);
-    return Box({
-      flexDirection: "column",
-      children: [
-        Text({ bold: true, children: "Text" }),
-        Text({ color: "#ff8800", children: "orange" }),
-        Text({ dimColor: true, children: "dim" }),
-        Text({ bold: true, children: "Raster" }),
-        Raster({ key: "ramp", columns: COLS, rows: ROWS, cells }),
-        Text({ bold: true, children: "Image" }),
-        Image({ key: "img", source: { rgba, width: PX, height: PY }, columns: 32, rows: 8, alt: "[image not drawn: alt text]" }),
-      ],
+export const register: Register = (on, options) => {
+  // A tool is on unless its option is switched off, as plugin.json's defaults have it.
+  const enabled = (option: string) => options[option] !== false;
+  const markers = enabled("markers");
+  if (markers) {
+    on("session.start", async ($, e, next) => {
+      const result = await next(e);
+      await $.ui.open({ id: "markers", title: "markers" });
+      return result;
     });
-  });
+  }
+  for (const { option, command, id, title, name } of PANES) {
+    on("command.run", { command }, async ($) => {
+      if (!enabled(option)) return { text: `${name} is off. Turn on "Debug: ${name}" in /config.` };
+      const opened = await $.ui.open({ id, title });
+      return { text: opened.isPlaced ? `${name} opened.` : `${name} not placed: ${opened.reason}` };
+    });
+  }
+  if (enabled("pr_trace")) {
+    on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e, next) => {
+      if (e.surface !== "terminal") return next(e);
+      return traceLines($.ui.resolve(e), e, (await $.state.get(PR_TRACE)).value, "No PR fetch yet.");
+    });
+  }
+  if (enabled("handoff_trace")) {
+    on("ui.render", { component: "Pane", requestId: HANDOFF_TRACE_PANE }, async ($, e, next) => {
+      if (e.surface !== "terminal") return next(e);
+      return traceLines($.ui.resolve(e), e, (await $.state.get(HANDOFF_TRACE)).value, "No handoff window yet.");
+    });
+  }
+  if (enabled("probe")) {
+    on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e, next) => {
+      if (e.surface !== "terminal") return next(e);
+      const { Box, Text, Raster, Image } = $.ui.resolve(e);
+      return Box({
+        flexDirection: "column",
+        children: [
+          Text({ bold: true, children: "Text" }),
+          Text({ color: "#ff8800", children: "orange" }),
+          Text({ dimColor: true, children: "dim" }),
+          Text({ bold: true, children: "Raster" }),
+          Raster({ key: "ramp", columns: COLS, rows: ROWS, cells }),
+          Text({ bold: true, children: "Image" }),
+          Image({ key: "img", source: { rgba, width: PX, height: PY }, columns: 32, rows: 8, alt: "[image not drawn: alt text]" }),
+        ],
+      });
+    });
+  }
+  if (!markers) return;
   on("ui.render", { component: "AskUserQuestion" }, mark);
   on("ui.render", { component: "UserMessage" }, mark);
   on("ui.render", { component: "AssistantMessage" }, mark);
