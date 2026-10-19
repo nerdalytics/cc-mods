@@ -250,7 +250,8 @@ const AGENTS_CHIP: { from: RGB; to: RGB } = { from: [251, 191, 36], to: [180, 83
 // The cache chip: green while the next prompt reads the cache, red once it writes it again.
 const WARM_CHIP: { from: RGB; to: RGB } = { from: [74, 222, 128], to: [21, 128, 61] };
 const COLD_CHIP: { from: RGB; to: RGB } = { from: [248, 113, 113], to: [185, 28, 28] };
-const CACHE_MARK = "◷";
+// The moon's phases, empty to full: the context icon's fill, and the cache chip's time left (empty once cold).
+const MOON = [..."○◔◑◕●"];
 
 let tick: { cancel: () => void } | undefined;
 // Advanced per frame rather than derived from the clock, so a speed change carries on from where the sweep is.
@@ -1347,11 +1348,13 @@ function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, t: StatusTok
 
 // Warm: the time left before the cache expires and what the next prompt's cached prefix costs read; hovered, in the
 // cold colours, what it costs once cold. Cold: the cost of writing it again. Each request that hits the cache restarts its TTL.
+// The mark is a moon with a quarter of its fill gone for each quarter of the TTL that has passed, and empty once cold.
 function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: number, sent: number | undefined) {
   const left = cacheLeft(c, sent, now);
+  const mark = MOON[left > 0 ? Math.min(Math.ceil((left * 4) / c.ttl), 4) : 0] ?? "●";
   return left > 0
-    ? chipParts(Box, Text, { key: "cache", mark: CACHE_MARK, value: `${countdown(left)} ${usd(c.read)}`, hover: usd(c.write), hoverStops: COLD_CHIP, ...WARM_CHIP })
-    : chipParts(Box, Text, { key: "cache", mark: CACHE_MARK, value: `cold ${usd(c.write)}`, ...COLD_CHIP });
+    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(left)} ${usd(c.read)}`, hover: usd(c.write), hoverStops: COLD_CHIP, ...WARM_CHIP })
+    : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...COLD_CHIP });
 }
 
 // Seconds the cache has left. The TTL runs from the last request sent or answered, whichever is later; a send is known
@@ -1411,7 +1414,7 @@ function contextIcon(current: number, usable: number, remaining: number, smart: 
   if (current <= smart) return current * 2 < smart ? "◇" : "◆";
   const span = usable - smart;
   if (span <= 0) return "●";
-  return [..."○◔◑◕●"][Math.min(Math.floor(((current - smart) * 5) / span), 4)] ?? "●";
+  return MOON[Math.min(Math.floor(((current - smart) * 5) / span), 4)] ?? "●";
 }
 
 // One Text per character, so a gradient can colour each glyph (zsh's _sl_apply_fg).

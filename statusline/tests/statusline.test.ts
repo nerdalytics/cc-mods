@@ -464,11 +464,19 @@ describe("statusline", () => {
     let ui = await mount();
     let cache = await chip(ui);
     // 50 minutes left of the hour (49 once a second passes).
-    expect(flat(cache.children[0])).toBe(" ◷ ");
+    expect(flat(cache.children[0])).toBe(" ● ");
     expect(flat(cache.children[1])).toMatch(/^ (50|49)m \$0\.20 $/);
     expect(flat(cache.children.at(-1)).trim()).toBe("$8.00");
     // Hoverable, so the value stands on the grey.
     expect(JSON.stringify(cache.children[1])).toContain("#373a48");
+    await ui.unmount();
+
+    // 20 minutes left: a third of the hour, so the moon is half gone.
+    minutes = 40;
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    ui = await mount();
+    for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).match(/^ (20|19)m/); i++) await settle();
+    expect(flat((await chip(ui)).children[0])).toBe(" ◑ ");
     await ui.unmount();
 
     // Two hours on, the hour is up: the next prompt writes the cache again.
@@ -477,6 +485,7 @@ describe("statusline", () => {
     ui = await mount();
     for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).includes("cold"); i++) await settle();
     cache = await chip(ui);
+    expect(flat(cache.children[0])).toBe(" ○ ");
     expect(flat(cache.children[1])).toBe(" cold $8.00 ");
     // Cold has no hover, so no grey either.
     expect(JSON.stringify(cache.children[1])).not.toContain("#373a48");
