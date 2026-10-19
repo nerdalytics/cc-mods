@@ -150,6 +150,7 @@ const REJECTED = { plugin: "statusline", key: "rejected" } as const;
 const HANDOFF = { plugin: "statusline", key: "handoff" } as const;
 const TICK = { plugin: "statusline", key: "tick" } as const;
 const LOAD = { plugin: "statusline", key: "load" } as const;
+const STRETCH = { plugin: "statusline", key: "stretch" } as const;
 // Anthropic's pricing table as markdown, USD per million tokens.
 const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md";
 // The tick also paces the animations: $.ui.invalidate caps the band at thirty redraws a second.
@@ -293,6 +294,9 @@ let promptAt = 0;
 let handoffAt = 0;
 // When the mod last started a compaction: one per stretch between prompts too.
 let compactedAt = 0;
+// A reload starts the module over, so the three times above are also kept in the session's state and read back at its start:
+// without them a reload leaves no prompt of the person's behind it, and the handoff waits for one.
+const remember = ($: EngineInterface) => void $.state.set(STRETCH, { promptAt, handoffAt, compactedAt });
 // The main conversation is being compacted, by whoever started it; the offer to compact is not drawn meanwhile.
 let compacting = false;
 // How long a dismissed offer stays hidden, in ms; 0 for the rest of the session.
@@ -337,6 +341,8 @@ export const register: Register = (on, options) => {
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
+    const { value: stretch } = await $.state.get(STRETCH);
+    if (stretch) ({ promptAt, handoffAt, compactedAt } = stretch);
     tick?.cancel();
     phase = 0;
     frames = 0;
@@ -461,8 +467,11 @@ export const register: Register = (on, options) => {
     }
   });
 
-  on("prompt.submit", async (_$, e, next) => {
-    if (e.origin.kind === "composer") promptAt = Date.now();
+  on("prompt.submit", async ($, e, next) => {
+    if (e.origin.kind === "composer") {
+      promptAt = Date.now();
+      remember($);
+    }
     return next(e);
   });
 
@@ -608,7 +617,7 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   if (!cache || cache.left > cache.lead || (cache.ttl !== 3_600 && keepWarm <= 0)) return;
   const no = (why: string) => traceHandoff($, `cache window open, no handoff: ${why}`);
   if (busy) return no("a turn is running");
-  if (promptAt === 0) return no("no prompt of yours since the mod loaded");
+  if (promptAt === 0) return no("no prompt of yours in this session");
   if (handoffAt >= promptAt) return no("a handoff already ran since your last prompt");
   const working = await agentsWorking($);
   if (working.length > 0) return no(`a subagent is at work: ${working.map((a) => `${a.type} ${a.status}`).join(", ")}`);
@@ -616,6 +625,7 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   // With pings on, the handoff waits for the last of them.
   if (keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)) return no("the keep-warm pings are not done");
   handoffAt = Date.now();
+  remember($);
   traceHandoff($, `${Math.round(cache.left)} s of cache left, handoff started`);
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
@@ -631,6 +641,7 @@ async function maybeCompact($: EngineInterface): Promise<void> {
   const { value: usage } = await $.state.get(USAGE);
   if (usage?.context.tokens === undefined || usage.context.tokens < smartZone * COMPACT_HINT_AT || (await limitsNear($))) return;
   compactedAt = Date.now();
+  remember($);
   await compactSession($);
 }
 

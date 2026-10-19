@@ -79,7 +79,7 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57 }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number } = {}): Promise<string[]> {
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57, reloaded = false }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number; reloaded?: boolean } = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -125,6 +125,8 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
     return { text: e.text };
   });
 
+  // A module loaded again after the person's prompt finds its times in the session's state.
+  if (reloaded) on("state.get", { plugin: "statusline", key: "stretch" }, () => ({ value: { value: { promptAt: Date.now() - 60_000, handoffAt: 0, compactedAt: 0 }, version: 1 } }));
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
   const ui = await mountHint($);
   for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "cache" })).length === 0; i++) {
@@ -138,11 +140,12 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   };
 
   // No prompt of the person's since the mod loaded: nothing runs.
-  await polls(2);
-  expect(ran).toEqual([]);
-
-  // A prompt typed at the composer: the next poll runs the handoff, and the ones after it do not run it again.
-  await typeAtComposer($, "hi");
+  if (!reloaded) {
+    await polls(2);
+    expect(ran).toEqual([]);
+    // A prompt typed at the composer: the next poll runs the handoff, and the ones after it do not run it again.
+    await typeAtComposer($, "hi");
+  }
   await polls(after);
   trace.push(...traced);
   await ui.unmount();
@@ -824,6 +827,10 @@ describe("statusline", () => {
     expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["statusline:handoff"]);
   });
 
+  test("runs the handoff for a prompt typed before the module loaded again", async ($, on) => {
+    expect(await handoffRuns($, on, { reloaded: true })).toEqual(["statusline:handoff"]);
+  });
+
   test("runs no handoff when the person turned auto_handoff off", { options: { auto_handoff: false } }, async ($, on) => {
     expect(await handoffRuns($, on)).toEqual([]);
   });
@@ -875,7 +882,7 @@ describe("statusline", () => {
   test("traces the gate that holds the handoff while its window is open, once, and the start when none does", async ($, on) => {
     const blocked: string[] = [];
     expect(await handoffRuns($, on, { agents: [subagent("running")], trace: blocked })).toEqual([]);
-    expect(blocked.map((l) => l.slice(9))).toEqual(["cache window open, no handoff: no prompt of yours since the mod loaded", "cache window open, no handoff: a subagent is at work: Explore running"]);
+    expect(blocked.map((l) => l.slice(9))).toEqual(["cache window open, no handoff: no prompt of yours in this session", "cache window open, no handoff: a subagent is at work: Explore running"]);
   });
 
   test("traces the start of a handoff", async ($, on) => {
@@ -883,7 +890,7 @@ describe("statusline", () => {
     await handoffRuns($, on, { trace: started });
     // The polls after it find the handoff already run, and say so.
     const lines = started.map((l) => l.slice(9));
-    expect(lines[0]).toBe("cache window open, no handoff: no prompt of yours since the mod loaded");
+    expect(lines[0]).toBe("cache window open, no handoff: no prompt of yours in this session");
     expect(lines[1]).toMatch(/^\d+ s of cache left, handoff started$/);
     expect(lines[2]).toBe("cache window open, no handoff: a handoff already ran since your last prompt");
   });

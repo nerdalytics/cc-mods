@@ -98,7 +98,7 @@ It does this only on a cache that lives an hour. Claude Code gives the main conv
 It runs once between two of your prompts. It does not run in these cases:
 
 - A subagent is pending or running. One that only waits, on a plan's approval or on work listed on its own, does not stop it.
-- A turn is running, or you have not sent a prompt since the mod loaded.
+- A turn is running, or you have not sent a prompt in this session. A reload of the mod keeps the time of your last prompt.
 - A usage limit is used up.
 - The 5h limit has reached 98%, or 90% on Fable and Mythos. The rest is left for your own prompts.
 
