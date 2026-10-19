@@ -174,6 +174,10 @@ const HANDOFF_GRACE_MS = 5 * 60_000;
 // keeps one ping from going out twice before its turn has started.
 const PING_TEXT = "The prompt cache needs a request to stay warm. Reply with the single word ok and use no tools.";
 const PING_LEAD_S: Record<number, number> = { 3_600: 300, 300: 60 };
+// Claude Code compacts a long idle conversation about 54 minutes into an hour's cache unless idleCompaction is false in
+// settings.json. A compaction before the handoff would leave the handoff a summary to summarise, so on an hour's cache
+// the mod acts this many seconds before expiry, 50 minutes in, while that setting is not false.
+const IDLE_COMPACT_LEAD_S = 600;
 const PING_GAP_MS = 10_000;
 // Sweep speed per effort, linear: each step adds a ninth of a cycle a second, so high (3) sweeps once every 3 s.
 // "none" is a request sent without effort; a level missing here (a numeric budget) sweeps as high.
@@ -269,6 +273,8 @@ let autoHandoff = false;
 let freshStart = false;
 let compactHint = false;
 let autoCompact = false;
+// Whether Claude Code compacts an idle session: its idleCompaction setting, on unless set to false. Read at the session's start.
+let idleCompaction = true;
 // The most pings per idle stretch, the keep_warm_pings option; 0 sends none.
 let keepWarm = 0;
 // The pings sent in the stretch since the person's prompt at pingFor, and when the last went out.
@@ -350,6 +356,11 @@ export const register: Register = (on, options) => {
       if (++frames % (POLL_MS / FRAME_MS) === 0) poll($);
       if (frames % (REJECTED_POLL_MS / FRAME_MS) === 0) refreshRejected($);
     }));
+    try {
+      idleCompaction = (await $.settings.read()).idleCompaction !== false;
+    } catch {
+      // The settings did not read: Claude Code's own default, on, stands.
+    }
     await refresh($);
     refreshTokens($);
     refreshGit($);
@@ -556,7 +567,8 @@ async function cacheClock($: EngineInterface): Promise<{ ttl: number; left: numb
   if (!cache) return undefined;
   const { value: sent } = await $.state.get(SENT);
   const left = cacheLeft(cache, sent, Math.floor(Date.now() / 1000));
-  return left > 0 ? { ttl: cache.ttl, left, lead: PING_LEAD_S[cache.ttl] ?? 300 } : undefined;
+  const lead = cache.ttl === 3_600 && idleCompaction ? IDLE_COMPACT_LEAD_S : (PING_LEAD_S[cache.ttl] ?? 300);
+  return left > 0 ? { ttl: cache.ttl, left, lead } : undefined;
 }
 
 // With keep_warm_pings on, sends a minimal prompt of the mod's own just before the cache expires, up to that many
@@ -1352,8 +1364,10 @@ function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, t: StatusTok
 function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: number, sent: number | undefined) {
   const left = cacheLeft(c, sent, now);
   const mark = MOON[left > 0 ? Math.min(Math.ceil((left * 4) / c.ttl), 4) : 0] ?? "●";
+  // The first second after a request has the whole TTL left, which reads 1h0m (5m on a short cache) before the next
+  // second reads 59m (4m): one second short of the TTL reads the same from the start.
   return left > 0
-    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(left)} ${usd(c.read)}`, hover: usd(c.write), hoverStops: COLD_CHIP, ...WARM_CHIP })
+    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, hover: usd(c.write), hoverStops: COLD_CHIP, ...WARM_CHIP })
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...COLD_CHIP });
 }
 

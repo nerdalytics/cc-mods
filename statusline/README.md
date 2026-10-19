@@ -91,7 +91,7 @@ Costs are estimates. The mod prices each request in the session's transcripts wi
 
 `/statusline:handoff` writes `HANDOFF-<YYYY-MM-DD-HHMM>.md` at the project's root. The file summarises the conversation so the next session can start from it. If you pass an argument, it names what the next session will focus on, and the summary covers that.
 
-With the `auto_handoff` option on, the mod runs the handoff itself. It waits until the session is idle and the prompt cache is five minutes from expiring, so the handoff still reads the cache at the cheap rate.
+With the `auto_handoff` option on, the mod runs the handoff itself. It waits until the session is idle and the prompt cache is five minutes from expiring, so the handoff still reads the cache at the cheap rate. Unless `"idleCompaction": false` is in `settings.json`, it runs ten minutes before instead. See [Idle compaction](#idle-compaction).
 
 It does this only on a cache that lives an hour. Claude Code gives the main conversation one on a subscription, and the mod also counts a cache written for five minutes if a later request read it back whole after more than five idle minutes with no other request in between. A cache that really lasts five minutes goes cold at every short pause, and writing it again costs little.
 
@@ -108,11 +108,26 @@ Claude Code can switch the main conversation to five-minute caches on its own, a
 
 After `/compact` the old cache has no use. The cache countdown and the handoff wait for the next request.
 
+### Idle compaction
+
+Claude Code compacts a long conversation on its own while the session is idle. The changelog in the Claude Code binary (2.1.302) says a conversation of 200K tokens or more, left idle for about 54 minutes, is compacted before its one-hour cache expires, so the next message does not reprocess it all. It applies in the terminal from v2.1.290, and `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` changes the 200K minimum. `"idleCompaction": false` in `settings.json` turns it off. Setting it to `true` changes nothing, because it is on by default.
+
+A handoff after that compaction would summarise the compacted conversation, not the whole one. So the mod reads `idleCompaction` when the session starts and sets the lead by it, on an hour's cache:
+
+| `idleCompaction` | The handoff and the pings act | Minutes into the hour |
+|---|---|---|
+| unset or `true` | 10 minutes before expiry | 50 |
+| `false` | 5 minutes before expiry | 55 |
+
+The mod makes this choice without checking the conversation's size. A conversation under the 200K minimum is not compacted, and the handoff still runs five minutes earlier. A change to the setting takes effect at the next session start or after `/reload-plugins`. A five-minute cache keeps its one-minute lead.
+
+Idle compaction does not replace the pings. It makes the next message cheaper by shrinking the conversation, and it empties the cache, as `/compact` does. A ping keeps the cache and the conversation as they are.
+
 ### Keeping the cache warm
 
 Claude Code's documentation says it requests the one-hour cache only on a Claude subscription within the plan's included usage. Past the plan's limit, on an API key or on a cloud provider, the main conversation gets five minutes, and subagents get five minutes everywhere. See [which TTL each request gets](https://code.claude.com/docs/en/prompt-caching#which-ttl-each-request-gets). On a five-minute cache the handoff above does not run on its own.
 
-The `keep_warm_pings` option, 0 by default, sends minimal prompts of its own to keep the cache warm. It sends one just before the cache expires (five minutes ahead on a one-hour cache, a minute ahead on a five-minute one), up to the number you set between two of your prompts, and runs the handoff after the last one. The handoff then also runs on a five-minute cache. A read restarts the cache's timer at the read price, and the clock runs from the start of the request. See [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+The `keep_warm_pings` option, 0 by default, sends minimal prompts of its own to keep the cache warm. It sends one just before the cache expires (five minutes ahead on a one-hour cache, ten with idle compaction on, a minute ahead on a five-minute one), up to the number you set between two of your prompts, and runs the handoff after the last one. The handoff then also runs on a five-minute cache. A read restarts the cache's timer at the read price, and the clock runs from the start of the request. See [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 
 The pings are turns in your conversation: each adds a short message and a one-word answer to it, and they show in the transcript. They do not run before your first prompt after the mod loads, nor while a subagent is at work or the 5h window is near its limit, the same cases as the handoff. A `/compact` ends them, because it empties the cache.
 

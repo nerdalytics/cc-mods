@@ -79,7 +79,7 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [] }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[] } = {}): Promise<string[]> {
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57 }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number } = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -96,7 +96,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
           row("r0", 67, { ...usage, cache_creation: { ephemeral_5m_input_tokens: 1_000_000, ephemeral_1h_input_tokens: 0 } }),
           row("r1", 57, { ...usage, cache_read_input_tokens: 1_000_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } }),
         ].join("\n")
-      : row("r1", ttl === "1h" ? 57 : ttl === "5m-late" ? 4.5 : 3, usage);
+      : row("r1", ttl === "1h" ? ago : ttl === "5m-late" ? 4.5 : 3, usage);
   // The handoff trace as the mod last wrote it.
   let traced: string[] = [];
   on("state.set", { plugin: "statusline", key: "handoffTrace" }, ($, e, next) => {
@@ -107,6 +107,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
   on("session.model", () => ({ value: model }));
   on("session.id", () => ({ value: "sid-1" }));
+  on("settings.read", () => ({ value: settings }));
   on("agent.list", () => ({ value: agents }));
   on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
   on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
@@ -479,6 +480,14 @@ describe("statusline", () => {
     expect(flat((await chip(ui)).children[0])).toBe(" ◑ ");
     await ui.unmount();
 
+    // A request that has just ended has the whole hour left, which reads 59m from the first frame, never 1h0m.
+    minutes = 0;
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    ui = await mount();
+    for (let i = 0; i < 50 && /^ (20|19)m/.test(flat((await chip(ui)).children[1])); i++) await settle();
+    expect(flat((await chip(ui)).children[1])).toBe(" 59m $0.20 ");
+    await ui.unmount();
+
     // Two hours on, the hour is up: the next prompt writes the cache again.
     minutes = 120;
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
@@ -800,6 +809,19 @@ describe("statusline", () => {
 
   test("runs the handoff skill once before the cache goes cold, while idle and after a prompt of the person's own", async ($, on) => {
     expect(await handoffRuns($, on)).toEqual(["statusline:handoff"]);
+  });
+
+  test("runs the handoff 10 minutes before the cache goes cold while Claude Code's idleCompaction is on", async ($, on) => {
+    // 8 minutes left: outside the 5-minute lead, inside the 10-minute one.
+    expect(await handoffRuns($, on, { ago: 52 })).toEqual(["statusline:handoff"]);
+  });
+
+  test("waits for the last 5 minutes when idleCompaction is false in settings: none yet at 8 minutes left", async ($, on) => {
+    expect(await handoffRuns($, on, { ago: 52, settings: { idleCompaction: false } })).toEqual([]);
+  });
+
+  test("runs the handoff at 3 minutes left when idleCompaction is false in settings", async ($, on) => {
+    expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["statusline:handoff"]);
   });
 
   test("runs no handoff when the person turned auto_handoff off", { options: { auto_handoff: false } }, async ($, on) => {
