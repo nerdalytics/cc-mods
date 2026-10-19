@@ -91,6 +91,12 @@
       "description": "What the main conversation and its subagents cost. true (default) / false",
       "default": true
     },
+    "merge_costs": {
+      "type": "boolean",
+      "title": "Statusline: Status row › costs › merge",
+      "description": "One Σ tag for the main conversation and its subagents together, instead of a tag each. Hovered, it shows their tokens added up. true / false (default)",
+      "default": false
+    },
     "segment_cache": {
       "type": "boolean",
       "title": "Statusline: Status row › cache",

@@ -61,7 +61,7 @@ const SEGMENTS = {
   },
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
-  tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens) : []),
+  tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
   git: ({ Box, Text, Link }, s) => (s.git ? gitParts(Box, Text, Link, s.git, s.pr) : []),
 } satisfies Record<string, Segment>;
@@ -298,6 +298,8 @@ let prBusy = false;
 // The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
 // line that closes it; and the rate each such line got, by instance, so a redraw after a later turn keeps its own.
 let turnRate = false;
+// The merge_costs option: one cost chip for the main conversation and its subagents together.
+let mergeCosts = false;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
 
@@ -311,6 +313,7 @@ export const register: Register = (on, options) => {
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
+  mergeCosts = options.merge_costs === true;
   const tags = ordered(options.segment_order, STATUS_ROW);
   const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
   segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
@@ -1207,10 +1210,14 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
 }
 
 // Σ what the main session cost and AGENT_MARK what its subagents did, each a chip; hovered, the tokens behind it.
-function tokenParts(Box: Ui["Box"], Text: Ui["Text"], t: StatusTokens) {
-  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(t.main), hover: formatTokens(t.main.tokens), ...TOKENS_CHIP })];
-  if (t.agents.count) {
-    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(t.agents), hover: formatTokens(t.agents.tokens), ...AGENTS_CHIP }));
+// Merged, the Σ chip holds both and the subagents' chip is left out.
+function tokenParts(Box: Ui["Box"], Text: Ui["Text"], t: StatusTokens, merged: boolean) {
+  const { main, agents } = t;
+  const all = merged && agents.count > 0;
+  const spend = all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced } : main;
+  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(spend), hover: formatTokens(spend.tokens), ...TOKENS_CHIP })];
+  if (agents.count && !all) {
+    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(agents), hover: formatTokens(agents.tokens), ...AGENTS_CHIP }));
   }
   return parts;
 }

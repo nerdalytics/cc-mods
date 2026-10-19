@@ -359,68 +359,71 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("counts the main session's and its subagents' tokens once per request, priced from the live table", async ($, on) => {
-    stubHint(on);
-    const usage = (inp: number, out: number, read: number, w5: number) => ({
-      input_tokens: inp,
-      output_tokens: out,
-      cache_read_input_tokens: read,
-      cache_creation_input_tokens: w5,
-      cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: 0 },
+  for (const [title, options, chips] of [
+    ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]]],
+    ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.25", "1.46M"]]],
+  ] as const) {
+    test(title, { options }, async ($, on) => {
+      stubHint(on);
+      const usage = (inp: number, out: number, read: number, w5: number) => ({
+        input_tokens: inp,
+        output_tokens: out,
+        cache_read_input_tokens: read,
+        cache_creation_input_tokens: w5,
+        cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: 0 },
+      });
+      // Request A is two content blocks, so two lines; the agent's prompt is over Haiku 5.5's 100,000-token tier.
+      const a = { type: "assistant", requestId: "A", message: { model: "claude-opus-5-5", usage: usage(10_000, 100_000, 1_000_000, 200_000) } };
+      const agent = { type: "assistant", requestId: "B", agentId: "a1", message: { model: "claude-haiku-5-5", usage: usage(0, 1_000, 150_000, 0) } };
+      // Claude Code's own <synthetic> message carries a usage of nothing: not a request, not unpriced.
+      const synthetic = { type: "assistant", requestId: "S", message: { model: "<synthetic>", usage: usage(0, 0, 0, 0) } };
+      // The agent's second request: one output token, so the totals below stay as they were.
+      const agent2 = { type: "assistant", requestId: "C", agentId: "a1", message: { model: "claude-haiku-5-5", usage: usage(0, 1, 0, 0) } };
+      const transcript = [a, a, { type: "user", message: { content: "usage" } }, synthetic, agent, agent2].map((r) => JSON.stringify(r)).join("\n");
+      let argv: readonly string[] = [];
+
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      on("session.id", () => ({ value: "sid-1" }));
+      on("session.turns", () => ({ value: 7 }));
+      on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+      on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+      on("process.spawn", async function* (_$, e) {
+        argv = e.argv;
+        // Split mid-line, as a pipe hands text over.
+        yield { stream: "stdout", text: transcript.slice(0, 50) };
+        yield { stream: "stdout", text: transcript.slice(50) };
+        return { value: { code: 0, signal: null } };
+      });
+
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+      const ui = await mountHint($);
+
+      // The scan has run once the last chip is there: the agents' chip, or the merged one that holds them.
+      for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: chips.at(-1)?.[0] })).length === 0; i++) {
+        await settle();
+      }
+      expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
+      // Each chip: a space, its tag, its value's tag right against it, and the hidden hover value laid over the value's tag.
+      // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
+      // The prompts / the main session's requests: A once though written twice; hovered, one subagent / its two requests.
+      for (const [key, tag, value, hover] of chips) {
+        const chip = must(await ui.find({ type: "Box", key }), `the ${key} chip`);
+        expect(flat(chip.children[0])).toBe(tag);
+        // The value's tag is as wide as the longer of value and hover value, so the hover value fits it whole.
+        // Both right-aligned, a space short of the tag's right edge.
+        const shown = flat(chip.children[1]);
+        expect(shown).toBe(`${value} `.padStart(shown.length));
+        const overlay = chip.children.at(-1);
+        expect(overlay).toMatchObject({ props: { position: "absolute", display: "none" }, hover: { display: "flex" } });
+        expect(flat(overlay)).toBe(`${hover} `.padStart(shown.length));
+      }
+      // Merged, the agents' chip is gone.
+      expect(await ui.findAll({ type: "Box", key: "agents" })).toHaveLength(chips.some(([key]) => key === "agents") ? 1 : 0);
+      await ui.unmount();
     });
-    // Request A is two content blocks, so two lines; the agent's prompt is over Haiku 5.5's 100,000-token tier.
-    const a = { type: "assistant", requestId: "A", message: { model: "claude-opus-5-5", usage: usage(10_000, 100_000, 1_000_000, 200_000) } };
-    const agent = { type: "assistant", requestId: "B", agentId: "a1", message: { model: "claude-haiku-5-5", usage: usage(0, 1_000, 150_000, 0) } };
-    // Claude Code's own <synthetic> message carries a usage of nothing: not a request, not unpriced.
-    const synthetic = { type: "assistant", requestId: "S", message: { model: "<synthetic>", usage: usage(0, 0, 0, 0) } };
-    // The agent's second request: one output token, so the totals below stay as they were.
-    const agent2 = { type: "assistant", requestId: "C", agentId: "a1", message: { model: "claude-haiku-5-5", usage: usage(0, 1, 0, 0) } };
-    const transcript = [a, a, { type: "user", message: { content: "usage" } }, synthetic, agent, agent2].map((r) => JSON.stringify(r)).join("\n");
-    let argv: readonly string[] = [];
-
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("session.id", () => ({ value: "sid-1" }));
-    on("session.turns", () => ({ value: 7 }));
-    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
-    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
-    on("process.spawn", async function* (_$, e) {
-      argv = e.argv;
-      // Split mid-line, as a pipe hands text over.
-      yield { stream: "stdout", text: transcript.slice(0, 50) };
-      yield { stream: "stdout", text: transcript.slice(50) };
-      return { value: { code: 0, signal: null } };
-    });
-
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const ui = await mountHint($);
-
-    // The agents' chip shows once the scan has run.
-    for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "agents" })).length === 0; i++) {
-      await settle();
-    }
-    expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
-    // Each chip: a space, its tag, its value's tag right against it, and the hidden hover value laid over the value's tag.
-    // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
-    // The prompts / the main session's requests: A once though written twice; hovered, one subagent / its two requests.
-    for (const [key, tag, value, hover] of [
-      ["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"],
-      ["tokens", " Σ ", "$3.24", "1.31M"],
-      ["agents", " \uf0e7 ", "$0.01", "151.0K"],
-    ]) {
-      const chip = must(await ui.find({ type: "Box", key }), `the ${key} chip`);
-      expect(flat(chip.children[0])).toBe(tag);
-      // The value's tag is as wide as the longer of value and hover value, so the hover value fits it whole.
-      // Both right-aligned, a space short of the tag's right edge.
-      const shown = flat(chip.children[1]);
-      expect(shown).toBe(`${value} `.padStart(shown.length));
-      const overlay = chip.children.at(-1);
-      expect(overlay).toMatchObject({ props: { position: "absolute", display: "none" }, hover: { display: "flex" } });
-      expect(flat(overlay)).toBe(`${hover} `.padStart(shown.length));
-    }
-    await ui.unmount();
-  });
+  }
 
   test("times the main conversation's cache from its last request: warm with what a read costs, cold with a rewrite", async ($, on) => {
     stubHint(on);
