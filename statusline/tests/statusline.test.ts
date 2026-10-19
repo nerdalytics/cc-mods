@@ -28,7 +28,7 @@ function mountHint($: any, isDraft = false): Promise<any> {
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLimits = [] as object[], ttl = "1h", agents = [] as object[], after = 3 } = {}): Promise<string[]> {
+async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLimits = [] as object[], ttl = "1h", agents = [] as object[], after = 3, trace = [] as string[] } = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -46,6 +46,12 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
           row("r1", 57, { ...usage, cache_read_input_tokens: 1_000_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } }),
         ].join("\n")
       : row("r1", ttl === "1h" ? 57 : ttl === "5m-late" ? 4.5 : 3, usage);
+  // The handoff trace as the mod last wrote it.
+  let traced: string[] = [];
+  on("state.set", { plugin: "statusline", key: "handoffTrace" }, ($, e, next) => {
+    traced = e.value as string[];
+    return next(e);
+  });
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
   on("session.model", () => ({ value: model }));
@@ -86,6 +92,7 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
   // A prompt typed at the composer: the next poll runs the handoff, and the ones after it do not run it again.
   await $.prompt.submit({ text: "hi", origin: { kind: "composer" } } as any);
   await polls(after);
+  trace.push(...traced);
   await ui.unmount();
   return ran;
 }
@@ -707,6 +714,26 @@ describe("statusline", () => {
 
   test("runs no handoff while a subagent is at work", async ($, on) => {
     expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }] })).toEqual([]);
+  });
+
+  test("traces the gate that holds the handoff while its window is open, once, and the start when none does", async ($, on) => {
+    const blocked: string[] = [];
+    expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }], trace: blocked })).toEqual([]);
+    expect(blocked.map((l) => l.slice(9))).toEqual(["cache window open, no handoff: no prompt of yours since the mod loaded", "cache window open, no handoff: a subagent is at work: Explore running"]);
+  });
+
+  test("traces the start of a handoff", async ($, on) => {
+    const started: string[] = [];
+    await handoffRuns($, on, { trace: started });
+    // The polls after it find the handoff already run, and say so.
+    const lines = started.map((l) => l.slice(9));
+    expect(lines[0]).toBe("cache window open, no handoff: no prompt of yours since the mod loaded");
+    expect(lines[1]).toMatch(/^\d+ s of cache left, handoff started$/);
+    expect(lines[2]).toBe("cache window open, no handoff: a handoff already ran since your last prompt");
+  });
+
+  test("runs the handoff while a subagent only waits, held on a plan's approval or on work listed on its own", async ($, on) => {
+    expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "waiting" }] })).toEqual(["statusline:handoff"]);
   });
 
   test("runs the handoff at 90% of the 5h window on Opus", async ($, on) => {

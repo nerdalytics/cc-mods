@@ -97,9 +97,12 @@ It does this only on a cache that lives an hour. Claude Code gives the main conv
 
 It runs once between two of your prompts. It does not run in these cases:
 
-- A subagent is at work.
+- A subagent is pending or running. One that only waits, on a plan's approval or on work listed on its own, does not stop it.
+- A turn is running, or you have not sent a prompt since the mod loaded.
 - A usage limit is used up.
 - The 5h limit has reached 98%, or 90% on Fable and Mythos. The rest is left for your own prompts.
+
+The debug mod's `/debug:handoff-trace` pane shows, with the time, why the handoff ran or did not in the minutes before the cache expires.
 
 Claude Code can switch the main conversation to five-minute caches on its own, and 2.1.300 does so behind a server flag. Setting `"promptCacheTtl": "1h"` in `settings.json` keeps the hour-long cache, at the higher hour-long write rate.
 
@@ -125,11 +128,11 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 ## Order and hide
 
-`/statusline-order` opens a pane with two lists. Press a row, drag it, release to drop it.
+`/statusline:order` opens a pane with two lists. Press a row, drag it, release to drop it.
 
-- **Rows:** git + pull request and status, around the `━━ your prompt ━━` marker, drawn in bold cyan. A row above the marker draws above the prompt, below it draws under it. A drop writes `row_git_position`, `row_status_position` and `row_order`.
-- **Status row:** the tags in the order they draw. A drop writes `segment_order`.
-- **Hidden:** a row or tag dropped under a list's dim `╌╌ hidden: switched off ╌╌` marker is switched off (`row_git`, `row_status` or `segment_<name>` becomes false) and drawn dim and struck through; dragged back out, it is switched on. The markers do not drag.
+- **Rows.** The git and pull request row and the status row sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A row above the marker draws above your prompt. A row below it draws under your prompt. A drop writes `row_git_position`, `row_status_position` and `row_order`.
+- **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
+- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. A row or tag dropped under it is switched off: `row_git`, `row_status` or `segment_<name>` becomes false, and the pane draws it dim and struck through. Dragged back above the marker, it is switched on again. The markers do not drag.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 

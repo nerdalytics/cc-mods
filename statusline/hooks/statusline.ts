@@ -48,16 +48,18 @@ const SEGMENTS = {
 // The two rows' segments, left to right. Each row, and each segment of the status row, is a /config toggle (row_git,
 // row_status, segment_<name>), and each row's place a picker (row_git_position, row_status_position): above the prompt,
 // or under it below the engine's hint line. Two rows in one place stack git first, unless row_order says status first;
-// the status row's tags follow segment_order. /statusline-order writes all three by dragging. Applied in register.
+// the status row's tags follow segment_order. /statusline:order writes all three by dragging. Applied in register.
 type Layout = (keyof typeof SEGMENTS)[];
 const GIT_ROW: Layout = ["git"];
 const STATUS_ROW: Layout = ["model", "limits", "context", "turns", "tokens", "cache"];
 let aboveRows: Layout[] = [GIT_ROW];
 let belowRows: Layout[] = [STATUS_ROW];
 
-// The /statusline-order pane: the two rows around a prompt marker, then the status row's tags, each a list to drag. What
+// The /statusline:order pane: the two rows around a prompt marker, then the status row's tags, each a list to drag. What
 // stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
 const ORDER_PANE = "statusline-order";
+// The command is the plugin's own file, commands/order.md, which Claude Code lists under the plugin's name.
+const ORDER_COMMAND = "statusline:order";
 const LABELS: Record<string, string> = {
   git: "git + pull request",
   status: "status",
@@ -308,11 +310,10 @@ export const register: Register = (on, options) => {
     refreshTokens($);
     refreshGit($);
     refreshRejected($);
-    await $.command.register({ name: ORDER_PANE, description: "Drag the status line's rows and tags into the order you want" });
     return result;
   });
 
-  on("command.run", { command: ORDER_PANE }, async ($) => {
+  on("command.run", { command: ORDER_COMMAND }, async ($) => {
     await $.ui.open({ id: ORDER_PANE, title: "Statusline order" });
     return { text: "Statusline order pane opened." };
   });
@@ -328,7 +329,7 @@ export const register: Register = (on, options) => {
         Text({ dimColor: true, children: "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off." }),
         gap(),
         Text({ bold: true, children: "Rows" }),
-        Text({ dimColor: true, children: "Above the prompt marker draws above your prompt, below it draws under it." }),
+        Text({ dimColor: true, children: "A row above the prompt marker draws above your prompt. A row below it draws under your prompt." }),
         list("rows", rowList, ROW_MARKERS),
         gap(),
         Text({ bold: true, children: "Status row" }),
@@ -523,18 +524,34 @@ async function maybeKeepWarm($: EngineInterface): Promise<void> {
 // Runs the handoff skill when the session is idle, the cache still warm and within its lead of going cold. Only on an
 // hour's TTL: a five-minute cache goes cold at every short pause, and rewriting it costs little. With keep_warm_pings
 // on it runs on either TTL, after the last ping. The handoff's own request refreshes the cache, so it waits for the
-// person's next prompt before it may run again.
+// person's next prompt before it may run again. While that window is open, a gate that holds is written to the
+// handoff trace, the one place to see why no handoff followed.
 async function maybeHandoff($: EngineInterface): Promise<void> {
-  if (!autoHandoff || busy || handoffAt >= promptAt || (await agentsAtWork($))) return;
-  if (await limitsNear($)) return;
+  if (!autoHandoff) return;
   const cache = await cacheClock($);
   if (!cache || cache.left > cache.lead || (cache.ttl !== 3_600 && keepWarm <= 0)) return;
-  // With pings on, the handoff waits for the last of them.
-  if (keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)) return;
+  const working = await agentsWorking($);
+  const gate = busy
+    ? "a turn is running"
+    : promptAt === 0
+      ? "no prompt of yours since the mod loaded"
+      : handoffAt >= promptAt
+        ? "a handoff already ran since your last prompt"
+        : working.length > 0
+          ? `a subagent is at work: ${working.map((a) => `${a.type} ${a.status}`).join(", ")}`
+          : (await limitsNear($))
+            ? "a usage limit is nearly reached"
+            // With pings on, the handoff waits for the last of them.
+            : keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)
+              ? "the keep-warm pings are not done"
+              : undefined;
+  if (gate) return traceHandoff($, `cache window open, no handoff: ${gate}`);
   handoffAt = Date.now();
+  traceHandoff($, `${Math.round(cache.left)} s of cache left, handoff started`);
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
   } catch (err) {
+    traceHandoff($, `handoff did not start: ${err instanceof Error ? err.message : err}`);
     $.ui.toast(`statusline: the handoff before the cache goes cold did not start: ${err instanceof Error ? err.message : err}`);
   }
 }
@@ -560,9 +577,15 @@ async function limitsNear($: EngineInterface): Promise<boolean> {
 }
 
 // A subagent still at work keeps the session alive: its answer comes back to the main conversation, which writes the
-// cache again then anyway, and /clear would cut it off. So no handoff and no fresh start while one runs.
+// cache again then anyway, and /clear would cut it off. So no handoff and no fresh start while one runs. Only a loop
+// that has started or is about to counts: a `waiting` one is held on background work it owns, which is listed on its
+// own, or on a plan's approval, which may never come, and would hold the handoff all night.
 async function agentsAtWork($: EngineInterface): Promise<boolean> {
-  return (await $.agent.list()).some((a) => a.status === "pending" || a.status === "running" || a.status === "waiting");
+  return (await agentsWorking($)).length > 0;
+}
+
+async function agentsWorking($: EngineInterface) {
+  return (await $.agent.list()).filter((a) => a.status === "pending" || a.status === "running");
 }
 
 // Limits are the account's, but a session hears its figures only in its own responses: a window another session was
@@ -761,6 +784,16 @@ const traceLog: string[] = [];
 function trace($: EngineInterface, msg: string): void {
   traceLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
   void $.state.set(PR_TRACE, traceLog.slice(-200));
+}
+
+// The handoff's gates while its window is open, read by the debug mod's /debug:handoff-trace pane. A line that repeats the
+// last one is dropped, as the poll asks every 2 s.
+const HANDOFF_TRACE = { plugin: "statusline", key: "handoffTrace" } as const;
+let lastHandoffTrace = "";
+function traceHandoff($: EngineInterface, msg: string): void {
+  if (msg === lastHandoffTrace) return;
+  lastHandoffTrace = msg;
+  void $.state.get(HANDOFF_TRACE).then(({ value = [] }) => $.state.set(HANDOFF_TRACE, [...value, `${new Date().toTimeString().slice(0, 8)} ${msg}`].slice(-200)));
 }
 
 // One run of a job at a time, in the background; a request during one runs it again once it ends.
