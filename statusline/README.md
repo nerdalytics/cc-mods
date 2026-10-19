@@ -186,16 +186,16 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 ## Where an organization manages Claude Code
 
-Claude Code 2.1.302 passes these events over the plugins you install yourself where an organization manages it: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
+Claude Code 2.1.302 passes these events over the plugins you install yourself when it reports that an organization manages it: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
 
-The statusline mod hooks one of them, `session.compact`. In such an organization, `/plugin` shows this on its Errors tab:
+The statusline mod hooks one of them, `session.compact`. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
 
 ```text
 statusline @ cc-mods (user)
 Its hooks on session.compact do not run here: where an organization manages Claude Code, these events pass over the plugins you install
 ```
 
-The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one. I read this from the code and have not seen it on a managed machine.
+The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one. I read the rule from the code and have not seen it on a managed machine. I saw the message once on a machine with no managed settings file, and it was gone after a restart. I do not know why it appeared there.
 
 To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `statusline@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
 
