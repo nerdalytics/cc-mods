@@ -184,9 +184,24 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 - A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the conflict warning, and the `Start fresh` button's icon.
 - `git` for the git row, and `gh`, signed in, for the pull request details.
 
+## Where an organization manages Claude Code
+
+Claude Code 2.1.302 passes these events over the plugins you install yourself where an organization manages it: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
+
+The statusline mod hooks one of them, `session.compact`. In such an organization, `/plugin` shows this on its Errors tab:
+
+```text
+statusline @ cc-mods (user)
+Its hooks on session.compact do not run here: where an organization manages Claude Code, these events pass over the plugins you install
+```
+
+The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one. I read this from the code and have not seen it on a managed machine.
+
+To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `statusline@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
+
 ## What it reads and sends
 
-The mod reads the session's transcripts under `~/.claude/projects/` to count tokens and requests. When `$CLAUDE_CONFIG_DIR` is set, it reads `$CLAUDE_CONFIG_DIR/projects/` instead. It also reads the end of every transcript written in the last five hours, to find a limit any of your sessions was refused on. It runs `git` in the project folder.
+The mod reads the session's transcripts under `~/.claude/projects/` to count tokens and requests. When `$CLAUDE_CONFIG_DIR` is set, it reads `$CLAUDE_CONFIG_DIR/projects/` instead. It also reads the end of every transcript written in the last five hours, to find a limit any of your sessions was refused on. It reads Claude Code's merged settings once, when the session starts, for the `idleCompaction` key. It runs `git` in the project folder.
 
 Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that (every 10 seconds while its checks are running or queued), while the branch is on a remote and is not the default branch. Nothing else leaves the machine.
 
