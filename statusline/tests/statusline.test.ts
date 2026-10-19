@@ -1,4 +1,27 @@
-import { describe, expect, mock, test } from "claude-code/testing";
+import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionRateLimit, TurnUsage } from "claude-code";
+import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test } from "claude-code/testing";
+
+// The test host has setTimeout, but the API's globals leave it out; a test waits on it for the hooks it started.
+declare function setTimeout(handler: () => void, ms: number): unknown;
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+// A prompt typed at the composer, as the person sends one.
+const typeAtComposer = ($: Engine, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: "composer" } });
+// What the host hands a pane and a band besides the mod's own props.
+const SITE = { scroll: { offset: 0, bodyRows: 24 }, view: {} };
+// A drawn element, or the tree a Client's module drew, as findAll hands it back: its children are elements and strings.
+type Drawn = { props: Record<string, unknown>; children: unknown[] };
+const isDrawn = (node: unknown): node is Drawn => typeof node === "object" && node !== null && "props" in node && "children" in node;
+const elements = (nodes: readonly unknown[]): Drawn[] => nodes.filter(isDrawn);
+// The text a drawn tree spells; a one-glyph Text reads as that glyph.
+const flat = (node: unknown): string => (typeof node === "string" ? node : isDrawn(node) ? node.children.map(flat).join("") : "");
+const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
+// A query the test counts on finding.
+function must<T>(found: T | undefined, what: string): T {
+  if (found === undefined) throw new Error(`${what} did not draw`);
+  return found;
+}
+const subagent = (status: AgentStatus): AgentInfo => ({ id: "a1", description: "d", type: "Explore", status });
 
 // Numbers from the screenshot this mod replaces: 797.1K tokens in a 1M window,
 // 5h resetting in 2h56m, 7d resetting in 1d1h, $635.27, Opus 5.5.
@@ -18,17 +41,17 @@ const md = [
 // The status row draws under the prompt, below the engine's hint line, which a test stands in for: before its first
 // call of $, as the kit requires.
 // The band above the prompt draws nothing of its own until the mod's git row has something to show.
-function stubHint(on: any): void {
-  on("ui.render", { component: "PromptHint" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
-  on("ui.render", { component: "AbovePrompt" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: "" }));
+function stubHint(on: On): void {
+  on("ui.render", { component: "PromptHint" }, ($, e) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
+  on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
-function mountHint($: any, isDraft = false): Promise<any> {
+function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "PromptHint">> {
   return $.ui.mount({ plugin: "statusline", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLimits = [] as object[], ttl = "1h", agents = [] as object[], after = 3, trace = [] as string[] } = {}): Promise<string[]> {
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [] as SessionRateLimit[], ttl = "1h", agents = [] as AgentInfo[], after = 3, trace = [] as string[] } = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -73,15 +96,15 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
     return { text: e.text };
   });
 
-  await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+  await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
   const ui = await mountHint($);
   for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "cache" })).length === 0; i++) {
-    await new Promise((r) => setTimeout(r, 10));
+    await settle();
   }
   const polls = async (n: number) => {
     for (let i = 0; i < n; i++) {
       await clock.advance(2_000);
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
     }
   };
 
@@ -90,7 +113,7 @@ async function handoffRuns($: any, on: any, { model = "claude-opus-5-5", rateLim
   expect(ran).toEqual([]);
 
   // A prompt typed at the composer: the next poll runs the handoff, and the ones after it do not run it again.
-  await $.prompt.submit({ text: "hi", origin: { kind: "composer" } } as any);
+  await typeAtComposer($, "hi");
   await polls(after);
   trace.push(...traced);
   await ui.unmount();
@@ -106,7 +129,7 @@ describe("statusline", () => {
       value: {
         startedAt: 0,
         // Auto-compaction at 900,000 tokens, as Claude Code's summary breakdown reports it.
-        context: { tokens: 797_100, window: 1_000_000, breakdown: { isAutoCompactEnabled: true, autoCompactThreshold: 900_000, rawMaxTokens: 1_000_000 } },
+        context: { tokens: 797_100, window: 1_000_000, breakdown: { isAutoCompactEnabled: true, autoCompactThreshold: 900_000, rawMaxTokens: 1_000_000 } as SessionContextBreakdown },
         rateLimits: [
           { kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() },
           { kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() },
@@ -118,7 +141,7 @@ describe("statusline", () => {
     // 797,100 tokens is past the smart zone, so the line offering a compaction asks which subagents run.
     on("agent.list", () => ({ value: [] }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
 
     // The model name is one Text per glyph, so only its first glyph is matchable here.
@@ -132,18 +155,17 @@ describe("statusline", () => {
     // and the threshold is 85%: the full moon. Hovered, the 102,900 tokens left.
     let context;
     for (let i = 0; i < 50 && !context; i++) {
-      context = (await ui.findAll({ type: "Box", key: "context" }))[0];
+      context = await ui.find({ type: "Box", key: "context" });
       if (!context || !JSON.stringify(context).includes("102.9K")) {
         context = undefined;
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
       }
     }
-    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
+    if (!context) throw new Error("the context chip did not draw");
     expect(flat(context.children[0])).toBe(" ● ");
     const dim = "#373a48";
-    const halves = context.children
-      .slice(1, -1)
-      .map((t: any) => {
+    const halves = elements(context.children.slice(1, -1))
+      .map((t) => {
         const top = t.props.color !== dim;
         const bottom = t.props.backgroundColor !== dim;
         return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
@@ -153,10 +175,10 @@ describe("statusline", () => {
     expect(flat(context.children.at(-1)).trim()).toBe("102.9K");
     // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap
     // parts them, so a wrapped line starts flush.
-    const rows = (await ui.findAll({ type: "Box" })).filter((b: any) => b.props.flexWrap === "wrap");
+    const rows = (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap");
     expect(rows).toHaveLength(1);
-    expect(rows[0].props.columnGap).toBe(1);
-    expect(rows[0].children.every((part: any) => part.props.flexShrink === 0)).toBe(true);
+    expect(rows[0]?.props.columnGap).toBe(1);
+    expect(elements(rows[0]?.children ?? []).every((part) => part.props.flexShrink === 0)).toBe(true);
     await ui.unmount();
   });
 
@@ -167,15 +189,15 @@ describe("statusline", () => {
       value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt: new Date(Date.now() + 90_030_000).toISOString() }] },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     expect(await ui.find({ type: "Text", text: "O" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /1d1h/ })).toBeUndefined();
-    const rows = (await ui.findAll({ type: "Box" })).filter((b: any) => b.props.flexWrap === "wrap");
+    const rows = (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap");
     expect(rows).toHaveLength(1);
-    expect(rows[0].props.columnGap).toBe(0);
+    expect(rows[0]?.props.columnGap).toBe(0);
     // The model name has no chip around it: one column still parts it from the next tag.
-    expect((await ui.findAll({ type: "Box" })).some((b: any) => b.props.paddingRight === 1)).toBe(true);
+    expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(true);
     await ui.unmount();
   });
 
@@ -184,8 +206,8 @@ describe("statusline", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 } } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: "O" })).toBeDefined();
     await above.unmount();
     const below = await mountHint($);
@@ -200,15 +222,13 @@ describe("statusline", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
-    const context = (await ui.findAll({ type: "Box", key: "context" }))[0];
+    const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
     expect(flat(context.children[0])).toBe(" ◆ ");
     const dim = "#373a48";
-    const halves = context.children
-      .slice(1, -1)
-      .map((t: any) => {
+    const halves = elements(context.children.slice(1, -1))
+      .map((t) => {
         const top = t.props.color !== dim;
         const bottom = t.props.backgroundColor !== dim;
         return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
@@ -225,14 +245,13 @@ describe("statusline", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 300_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
-    const context = (await ui.findAll({ type: "Box", key: "context" }))[0];
+    const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
     expect(flat(context.children[0])).toBe(" ◔ ");
-    const cells = context.children.slice(1, -1);
-    expect(cells.map((t: any) => (t.props.backgroundColor !== "#373a48" ? "B" : "_")).join("")).toBe("BBBBBBB___");
-    expect(cells.every((t: any) => t.props.color === t.props.backgroundColor)).toBe(true);
+    const cells = elements(context.children.slice(1, -1));
+    expect(cells.map((t) => (t.props.backgroundColor !== "#373a48" ? "B" : "_")).join("")).toBe("BBBBBBB___");
+    expect(cells.every((t) => t.props.color === t.props.backgroundColor)).toBe(true);
     await ui.unmount();
   });
 
@@ -253,7 +272,7 @@ describe("statusline", () => {
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
 
     // B both halves lit, T top (time) only, U bottom (usage) only, _ neither; 7 cells for 7d, then 10 for 5h.
@@ -270,8 +289,8 @@ describe("statusline", () => {
 
     // Each limit is a hover scope; its countdown to the reset waits hidden until the pointer is on it.
     // FoundElement.props leaves `hover` out; the drawn children carry it.
-    for (const [kind, used] of [["seven_day", "2d12h"], ["five_hour", "2h4"]]) {
-      const scope = (await ui.findAll({ type: "Box", key: kind }))[0];
+    for (const [kind, used] of [["seven_day", "2d12h"], ["five_hour", "2h4"]] as const) {
+      const scope = must(await ui.find({ type: "Box", key: kind }), `the ${kind} limit`);
       expect(scope.children.at(-1)).toMatchObject({
         props: { position: "absolute", display: "none" },
         hover: { display: "flex" },
@@ -315,24 +334,23 @@ describe("statusline", () => {
       return { value: { code: 0, signal: null } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
 
     // The agents' chip shows once the scan has run.
     for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "agents" })).length === 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
     }
     expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
     // Each chip: a space, its tag, its value's tag right against it, and the hidden hover value laid over the value's tag.
     // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
     // The prompts / the main session's requests: A once though written twice; hovered, one subagent / its two requests.
-    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
     for (const [key, tag, value, hover] of [
       ["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"],
       ["tokens", " Σ ", "$3.24", "1.31M"],
       ["agents", " \uf0e7 ", "$0.01", "151.0K"],
     ]) {
-      const chip = (await ui.findAll({ type: "Box", key }))[0];
+      const chip = must(await ui.find({ type: "Box", key }), `the ${key} chip`);
       expect(flat(chip.children[0])).toBe(tag);
       // The value's tag is as wide as the longer of value and hover value, so the hover value fits it whole.
       // Both right-aligned, a space short of the tag's right edge.
@@ -369,18 +387,18 @@ describe("statusline", () => {
       return { value: { code: 0, signal: null } };
     });
 
-    const flat = (n: any): string => (typeof n === "string" ? n : (n?.children ?? []).map(flat).join(""));
-    const chip = async (ui: any) => {
+    const chip = async (ui: Mounted<"terminal", "PromptHint">) => {
       for (let i = 0; i < 50; i++) {
-        const found = (await ui.findAll({ type: "Box", key: "cache" }))[0];
+        const found = await ui.find({ type: "Box", key: "cache" });
         if (found) return found;
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
       }
+      throw new Error("the cache chip did not draw");
     };
     const mount = () =>
       mountHint($);
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     let ui = await mount();
     let cache = await chip(ui);
     // 50 minutes left of the hour (49 once a second passes).
@@ -393,9 +411,9 @@ describe("statusline", () => {
 
     // Two hours on, the hour is up: the next prompt writes the cache again.
     minutes = 120;
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     ui = await mount();
-    for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).includes("cold"); i++) await new Promise((r) => setTimeout(r, 10));
+    for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).includes("cold"); i++) await settle();
     cache = await chip(ui);
     expect(flat(cache.children[1])).toBe(" cold $8.00 ");
     // Cold has no hover, so no grey either.
@@ -423,22 +441,22 @@ describe("statusline", () => {
       value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false },
     }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     // Usage left is the bars' bottom halves: none once refused, where 40% used would light 6.
     const usageLeft = async () =>
       (await ui.findAll({ type: "Text", text: "▀" })).filter((t) => t.props.backgroundColor !== "#373a48").length;
     let lit = await usageLeft();
     for (let i = 0; i < 50 && lit !== 0; i++) {
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
       lit = await usageLeft();
     }
     expect(lit).toBe(0);
     await ui.unmount();
   });
 
-  const idle = [{ id: "a0", description: "d", type: "Explore", status: "completed" }];
-  const working = [{ id: "a1", description: "d", type: "Explore", status: "running" }];
+  const idle = [subagent("completed")];
+  const working = [subagent("running")];
   for (const [title, files, offered, lastAgo, options, agents, prompted] of [
     ["offers a fresh session from this session's handoff file once the cache is cold", ["HANDOFF-2026-10-16-0900.md", "HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle],
     ["offers none from a handoff file older than the session", ["HANDOFF-2026-10-16-0900.md"], false, 120, {}, idle],
@@ -457,7 +475,7 @@ describe("statusline", () => {
     const row = (id: string, minutesAgo: number, tokens: number) =>
       JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
     const transcript = [row("r1", 150, 20_000), row("r2", lastAgo, 1_000_000)].join("\n");
-    const file = (name: string, mtimeMs: number) => ({ name, kind: "file", size: 40_000, mtimeMs, isLink: false });
+    const file = (name: string, mtimeMs: number) => ({ name, kind: "file" as const, size: 40_000, mtimeMs, isLink: false });
     const ran: string[] = [];
     const sent: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -482,13 +500,13 @@ describe("statusline", () => {
       return { text: e.text };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
-    if (prompted) await $.prompt.submit({ text: "go on", origin: { kind: "composer" } } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    if (prompted) await typeAtComposer($, "go on");
     const ui = await mountHint($);
     let button;
     for (let i = 0; i < (offered ? 50 : 5) && !button; i++) {
       await clock.advance(2_000);
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
       button = (await ui.findAll({ type: "Button", key: "resume" }))[0];
     }
     if (!offered) {
@@ -501,7 +519,7 @@ describe("statusline", () => {
     // Its own line, led by a red $ where the engine's line has its mode glyph.
     // (The cost chips draw their own $ glyphs, on the chips' grey; this one stands bare.)
     const marks = await ui.findAll({ type: "Text", text: "$" });
-    expect(marks.some((t: any) => t.props.color === "#f87171" && t.props.backgroundColor === undefined)).toBe(true);
+    expect(marks.some((t) => t.props.color === "#f87171" && t.props.backgroundColor === undefined)).toBe(true);
     // A chip-like button: an icon tag, then the label on the button background; no brackets.
     expect(JSON.stringify(button)).toContain(" Start fresh ");
     expect(JSON.stringify(button)).toContain("#14532d");
@@ -548,12 +566,12 @@ describe("statusline", () => {
       return { text: "" };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     let button;
     for (let i = 0; i < (offered ? 50 : 5) && !button; i++) {
       await clock.advance(2_000);
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
       button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
     }
     if (!offered) {
@@ -561,7 +579,7 @@ describe("statusline", () => {
       return ui.unmount();
     }
     expect(button).toBeDefined();
-    expect(await ui.find({ type: "Link", href: "https://www.aihero.dev/ai-coding-dictionary/smart-zone" })).toBeDefined();
+    expect((await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://www.aihero.dev/ai-coding-dictionary/smart-zone")).toBe(true);
     expect(await ui.find({ type: "Text", text: tokens >= 200_000 ? /^ You're out of the $/ : /^ You're nearly out of the $/ })).toBeDefined();
     expect(JSON.stringify(button)).toContain(" Compact ");
     expect(JSON.stringify(button)).toContain("#14532d");
@@ -598,21 +616,21 @@ describe("statusline", () => {
     });
     on("prompt.submit", (_$, e) => ({ text: e.text }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     let button;
     for (let i = 0; i < 50 && !button; i++) {
       await clock.advance(2_000);
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
       button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
     }
     expect(button).toBeDefined();
     await ui.press({ key: "dismiss" });
     expect((await ui.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
     // A prompt of the person's does not bring it back.
-    await $.prompt.submit({ text: "go on", origin: { kind: "composer" } } as any);
+    await typeAtComposer($, "go on");
     await clock.advance(minutes * 60_000);
-    await new Promise((r) => setTimeout(r, 10));
+    await settle();
     await ui.unmount();
     const again = await mountHint($);
     expect(((await again.findAll({ type: "Button", key: "compact" }))[0] !== undefined)).toBe(shown);
@@ -646,19 +664,19 @@ describe("statusline", () => {
     });
     on("prompt.submit", (_$, e) => ({ text: e.text }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const polls = async (n: number) => {
       for (let i = 0; i < n; i++) {
         await clock.advance(2_000);
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
       }
     };
     // No prompt of the person's since the mod loaded: nothing runs.
     await polls(2);
     expect(ran).toEqual([]);
     // A prompt typed at the composer: one compaction, and the polls after it do not run another.
-    await $.prompt.submit({ text: "hi", origin: { kind: "composer" } } as any);
+    await typeAtComposer($, "hi");
     await polls(3);
     expect(ran).toEqual(runs);
     await ui.unmount();
@@ -689,7 +707,7 @@ describe("statusline", () => {
   });
 
   test("sends no ping and no handoff after it while a subagent is at work", { options: { keep_warm_pings: 2 } }, async ($, on) => {
-    expect(await handoffRuns($, on, { after: 14, agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }] })).toEqual([]);
+    expect(await handoffRuns($, on, { after: 14, agents: [subagent("running")] })).toEqual([]);
   });
 
   test("sends no ping at 98% of the 5h window", { options: { keep_warm_pings: 2 } }, async ($, on) => {
@@ -713,12 +731,12 @@ describe("statusline", () => {
   });
 
   test("runs no handoff while a subagent is at work", async ($, on) => {
-    expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }] })).toEqual([]);
+    expect(await handoffRuns($, on, { agents: [subagent("running")] })).toEqual([]);
   });
 
   test("traces the gate that holds the handoff while its window is open, once, and the start when none does", async ($, on) => {
     const blocked: string[] = [];
-    expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "running" }], trace: blocked })).toEqual([]);
+    expect(await handoffRuns($, on, { agents: [subagent("running")], trace: blocked })).toEqual([]);
     expect(blocked.map((l) => l.slice(9))).toEqual(["cache window open, no handoff: no prompt of yours since the mod loaded", "cache window open, no handoff: a subagent is at work: Explore running"]);
   });
 
@@ -733,7 +751,7 @@ describe("statusline", () => {
   });
 
   test("runs the handoff while a subagent only waits, held on a plan's approval or on work listed on its own", async ($, on) => {
-    expect(await handoffRuns($, on, { agents: [{ id: "a1", description: "d", type: "Explore", status: "waiting" }] })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { agents: [subagent("waiting")] })).toEqual(["statusline:handoff"]);
   });
 
   test("runs the handoff at 90% of the 5h window on Opus", async ($, on) => {
@@ -763,9 +781,9 @@ describe("statusline", () => {
       return { value: { code: 0, signal: null } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "tokens" })).length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "tokens" })).length === 0; i++) await settle();
     expect(await ui.findAll({ type: "Box", key: "tokens" })).toHaveLength(1);
     expect(await ui.findAll({ type: "Box", key: "cache" })).toHaveLength(0);
     await ui.unmount();
@@ -807,18 +825,18 @@ describe("statusline", () => {
       return { value: { exitCode: hit.exitCode ?? 0, stdout: hit.stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/wt/spike/cc-mods" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/wt/spike/cc-mods" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
 
     let changes;
     for (let i = 0; i < 50 && !changes; i++) {
       changes = await ui.find({ type: "Box", text: "+120 -8 ~2" });
-      if (!changes) await new Promise((r) => setTimeout(r, 10));
+      if (!changes) await settle();
     }
     expect(changes).toBeDefined();
     for (const text of ["↑2? ↓1?", "\uf071"]) {
@@ -826,12 +844,12 @@ describe("statusline", () => {
     }
     // The folders link to their places on disk: the project, the shell's folder, and the checkout (here a worktree)
     // for the branch and the worktree.
-    const hrefs = (await ui.findAll({ type: "Link" })).map((l: any) => l.props.href);
+    const hrefs = (await ui.findAll({ type: "Link" })).map((l) => l.props.href);
     expect(hrefs).toEqual(["file:///wt/spike", "file:///wt/spike/cc-mods", "file:///wt/spike", "file:///wt/spike"]);
     // Flush: a segment starts at its first glyph, the row's gap parting it from the one before.
-    const glyphs = (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text);
+    const glyphs = (await ui.findAll({ type: "Text" })).map(glyph);
     expect(glyphs.join("")).toContain(path);
-    const gaps = (await ui.findAll({ type: "Box" })).map((b: any) => b.props.columnGap).filter((g: any) => g !== undefined);
+    const gaps = (await ui.findAll({ type: "Box" })).map((b) => b.props.columnGap).filter((g) => g !== undefined);
     expect(gaps).toEqual([1, options.compact ? 0 : 1]);
     // Nothing unknown was asked of git.
     expect(ran.filter((k) => !(k in out))).toEqual([]);
@@ -858,18 +876,18 @@ describe("statusline", () => {
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
 
     let branch;
     for (let i = 0; i < 50 && !branch; i++) {
       branch = await ui.find({ type: "Box", text: "⎇ feat" });
-      if (!branch) await new Promise((r) => setTimeout(r, 10));
+      if (!branch) await settle();
     }
     expect(branch).toBeDefined();
     expect(await ui.find({ type: "Box", text: "⎇ trunk ⎇ feat" })).toBeUndefined();
@@ -894,16 +912,16 @@ describe("statusline", () => {
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
 
-    const glyphs = async () => (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
-    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await new Promise((r) => setTimeout(r, 10));
+    const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
+    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
     expect(await glyphs()).toContain("cc-mods trunk");
     await ui.unmount();
   });
@@ -946,28 +964,28 @@ describe("statusline", () => {
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
 
     // The number links to the PR's page; the branch, a link to its checkout, holds its own text.
-    const href = async (to: string) => (await ui.findAll({ type: "Link" })).some((l: any) => l.props.href === to);
+    const href = async (to: string) => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === to);
     let number = false;
     for (let i = 0; i < 50 && !number; i++) {
       number = await href("https://github.com/o/r/pull/42");
-      if (!number) await new Promise((r) => setTimeout(r, 10));
+      if (!number) await settle();
     }
     expect(number).toBe(true);
     expect(await href("file:///r")).toBe(true);
     // Behind links the remote branch's history; ahead, only local, links nothing. Each failure is a cross of its own,
     // linking its check (a check run's details, a status's target); running and passed are counts on the checks tab.
     expect(await href("https://github.com/o/r/commits/feat")).toBe(true);
-    const links = (await ui.findAll({ type: "Link" })).map((l: any) => [l.props.href, l.children.map((t: any) => t.children[0]).join("")]);
-    expect(links.filter(([h]: string[]) => h.startsWith("https://github.com/o/r/"))).toEqual([
+    const links = (await ui.findAll({ type: "Link" })).map((l) => [l.props.href, elements(l.children).map((t) => t.children[0]).join("")]);
+    expect(links.filter(([href]) => typeof href === "string" && href.startsWith("https://github.com/o/r/"))).toEqual([
       ["https://github.com/o/r/pull/42", "PR #42"],
       ["https://github.com/o/r/commits/feat", "↓1"],
       ["https://github.com/o/r/pull/42/checks", "\uf4441"],
@@ -976,8 +994,8 @@ describe("statusline", () => {
     ]);
     expect(links).toContainEqual(["https://ci.example/build/9", "\uf467"]);
     // Each failed check's cross is red (the review's "changes requested" cross keeps the row's gradient).
-    const failures = (await ui.findAll({ type: "Link" })).filter((l: any) => ["https://github.com/o/r/runs/7", "https://ci.example/build/9"].includes(l.props.href));
-    expect(failures.map((l: any) => l.children[0].props.color)).toEqual(["#ef4444", "#ef4444"]);
+    const failures = (await ui.findAll({ type: "Link" })).filter((l) => ["https://github.com/o/r/runs/7", "https://ci.example/build/9"].includes(String(l.props.href)));
+    expect(failures.map((l) => elements(l.children)[0]?.props.color)).toEqual(["#ef4444", "#ef4444"]);
     for (const text of ["\uf040", "\uf467", "\uf0e0 3", "\uf071"]) {
       expect(await ui.find({ type: "Box", text })).toBeDefined();
     }
@@ -985,10 +1003,10 @@ describe("statusline", () => {
     out["git rev-list --left-right --count HEAD...origin/feat"] = "2\t0\n";
     for (let i = 0; i < 5 && (await href("https://github.com/o/r/commits/feat")); i++) {
       await clock.advance(2_000);
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
     }
     expect(await href("https://github.com/o/r/commits/feat")).toBe(false);
-    expect((await ui.findAll({ type: "Link" })).every((l: any) => l.children.length > 0)).toBe(true);
+    expect((await ui.findAll({ type: "Link" })).every((l) => l.children.length > 0)).toBe(true);
     await ui.unmount();
   });
 
@@ -1033,23 +1051,23 @@ describe("statusline", () => {
         return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
       });
 
-      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
       const ui = await $.ui.mount({
         plugin: "statusline",
         surface: "terminal",
         component: "AbovePrompt",
-        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-      } as any);
+        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      });
 
-      const link = async () => (await ui.findAll({ type: "Link" })).find((l: any) => l.props.href === "https://github.com/o/r/pull/7");
-      for (let i = 0; i < 50 && !(await link()); i++) await new Promise((r) => setTimeout(r, 10));
-      const colours = (await link())!.children.map((t: any) => t.props.color);
+      const link = async () => (await ui.findAll({ type: "Link" })).find((l) => l.props.href === "https://github.com/o/r/pull/7");
+      for (let i = 0; i < 50 && !(await link()); i++) await settle();
+      const colours = elements((await link())?.children ?? []).map((t) => t.props.color);
       expect(colours.length).toBe("PR #7".length);
       expect(new Set(colours)).toEqual(new Set([colour]));
-      const glyphs = (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
+      const glyphs = (await ui.findAll({ type: "Text" })).map(glyph).join("");
       for (const mark of shown) expect(glyphs).toContain(mark);
       for (const mark of hidden) expect(glyphs).not.toContain(mark);
-      const tab = (await ui.findAll({ type: "Link" })).some((l: any) => l.props.href === "https://github.com/o/r/pull/7/checks");
+      const tab = (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://github.com/o/r/pull/7/checks");
       expect(tab).toBe(checks);
       await ui.unmount();
     });
@@ -1085,11 +1103,11 @@ describe("statusline", () => {
         return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
       });
 
-      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
-      for (let i = 0; i < 50 && asks === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+      for (let i = 0; i < 50 && asks === 0; i++) await settle();
       for (let i = 0; i < 6; i++) {
         await clock.advance(2_000);
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
       }
       expect(asks).toBe(calls);
     });
@@ -1097,14 +1115,14 @@ describe("statusline", () => {
 
   // The line that closes a turn gets the tokens the turn generated per second in its verb: its output tokens over the
   // seconds, in the status row's units (plain under 1000, K to a tenth, M to a hundredth).
-  const turnLine = async ($: any, on: any, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: object }) => {
+  const turnLine = async ($: Engine, on: On, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: TurnUsage }) => {
     stubHint(on);
-    on("ui.render", { component: "TurnDuration" }, ($: any, e: any) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
-    on("turn.complete", (_$: any, e: any) => ({ text: e.answer }));
+    on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
     if (turn) await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", ...turn });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "TurnDuration", props } as any);
-    const text = async () => (await ui.findAll({ type: "Text" })).map((t: any) => t.children?.[0] ?? t.text).join("");
-    for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await new Promise((r) => setTimeout(r, 10));
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "TurnDuration", props });
+    const text = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
+    for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await settle();
     const drawn = await text();
     await ui.unmount();
     return drawn;
@@ -1162,17 +1180,17 @@ describe("statusline", () => {
       };
     });
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
     const until = async (text: string) => {
       for (let i = 0; i < 50; i++) {
         if (await ui.find({ type: "Box", text })) return true;
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
       }
       return false;
     };
@@ -1180,7 +1198,7 @@ describe("statusline", () => {
     // under the prompt, the branch above it.
     const hint = await mountHint($);
     const usageLeft = async () =>
-      (await hint.findAll({ type: "Text", text: "▀" })).filter((t: any) => t.props.backgroundColor !== "#373a48").length;
+      (await hint.findAll({ type: "Text", text: "▀" })).filter((t) => t.props.backgroundColor !== "#373a48").length;
 
     expect(await until("⎇ feat-a")).toBe(true);
     expect(await usageLeft()).toBe(10);
@@ -1207,22 +1225,22 @@ describe("statusline", () => {
       value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false },
     }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work/cc-mods" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work/cc-mods" });
     const ui = await $.ui.mount({
       plugin: "statusline",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160 },
-    } as any);
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
 
     let folder;
     for (let i = 0; i < 50 && !folder; i++) {
       folder = await ui.find({ type: "Box", text: "cc-mods" });
-      if (!folder) await new Promise((r) => setTimeout(r, 10));
+      if (!folder) await settle();
     }
     expect(folder).toBeDefined();
     expect(await ui.find({ type: "Text", text: "⎇" })).toBeUndefined();
-    expect((await ui.findAll({ type: "Box" })).find((b: any) => b.props.flexWrap === "wrap")?.props.columnGap).toBe(1);
+    expect((await ui.findAll({ type: "Box" })).find((b) => b.props.flexWrap === "wrap")?.props.columnGap).toBe(1);
     await ui.unmount();
   });
 
@@ -1244,7 +1262,7 @@ describe("statusline", () => {
     ] as const;
     for (const [id, name, first, bold] of cases) {
       model = id;
-      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
       const ui = await mountHint($);
       expect(await ui.find({ text: name })).toBeDefined();
       const glyph = await ui.find({ type: "Text", text: name[0] });
@@ -1262,7 +1280,7 @@ describe("statusline", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: model }));
 
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" } as any);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     expect(await ui.find({ text: "Haiku 5.5" })).toBeDefined();
 
@@ -1273,23 +1291,31 @@ describe("statusline", () => {
   });
 
   // The order pane: a drag in a Client of the pane posts the new order; the mod writes the /config options it changed.
+  const configRow = (field: string, value: ConfigValue): ConfigRow => ({
+    key: `statusline.${field}`,
+    label: field,
+    kind: typeof value === "boolean" ? "boolean" : "text",
+    value,
+    provider: { plugin: "statusline", tier: "user" },
+    isLocked: false,
+  });
   const ROWS = [
-    { key: "statusline.row_git", value: true },
-    { key: "statusline.row_git_position", value: "above" },
-    { key: "statusline.row_status", value: true },
-    { key: "statusline.row_status_position", value: "below" },
-    { key: "statusline.row_order", value: "git_first" },
-    { key: "statusline.segment_order", value: "model,limits,context,turns,tokens,cache" },
-    ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => ({ key: `statusline.segment_${name}`, value: true })),
+    configRow("row_git", true),
+    configRow("row_git_position", "above"),
+    configRow("row_status", true),
+    configRow("row_status_position", "below"),
+    configRow("row_order", "git_first"),
+    configRow("segment_order", "model,limits,context,turns,tokens,cache"),
+    ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => configRow(`segment_${name}`, true)),
   ];
-  async function dragIn(on: any, $: any, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
+  async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
-    on("config.set", (_$: any, e: any) => {
+    on("config.set", (_$, e) => {
       written.push([e.key.replace("statusline.", ""), e.value]);
       return { value: e.value };
     });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: {} } as any);
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     await ui.pointer({ type: "down", x: 2, y: from, button: "left", in: list });
     await ui.pointer({ type: "move", x: 2, y: to, button: "left", in: list });
     await ui.pointer({ type: "up", x: 2, y: to, button: "left", in: list });
@@ -1325,10 +1351,11 @@ describe("statusline", () => {
   });
 
   test("the order pane lists the rows around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", row_order: "status_first", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: {} } as any);
-    const items = async (key: string) => ((await ui.find({ type: "Client", key })) as any).props.props.items;
-    expect(await items("rows")).toEqual(["status", "git", "prompt", "hidden"]);
-    expect(await items("segments")).toEqual(["cache", "model", "context", "turns", "tokens", "hidden", "limits"]);
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    // What the pane hands each list's Client: the items, in the order they are drawn.
+    const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
+    expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "hidden"] });
+    expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "context", "turns", "tokens", "hidden", "limits"] });
     await ui.unmount();
   });
 });

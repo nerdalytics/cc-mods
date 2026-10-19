@@ -1,8 +1,29 @@
 // Much of this ports statusline.zsh, the shell status line it replaces: https://github.com/nerdalytics/claude-statusline
-import type { Elements, EngineInterface, Register } from "claude-code";
+import type { Elements, EngineInterface, Register, ResolveInput } from "claude-code";
 import type { StatusCache, StatusGit, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
 
 type Ui = Elements["terminal"];
+
+// A line or document read from a file or a command is unknown until narrowed; the types below name only the fields read.
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+type Usage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
+  speed?: unknown;
+};
+type TranscriptRow = { type?: string; subtype?: string; agentId?: string; timestamp?: string; requestId?: string; uuid?: string; message?: { model?: string; usage?: Usage } };
+type GhCheck = { status?: string; state?: string; conclusion?: string; detailsUrl?: string; targetUrl?: string };
+type GhPr = { number?: number; url?: string; state?: string; isDraft?: boolean; mergeable?: string; reviewDecision?: string | null; comments?: unknown[]; statusCheckRollup?: GhCheck[] | null };
 type RGB = [number, number, number];
 type Parts = ReturnType<Ui["Text"]>[];
 type Snapshot = {
@@ -76,22 +97,30 @@ let rowList: string[] = ["git", "prompt", "status", "hidden"];
 let segmentList: string[] = [...STATUS_ROW, "hidden"];
 
 // A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their default order.
-function ordered(option: unknown, defaults: readonly string[]): string[] {
+function ordered<T extends string>(option: unknown, defaults: readonly T[]): T[] {
   const named = typeof option === "string" ? option.split(",").map((name) => name.trim()) : [];
-  return [...new Set([...named.filter((name) => defaults.includes(name)), ...defaults])];
+  return [...new Set([...named.filter((name): name is T => defaults.some((known) => known === name)), ...defaults])];
 }
 
 // A list's names by zone: before the first marker, between the markers, after the last.
 function zonesOf(list: string[], markers: string[]): string[][] {
-  const zones: string[][] = [[]];
-  for (const name of list) markers.includes(name) ? zones.push([]) : zones[zones.length - 1].push(name);
+  let zone: string[] = [];
+  const zones = [zone];
+  for (const name of list) {
+    if (markers.includes(name)) {
+      zone = [];
+      zones.push(zone);
+    } else {
+      zone.push(name);
+    }
+  }
   return zones;
 }
 
 // What a row list says, as the /config options it is saved in: whether each row shows, a shown row's side of the prompt,
 // and which comes first (only when both show: the order of the list).
 function rowOptions(list: string[]): Record<string, string | boolean> {
-  const [above, below, hidden] = zonesOf(list, ROW_MARKERS);
+  const [above = [], below = [], hidden = []] = zonesOf(list, ROW_MARKERS);
   const shown = [...above, ...below];
   const saved: Record<string, string | boolean> = { row_git: !hidden.includes("git"), row_status: !hidden.includes("status") };
   for (const name of shown) saved[`row_${name}_position`] = above.includes(name) ? "above" : "below";
@@ -101,7 +130,7 @@ function rowOptions(list: string[]): Record<string, string | boolean> {
 
 // The same for the status row's tags: each tag's toggle, and every tag in order, the hidden ones last.
 function segmentOptions(list: string[]): Record<string, string | boolean> {
-  const [shown, hidden] = zonesOf(list, SEGMENT_MARKERS);
+  const [shown = [], hidden = []] = zonesOf(list, SEGMENT_MARKERS);
   const saved: Record<string, string | boolean> = { segment_order: [...shown, ...hidden].join(",") };
   for (const name of STATUS_ROW) saved[`segment_${name}`] = shown.includes(name);
   return saved;
@@ -145,7 +174,8 @@ const PING_LEAD_S: Record<number, number> = { 3_600: 300, 300: 60 };
 const PING_GAP_MS = 10_000;
 // Sweep speed per effort, linear: each step adds a ninth of a cycle a second, so high (3) sweeps once every 3 s.
 // "none" is a request sent without effort; a level missing here (a numeric budget) sweeps as high.
-const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+const HIGH_STEPS = 3;
+const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: HIGH_STEPS, xhigh: 4, max: 5 };
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
 const CONTEXT_CELLS = 10;
@@ -153,7 +183,8 @@ const CONTEXT_CELLS = 10;
 const COMPACT_HINT_AT = 0.9;
 const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
 // How far into the dumb zone the context is, by its size over the smart zone's: the further, the sloppier the model.
-const DUMB_ZONE_DEPTHS: [number, string][] = [[1.25, "just into"], [1.5, "well into"], [2, "deep into"], [Infinity, "very deep into"]];
+const DUMB_ZONE_DEPTHS: [number, string][] = [[1.25, "just into"], [1.5, "well into"], [2, "deep into"]];
+const DUMB_ZONE_DEEPEST = "very deep into";
 // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
 const OVERFLOW_RED: RGB = [239, 68, 68];
 // A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.
@@ -163,12 +194,14 @@ const LIMITS: { kind: string; badge: string; seconds: number; segments: number; 
   { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10, from: [34, 211, 238], to: [15, 140, 150] },
 ];
 // The four stops of statusline.zsh's _sl_pal: cyan, blue, purple, pink.
-const PALETTE: RGB[] = [
+const PALETTE: readonly [RGB, RGB, RGB, RGB] = [
   [34, 211, 216],
   [96, 165, 250],
   [168, 85, 247],
   [217, 70, 239],
 ];
+// The stop at a position that wraps around the four.
+const stop = (i: number): RGB => PALETTE[i % PALETTE.length] ?? PALETTE[0];
 const EMPTY_FG: RGB = [55, 58, 72];
 // The colour code, by what a thing does:
 // - hoverable: a tag, then the value on the grey above (EMPTY_FG), which a hover lays its own value over;
@@ -272,13 +305,13 @@ export const register: Register = (on, options) => {
   const tags = ordered(options.segment_order, STATUS_ROW);
   const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
   segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
-  const rows: Record<string, Layout> = {
+  const rows: Record<"git" | "status", Layout> = {
     git: options.row_git === true ? GIT_ROW : [],
-    status: options.row_status === true ? (shownTags as Layout) : [],
+    status: options.row_status === true ? shownTags : [],
   };
-  const stacked = options.row_order === "status_first" ? ["status", "git"] : ["git", "status"];
+  const stacked: ("git" | "status")[] = options.row_order === "status_first" ? ["status", "git"] : ["git", "status"];
   const shownRows = stacked.filter((name) => options[`row_${name}`] === true);
-  const isAbove = (name: string) => (name === "git" ? options.row_git_position : options.row_status_position) === "above";
+  const isAbove = (name: "git" | "status") => (name === "git" ? options.row_git_position : options.row_status_position) === "above";
   aboveRows = shownRows.filter(isAbove).map((name) => rows[name]);
   belowRows = shownRows.filter((name) => !isAbove(name)).map((name) => rows[name]);
   rowList = [...shownRows.filter(isAbove), "prompt", ...shownRows.filter((name) => !isAbove(name)), "hidden", ...stacked.filter((name) => !shownRows.includes(name))];
@@ -295,7 +328,7 @@ export const register: Register = (on, options) => {
     await $.state.set(LOAD, load);
     const own = (tick = $.clock.every(FRAME_MS, () => {
       void $.state.get(LOAD).then(({ value }) => value !== load && own.cancel());
-      const steps = EFFORT_STEPS[String(effort)] ?? EFFORT_STEPS.high;
+      const steps = EFFORT_STEPS[String(effort)] ?? HIGH_STEPS;
       phase = (phase + (FRAME_MS / 1000) * steps * STEP_CYCLES_PER_SECOND) % 1;
       void $.state.set(TICK, Date.now());
       // Read every frame, so a /model switch shows within a frame instead of when the next turn ends.
@@ -444,7 +477,7 @@ export const register: Register = (on, options) => {
 };
 
 // The rows from the state, none until the first usage reading; read every frame (the tick), so they move live.
-async function drawRows($: EngineInterface, e: any, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {
+async function drawRows($: EngineInterface, e: ResolveInput, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return [];
@@ -597,14 +630,9 @@ function refreshRejected($: EngineInterface): void {
     const { stdout } = await $.process.run(["sh", "-c", tails, "sh", `${await configDir($)}/projects`], { timeoutMs: 10_000 });
     const rejected: Record<string, number> = {};
     for (const line of stdout.split("\n")) {
-      let row: any;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const hit = row?.apiError === "usage_limit_reached" ? (row.quotaLimits ?? row.apiErrorParams?.rate_limit_info) : undefined;
-      if (typeof hit?.rateLimitType !== "string" || typeof hit.resetsAt !== "number") continue;
+      const row = parseJson(line);
+      const hit = isRecord(row) && row.apiError === "usage_limit_reached" ? (row.quotaLimits ?? (isRecord(row.apiErrorParams) ? row.apiErrorParams.rate_limit_info : undefined)) : undefined;
+      if (!isRecord(hit) || typeof hit.rateLimitType !== "string" || typeof hit.resetsAt !== "number") continue;
       rejected[hit.rateLimitType] = Math.max(rejected[hit.rateLimitType] ?? 0, hit.resetsAt * 1000);
     }
     await $.state.set(REJECTED, rejected);
@@ -669,7 +697,7 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
       Text({ color: hex(AGENTS_CHIP.from), children: "\u25c6" }),
       Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
       Link({ href: SMART_ZONE_URL, children: Text({ color: hex(AGENTS_CHIP.from), underline: true, children: "Smart zone" }) }),
-      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)![1]} the dumb zone now. ` : ". " }),
+      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? DUMB_ZONE_DEEPEST} the dumb zone now. ` : ". " }),
       Button({
         key: "compact",
         plain: true,
@@ -853,21 +881,22 @@ async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | 
 function parsePrices(md: string): Record<string, Price> {
   const out: Record<string, Price> = {};
   for (const line of md.split("\n")) {
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells.length < 6 || !line.includes("$")) continue;
-    const key = cells[0]
-      .split("(")[0]
+    const [label, ...rates] = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (label === undefined || rates.length < 5 || !line.includes("$")) continue;
+    const key = label
+      .replace(/\(.*/, "")
       .replace(/[*`]/g, "")
       .trim()
       .toLowerCase()
       .replace(/[ .]/g, "-")
       .replace(/[^a-z0-9-]/g, "");
     if (!key.startsWith("claude-")) continue;
-    const [i, w5, w1, r, o] = cells.slice(1, 6).map((c) => Number((/\$([\d.,]+)/.exec(c)?.[1] ?? "").replace(/,/g, "")));
+    const [i = 0, w5 = 0, w1 = 0, r = 0, o = 0] = rates.slice(0, 5).map((c) => Number((/\$([\d.,]+)/.exec(c)?.[1] ?? "").replace(/,/g, "")));
     if (!(i > 0 && o > 0)) continue;
-    const over = /over ([\d,]+) tokens/.exec(cells[0]);
-    if (over && out[key] && !out[key].over) out[key].over = { above: Number(over[1].replace(/,/g, "")), rate: { i, w5, w1, r, o } };
-    else if (!(key in out)) out[key] = { i, w5, w1, r, o };
+    const over = /over ([\d,]+) tokens/.exec(label)?.[1];
+    const known = out[key];
+    if (over && known && !known.over) known.over = { above: Number(over.replace(/,/g, "")), rate: { i, w5, w1, r, o } };
+    else if (!known) out[key] = { i, w5, w1, r, o };
   }
   return out;
 }
@@ -895,15 +924,13 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   // A compaction swaps the conversation for its summary: the cached prefix before it is never read again.
   let compactedAt = -Infinity;
   const add = (line: string) => {
-    let row: any;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (row?.subtype === "compact_boundary" && !row.agentId) compactedAt = Math.max(compactedAt, Date.parse(row.timestamp ?? ""));
-    const u = row?.message?.usage;
-    if (row?.type !== "assistant" || typeof u !== "object" || u === null) return;
+    const parsed = parseJson(line);
+    if (!isRecord(parsed)) return;
+    const row: TranscriptRow = parsed;
+    if (row.subtype === "compact_boundary" && !row.agentId) compactedAt = Math.max(compactedAt, Date.parse(row.timestamp ?? ""));
+    const u = row.message?.usage;
+    if (row.type !== "assistant" || !isRecord(u)) return;
+    const model = String(row.message?.model ?? "");
     // One line per content block, all of a request's sharing its requestId: count the first.
     const rid = row.requestId ?? row.uuid;
     if (!rid || seen.has(rid)) return;
@@ -924,7 +951,7 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     if (!row.agentId && Number.isFinite(at)) {
       const prompt = counts.inp + counts.read + counts.w5 + counts.w1;
       mains.push({ at, prompt, read: counts.read });
-      if (!last || at >= last.at) last = { at, prompt, model: String(row.message.model ?? ""), speed: u.speed };
+      if (!last || at >= last.at) last = { at, prompt, model, speed: u.speed };
       if (!first || at < first.at) first = { at, prompt };
       if ((counts.w5 > 0 || counts.w1 > 0) && at >= ttlAt) {
         ttlAt = at;
@@ -933,7 +960,7 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     }
     spend.requests++;
     spend.tokens += counts.inp + counts.out + counts.read + counts.w5 + counts.w1;
-    const usd = requestCost(String(row.message.model ?? ""), u.speed, counts);
+    const usd = requestCost(model, u.speed, counts);
     if (usd === undefined) spend.unpriced++;
     else spend.usd += usd;
   };
@@ -951,7 +978,11 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   // ponytail: an hour is assumed, the longest the API offers; the read shows only that it outlived five minutes.
   mains.sort((a, b) => a.at - b.at);
   const outlived =
-    ttl === 300 && mains.some((m, i) => i > 0 && m.at - mains[i - 1].at > 300_000 && m.read >= 0.8 * mains[i - 1].prompt && !stamps.some((t) => t > mains[i - 1].at && t < m.at));
+    ttl === 300 &&
+    mains.some((m, i) => {
+      const before = mains[i - 1];
+      return before !== undefined && m.at - before.at > 300_000 && m.read >= 0.8 * before.prompt && !stamps.some((t) => t > before.at && t < m.at);
+    });
   return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined };
 }
 
@@ -978,7 +1009,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
   const git = async (...args: string[]) => (await exec(args)).stdout.trim();
   const ok = async (...args: string[]) => (await exec(args)).exitCode === 0;
 
-  const [commonDir, gitDir, top, branch = "", upstream = ""] = (
+  const [commonDir = "", gitDir = "", top = "", branch = "", upstream = ""] = (
     await git("rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel", "--abbrev-ref", "HEAD", "--abbrev-ref", "@{upstream}")
   ).split("\n");
   if (!gitDir) {
@@ -1008,7 +1039,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
 
   // No remote knows the branch: count against the default branch, which says nothing about what is pushed.
   const against = track || (await mainRef());
-  const remote = track.split("/")[0];
+  const [remote = ""] = track.split("/");
   const web = track ? webUrl(await git("remote", "get-url", remote)) : "";
   const [ahead = 0, behind = 0] = against
     ? (await git("rev-list", "--left-right", "--count", `HEAD...${against}`)).split(/\s+/).map(Number)
@@ -1063,7 +1094,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
       trace($, `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
       return null;
     }
-    const pr = JSON.parse(stdout);
+    const pr: GhPr | null = JSON.parse(stdout);
     if (typeof pr?.number !== "number") return null;
     const checks = { pending: 0, failure: 0, success: 0 };
     for (const c of pr.statusCheckRollup ?? []) {
@@ -1075,11 +1106,11 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
     }
     const url = typeof pr.url === "string" ? pr.url : "";
     // A check run links its details, a commit status its target.
-    const failed = (pr.statusCheckRollup ?? []).filter((c: any) => ["FAILURE", "ERROR"].includes(c.conclusion || c.state));
+    const failed = (pr.statusCheckRollup ?? []).filter((c) => ["FAILURE", "ERROR"].includes(c.conclusion || c.state || ""));
     return {
       number: pr.number,
       url,
-      failedUrls: failed.map((c: any) => String(c.detailsUrl || c.targetUrl || "")),
+      failedUrls: failed.map((c) => c.detailsUrl || c.targetUrl || ""),
       state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft === true ? "draft" : "open",
       conflicting: pr.mergeable === "CONFLICTING",
       review: pr.reviewDecision ?? "",
@@ -1098,7 +1129,7 @@ async function basedOff(git: (...args: string[]) => Promise<string>, branch: str
   const log = (await git("reflog", "show", branch, "--format=%gs")).split("\n");
   const created = log.at(-1) ?? "";
   const from = /Created from refs\/heads\/(.*)/.exec(created);
-  if (from) return from[1];
+  if (from) return from[1] ?? "";
   if (!created.includes("Created from HEAD")) return /checkout: moving from (.*) to /.exec(created)?.[1] ?? "";
   const name = log.map((l) => /renamed refs\/heads\/(.*) to /i.exec(l)?.[1]).find(Boolean) ?? branch;
   const moves = (await git("reflog", "--format=%gs"))
@@ -1117,8 +1148,8 @@ function requestCost(
   const key = Object.keys(prices ?? {})
     .filter((k) => model.startsWith(k))
     .sort((a, b) => b.length - a.length)[0];
-  if (!prices || key === undefined) return undefined;
-  const price = prices[key];
+  const price = key === undefined ? undefined : prices?.[key];
+  if (!price) return undefined;
   const prompt = c.inp + c.read + c.w5 + c.w1;
   const rate = price.over && prompt > price.over.above ? price.over.rate : price;
   const fast = speed === "fast" && (model.startsWith("claude-opus-5") || model.startsWith("claude-opus-4-8")) ? 2 : 1;
@@ -1247,9 +1278,9 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
     (g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : ""),
   ] as (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
   const shown = segments.map((pieces, k) => ({ pieces, path: k < 3 })).filter(({ pieces }) => pieces.some((p) => p.text !== ""));
-  const parts = shown.map(({ pieces }, i) => linkRun(Box, Text, Link, pieces, (j, n) => lerp(PALETTE[(i + 1) % PALETTE.length], PALETTE[(i + 2) % PALETTE.length], j, n)));
+  const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => lerp(stop(i + 1), stop(i + 2), j, n)) }));
   // The folders, branch and worktree are one path: compact spacing closes it up; the row's gap parts what follows.
-  return [Box({ flexDirection: "row", columnGap: gap, children: parts.filter((_, i) => shown[i].path) }), ...parts.filter((_, i) => !shown[i].path)];
+  return [Box({ flexDirection: "row", columnGap: gap, children: parts.filter((p) => p.path).map((p) => p.part) }), ...parts.filter((p) => !p.path).map((p) => p.part)];
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.
@@ -1354,7 +1385,7 @@ function contextIcon(current: number, usable: number, remaining: number, smart: 
   if (current <= smart) return current * 2 < smart ? "◇" : "◆";
   const span = usable - smart;
   if (span <= 0) return "●";
-  return "○◔◑◕●"[Math.min(Math.floor(((current - smart) * 5) / span), 4)];
+  return [..."○◔◑◕●"][Math.min(Math.floor(((current - smart) * 5) / span), 4)] ?? "●";
 }
 
 // One Text per character, so a gradient can colour each glyph (zsh's _sl_apply_fg).
@@ -1378,7 +1409,8 @@ function run(
 function lerp(a: RGB, b: RGB, i: number, n: number): RGB {
   if (n <= 1) return a;
   const pct = Math.trunc((i * 100) / (n - 1));
-  return a.map((v, k) => v + Math.trunc(((b[k] - v) * pct) / 100)) as RGB;
+  const mix = (from: number, to: number) => from + Math.trunc(((to - from) * pct) / 100);
+  return [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])];
 }
 
 // A gradient sliding along the text: each glyph's place, shifted by the phase, folded into a there-and-back sweep so the loop has no seam.
@@ -1435,12 +1467,13 @@ function formatTokens(n: number): string {
 function formatModel(id: string): string {
   const m = /claude-([a-z]+)-(\d+)(?:-(\d{1,2})(?!\d))?/.exec(id);
   if (!m) return id;
-  return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ""}`;
+  const [, family = "", major = "", minor] = m;
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ""}`;
 }
 
 // Matches the family anywhere in the name, so an ID, a display name or an alias all find it;
 // an unknown family sweeps cyan to purple.
 function modelStyle(model: string): ModelStyle {
-  const family = Object.keys(MODEL_STYLES).find((f) => model.toLowerCase().includes(f));
-  return family ? MODEL_STYLES[family] : { from: PALETTE[0], to: PALETTE[2] };
+  const style = Object.entries(MODEL_STYLES).find(([family]) => model.toLowerCase().includes(family))?.[1];
+  return style ?? { from: PALETTE[0], to: PALETTE[2] };
 }

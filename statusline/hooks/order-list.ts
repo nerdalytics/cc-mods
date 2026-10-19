@@ -19,7 +19,7 @@ const OrderList: ClientModule<Props, State> = (props, surface) => {
 
   surface.onPointer((e) => {
     const s = cur();
-    if (e.type === "down" && e.y >= 0 && e.y <= last() && !props.fixed.includes(s.order[e.y])) {
+    if (e.type === "down" && e.y >= 0 && e.y <= last() && !props.fixed.includes(s.order[e.y] ?? "")) {
       surface.setState({ ...s, drag: { from: e.y, to: e.y } });
     } else if (e.type === "move" && s.drag) {
       const to = Math.min(Math.max(e.y, 0), last());
