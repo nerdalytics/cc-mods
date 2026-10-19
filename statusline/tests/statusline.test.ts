@@ -15,6 +15,16 @@ const isDrawn = (node: unknown): node is Drawn => typeof node === "object" && no
 const elements = (nodes: readonly unknown[]): Drawn[] => nodes.filter(isDrawn);
 // The text a drawn tree spells; a one-glyph Text reads as that glyph.
 const flat = (node: unknown): string => (typeof node === "string" ? node : isDrawn(node) ? node.children.map(flat).join("") : "");
+// Which halves of each ▀ cell are lit: B both, T the top (the glyph colour), U the bottom (the background), _ neither.
+// A dim half is #373a48.
+const litCells = (cells: readonly unknown[]): string =>
+  elements(cells)
+    .map(({ props }) => {
+      const top = props.color !== "#373a48";
+      const bottom = props.backgroundColor !== "#373a48";
+      return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
+    })
+    .join("");
 const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
 // A query the test counts on finding.
 function must<T>(found: T | undefined, what: string): T {
@@ -69,8 +79,7 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-type Scenario = { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[] };
-async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [] }: Scenario = {}): Promise<string[]> {
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [] }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[] } = {}): Promise<string[]> {
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
@@ -182,14 +191,7 @@ describe("statusline", () => {
     }
     if (!context) throw new Error("the context chip did not draw");
     expect(flat(context.children[0])).toBe(" ● ");
-    const dim = "#373a48";
-    const halves = elements(context.children.slice(1, -1))
-      .map((t) => {
-        const top = t.props.color !== dim;
-        const bottom = t.props.backgroundColor !== dim;
-        return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
-      })
-      .join("");
+    const halves = litCells(context.children.slice(1, -1));
     expect(halves).toBe("U_________");
     expect(flat(context.children.at(-1)).trim()).toBe("102.9K");
     // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap
@@ -245,14 +247,7 @@ describe("statusline", () => {
     const ui = await mountHint($);
     const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
     expect(flat(context.children[0])).toBe(" ◆ ");
-    const dim = "#373a48";
-    const halves = elements(context.children.slice(1, -1))
-      .map((t) => {
-        const top = t.props.color !== dim;
-        const bottom = t.props.backgroundColor !== dim;
-        return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
-      })
-      .join("");
+    const halves = litCells(context.children.slice(1, -1));
     expect(halves).toBe("BBBBBUUUU_");
     expect(flat(context.children.at(-1)).trim()).toBe("950.0K");
     await ui.unmount();
@@ -279,19 +274,9 @@ describe("statusline", () => {
   // names the window, the tokens and the breakdown, and the bar is the arithmetic on them: the tokens left, the share of
   // them underneath (B both halves lit, T the smart zone's top half, U the bottom half), and the glyph for the zone.
   const contextBar = async (ui: Mounted<"terminal", "PromptHint">, left: string) => {
-    const dim = "#373a48";
     for (let i = 0; i < 50; i++) {
       const chip = await ui.find({ type: "Box", key: "context" });
-      if (chip && flat(chip.children.at(-1)).trim() === left) {
-        const lit = elements(chip.children.slice(1, -1))
-          .map((t) => {
-            const top = t.props.color !== dim;
-            const bottom = t.props.backgroundColor !== dim;
-            return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
-          })
-          .join("");
-        return { badge: flat(chip.children[0]), lit };
-      }
+      if (chip && flat(chip.children.at(-1)).trim() === left) return { badge: flat(chip.children[0]), lit: litCells(chip.children.slice(1, -1)) };
       await settle();
     }
     throw new Error(`the context bar never said ${left} left`);
@@ -358,14 +343,7 @@ describe("statusline", () => {
 
     // B both halves lit, T top (time) only, U bottom (usage) only, _ neither; 7 cells for 7d, then 10 for 5h.
     // A dim half is #373a48: the glyph colour is the top half, the background the bottom.
-    const dim = "#373a48";
-    const cells = (await ui.findAll({ type: "Text", text: "▀" }))
-      .map((t) => {
-        const top = t.props.color !== dim;
-        const bottom = t.props.backgroundColor !== dim;
-        return top && bottom ? "B" : top ? "T" : bottom ? "U" : "_";
-      })
-      .join("");
+    const cells = litCells(await ui.findAll({ type: "Text", text: "▀" }));
     expect(cells).toBe("BBUUU__BBTTT_____");
 
     // Each limit is a hover scope; its countdown to the reset waits hidden until the pointer is on it.

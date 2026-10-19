@@ -184,7 +184,6 @@ const COMPACT_HINT_AT = 0.9;
 const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
 // How far into the dumb zone the context is, by its size over the smart zone's: the further, the sloppier the model.
 const DUMB_ZONE_DEPTHS: [number, string][] = [[1.25, "just into"], [1.5, "well into"], [2, "deep into"]];
-const DUMB_ZONE_DEEPEST = "very deep into";
 // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
 const OVERFLOW_RED: RGB = [239, 68, 68];
 // A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.
@@ -699,7 +698,7 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
       Text({ color: hex(AGENTS_CHIP.from), children: "\u25c6" }),
       Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
       Link({ href: SMART_ZONE_URL, children: Text({ color: hex(AGENTS_CHIP.from), underline: true, children: "Smart zone" }) }),
-      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? DUMB_ZONE_DEEPEST} the dumb zone now. ` : ". " }),
+      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? "very deep into"} the dumb zone now. ` : ". " }),
       Button({
         key: "compact",
         plain: true,
