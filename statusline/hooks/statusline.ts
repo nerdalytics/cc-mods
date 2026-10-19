@@ -166,6 +166,9 @@ const REJECTED_POLL_MS = 10_000;
 // auto_handoff option (plugin.json userConfig, a /config row) is on: while the cache is warm the handoff reads it at
 // the hit price, and the document it leaves lets the next session start without it.
 const HANDOFF_COMMAND = "statusline:handoff";
+// A handoff stays the session's own until a main-conversation request comes later than its file by more than this: the
+// reply that closes the handoff's turn lands a little after the file, and a later one means the work went on without it.
+const HANDOFF_GRACE_MS = 5 * 60_000;
 // With the keep_warm_pings option on, a minimal prompt of the mod's own reads the cache just before it expires, which
 // restarts its TTL at the read price. The lead is how many seconds before expiry the ping goes out, by TTL; the gap
 // keeps one ping from going out twice before its turn has started.
@@ -651,14 +654,15 @@ async function findHandoff($: EngineInterface): Promise<void> {
 
 // Once this session wrote a handoff, the line that weighs the two ways on: the next prompt here, which writes the whole
 // conversation to the cache again, against a fresh session from the handoff file, a button. While the cache is warm it
-// shows only until the person's next prompt, which a handoff written while they were away has not met yet.
+// shows only until the person's next prompt, which a handoff written while they were away has not met yet. A handoff
+// that later requests have moved past is not offered, cold or warm: a fresh session from it would lose what came after.
 async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
   if (!freshStart || (await dismissed($, "fresh"))) return undefined;
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: handoff } = await $.state.get(HANDOFF);
   const { value: sent } = await $.state.get(SENT);
   const c = tokens?.cache;
-  if (!c || !handoff) return undefined;
+  if (!c || !handoff || Math.max(c.at, sent ?? 0) > handoff.at + HANDOFF_GRACE_MS) return undefined;
   const cold = cacheLeft(c, sent, Math.floor(Date.now() / 1000)) <= 0;
   if ((!cold && handoff.at < promptAt) || (await agentsAtWork($))) return undefined;
   // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system

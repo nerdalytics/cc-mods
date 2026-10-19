@@ -516,13 +516,17 @@ describe("statusline", () => {
 
   const idle = [subagent("completed")];
   const working = [subagent("running")];
-  for (const [title, files, offered, lastAgo, options, agents, prompted] of [
+  for (const [title, files, offered, lastAgo, options, agents, prompted, handoffBefore = 0.5] of [
     ["offers a fresh session from this session's handoff file once the cache is cold", ["HANDOFF-2026-10-16-0900.md", "HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle],
     ["offers none from a handoff file older than the session", ["HANDOFF-2026-10-16-0900.md"], false, 120, {}, idle],
     ["offers it while the cache is warm, for a handoff written since the person's last prompt", ["HANDOFF-2026-10-16-1200.md"], true, 10, {}, idle],
     ["offers none once the person has prompted since a handoff, with the cache warm", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle, true],
     ["offers none when the person turned fresh_start off", ["HANDOFF-2026-10-16-1200.md"], false, 120, { fresh_start: false }, idle],
     ["offers none while a subagent is at work", ["HANDOFF-2026-10-16-1200.md"], false, 120, {}, working],
+    // The handoff's file is written before the reply that closes its turn: half a minute is that reply, four minutes still is.
+    ["offers a handoff only its own closing reply follows, up to five minutes after the file", ["HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle, false, 4],
+    ["offers none from a handoff that later requests have moved past, once the cache is cold", ["HANDOFF-2026-10-16-1200.md"], false, 120, {}, idle, false, 60],
+    ["offers none from a handoff that later requests have moved past, with the cache warm", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle, false, 60],
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
@@ -535,6 +539,8 @@ describe("statusline", () => {
       JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
     const transcript = [row("r1", 150, 20_000), row("r2", lastAgo, 1_000_000)].join("\n");
     const file = (name: string, mtimeMs: number) => ({ name, kind: "file" as const, size: 40_000, mtimeMs, isLink: false });
+    // The 0900 file is older than the session; the others were written `handoffBefore` minutes before its last request.
+    const handoffAt = Date.now() - (lastAgo + handoffBefore) * 60_000;
     const ran: string[] = [];
     const sent: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -543,7 +549,7 @@ describe("statusline", () => {
     on("session.id", () => ({ value: "sid-1" }));
     on("session.root", () => ({ value: "/work" }));
     on("agent.list", () => ({ value: agents }));
-    on("fs.list", () => ({ value: [...files.map((name) => file(name, name.endsWith("0900.md") ? 1_000 : 9_000)), file("README.md", 9_500)] }));
+    on("fs.list", () => ({ value: [...files.map((name) => file(name, name.endsWith("0900.md") ? 1_000 : handoffAt)), file("README.md", 9_500)] }));
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
     on("process.spawn", async function* () {
