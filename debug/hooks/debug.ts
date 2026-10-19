@@ -4,8 +4,15 @@ import type { Elements, EngineInterface, Register } from "claude-code";
 
 const PROBE = "probe";
 const PR_TRACE_PANE = "pr-trace";
+// The commands are the plugin's own files under commands/, which Claude Code lists under the plugin's name.
+const PROBE_COMMAND = "debug:probe";
+const PR_TRACE_COMMAND = "debug:pr-trace";
+const HANDOFF_TRACE_PANE = "handoff-trace";
+const HANDOFF_TRACE_COMMAND = "debug:handoff-trace";
 // The statusline mod's PR fetch log; its owner writes it, any plugin may read it.
 const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
+// Why the statusline mod's handoff did or did not run while its window was open.
+const HANDOFF_TRACE = { plugin: "statusline", key: "handoffTrace" } as const;
 const COLS = 32;
 const ROWS = 6;
 const PX = 64;
@@ -38,29 +45,34 @@ async function mark($: EngineInterface, e: any, next: (e: any) => Promise<any>) 
   return Box({ flexDirection: "row", children: [Text({ color: "#ff0000", bold: true, children: `X ${e.component} ` }), drawn] });
 }
 
+// The newest lines of a statusline trace that fit the pane, or what to say while it has none.
+function traceLines($: EngineInterface, e: any, value: unknown, empty: string) {
+  const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
+  const lines = (value as string[] | undefined) ?? [];
+  const room = Math.max(1, (e.viewport?.rows ?? 24) - 4);
+  return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: empty })] });
+}
+
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     const result = await next(e);
     await $.ui.open({ id: "markers", title: "markers" });
-    await $.command.register({ name: "probe", description: "Open a pane that draws text, a Raster and an Image" });
-    await $.command.register({ name: "pr-trace", description: "Open a pane that shows the statusline mod's PR fetches" });
     return result;
   });
-  on("command.run", { command: "probe" }, async ($) => {
+  on("command.run", { command: PROBE_COMMAND }, async ($) => {
     const opened = await $.ui.open({ id: PROBE, title: "probe" });
     return { text: opened.isPlaced ? "Probe pane opened." : `Probe pane not placed: ${opened.reason}` };
   });
-  on("command.run", { command: "pr-trace" }, async ($) => {
+  on("command.run", { command: PR_TRACE_COMMAND }, async ($) => {
     const opened = await $.ui.open({ id: PR_TRACE_PANE, title: "PR trace" });
     return { text: opened.isPlaced ? "PR trace pane opened." : `PR trace pane not placed: ${opened.reason}` };
   });
-  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e) as Elements["terminal"];
-    const { value } = await $.state.get(PR_TRACE);
-    const lines = (value as string[] | undefined) ?? [];
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 4);
-    return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: "No PR fetch yet." })] });
+  on("command.run", { command: HANDOFF_TRACE_COMMAND }, async ($) => {
+    const opened = await $.ui.open({ id: HANDOFF_TRACE_PANE, title: "Handoff trace" });
+    return { text: opened.isPlaced ? "Handoff trace pane opened." : `Handoff trace pane not placed: ${opened.reason}` };
   });
+  on("ui.render", { component: "Pane", requestId: PR_TRACE_PANE }, async ($, e) => traceLines($, e, (await $.state.get(PR_TRACE)).value, "No PR fetch yet."));
+  on("ui.render", { component: "Pane", requestId: HANDOFF_TRACE_PANE }, async ($, e) => traceLines($, e, (await $.state.get(HANDOFF_TRACE)).value, "No handoff window yet."));
   on("ui.render", { component: "Pane", requestId: PROBE }, async ($, e) => {
     const { Box, Text, Raster, Image } = $.ui.resolve(e) as Elements["terminal"];
     return Box({
