@@ -527,11 +527,14 @@ export const register: Register = (on, options) => {
     const fields = Object.entries(COLORS).flatMap(([name, { group, label, rgb }]) => {
       if (!isColor(name) || (!gradients && name.endsWith(".to"))) return [];
       const end = name.endsWith(".from") ? (gradients ? "light end" : "colour") : name.endsWith(".to") ? "dark end" : "";
+      // In a narrow pane the label wraps under itself; the swatch and the field keep their width, so the colour stays whole.
       const field = Box({
         flexDirection: "row",
+        columnGap: 1,
         children: [
-          Text({ color: hex(color(name)), children: "██ " }),
-          Input({ key: name, label: `${[end, label].filter(Boolean).join(", ")} `, value: hex(color(name)), placeholder: hex(rgb), submitLabel: "save", onSubmit: (value) => saveColor($, options.colors, name, value) }),
+          Box({ flexShrink: 0, children: [Text({ color: hex(color(name)), children: "██" })] }),
+          Box({ flexGrow: 1, flexShrink: 1, children: [Text({ children: [end, label].filter(Boolean).join(", ") })] }),
+          Box({ flexShrink: 0, children: [Input({ key: name, value: hex(color(name)), placeholder: hex(rgb), submitLabel: "save", onSubmit: (value) => saveColor($, options.colors, name, value) })] }),
         ],
       });
       return group ? [Box({ height: 1 }), Text({ bold: true, children: group }), field] : [field];
@@ -543,11 +546,13 @@ export const register: Register = (on, options) => {
         Text({ dimColor: true, children: "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default." }),
         Box({ height: 1 }),
         // The mod's own button face, as the offer lines draw theirs, after the setting it changes.
+        // Too narrow for both, the button goes whole to the next line rather than splitting.
         Box({
           flexDirection: "row",
+          flexWrap: "wrap",
           children: [
             Text({ dimColor: true, children: gradients ? "Gradients are on. " : "Gradients are off: one colour per gradient. " }),
-            Button({
+            Box({ flexShrink: 0, children: [Button({
               key: "gradients",
               plain: true,
               onPress: async () => {
@@ -555,7 +560,7 @@ export const register: Register = (on, options) => {
                 if (deny) $.ui.toast(`Statusline colours: ${deny}`);
               },
               children: buttonLabel(Text, buttonLook("main"), "◑", gradients ? "Turn gradients off" : "Turn gradients on"),
-            }),
+            })] }),
           ],
         }),
         ...fields,

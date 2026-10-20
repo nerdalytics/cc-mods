@@ -1660,6 +1660,22 @@ describe("statusline", () => {
     expect(written).toEqual([["colors", "pr.open=#000000,turns.to=#abcdef"]]);
   });
 
+  test("keeps a colour's swatch and field whole in a narrow pane, its label wrapping between them", async ($, on) => {
+    on("config.list", () => ({ value: [] }));
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 24, placement: "dock", ...SITE } });
+    const boxes = await ui.findAll({ type: "Box" });
+    // A field is a leaf with no children of its own, so the children are read by their props alone.
+    const hasProps = (node: unknown): node is FoundElement => typeof node === "object" && node !== null && "props" in node;
+    const holding = (pick: (b: FoundElement) => boolean) => boxes.find((b) => b.props.flexShrink === 0 && b.children.filter(hasProps).some(pick));
+    must(holding((c) => c.props.key === "pr.open"), "the pr.open field, unshrinking");
+    must(holding((c) => flat(c) === "██"), "a swatch, unshrinking");
+    must(holding((c) => c.props.key === "gradients"), "the gradients button, unshrinking");
+    // The label is text of its own, not the field's: it wraps where the field cannot.
+    expect((await ui.find({ type: "Input", key: "pr.open" }))?.props.label).toBeUndefined();
+    expect(await ui.find({ type: "Text", text: "a failed check's cross" })).toBeDefined();
+    await ui.unmount();
+  });
+
   test("writes to an installed copy's rows, named for its marketplace", async ($, on) => {
     const written: string[] = [];
     const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `statusline@cc-mods.${field}`, provider: { plugin: "statusline@cc-mods", tier: "user" } });
