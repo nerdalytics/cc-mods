@@ -210,7 +210,9 @@ const FORECAST_FROM = 0.1;
 const COMPACT_HINT_AT = 0.9;
 const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
 // How far into the dumb zone the context is, by its size over the smart zone's: the further, the sloppier the model.
-const DUMB_ZONE_DEPTHS: [number, string][] = [[1.25, "just into"], [1.5, "well into"], [2, "deep into"]];
+// A log scale, each step half as far again as the last, so the words move on by a share of the context, not by a fixed
+// count of tokens: on a 200K zone, just into up to 300K, well into up to 450K, deep into up to 675K.
+const DUMB_ZONE_DEPTHS: [number, string][] = [[1.5, "just into"], [2.25, "well into"], [3.375, "deep into"]];
 // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
 const OVERFLOW_RED: RGB = [239, 68, 68];
 // A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.

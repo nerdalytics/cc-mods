@@ -681,7 +681,9 @@ describe("statusline", () => {
     ["offers a compaction once 90% of the smart zone is used", 190_000, true, {}, idle],
     ["offers one past the smart zone too", 250_000, true, {}, idle],
     ["words just past the smart zone as just into the dumb zone", 220_000, true, {}, idle],
-    ["words 2.25 times the smart zone as very deep into the dumb zone", 450_000, true, {}, idle],
+    ["words twice the smart zone as well into the dumb zone", 400_000, true, {}, idle],
+    ["words 2.5 times the smart zone as deep into the dumb zone", 500_000, true, {}, idle],
+    ["words 3.5 times the smart zone as very deep into the dumb zone", 700_000, true, {}, idle],
     ["offers none below 90% of the smart zone", 170_000, false, {}, idle],
     ["sizes the offer by the smart_zone_tokens option", 95_000, true, { smart_zone_tokens: 100_000 }, idle],
     ["offers none when the person turned compact_hint off", 190_000, false, { compact_hint: false }, idle],
@@ -723,7 +725,7 @@ describe("statusline", () => {
     expect((await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://www.aihero.dev/ai-coding-dictionary/smart-zone")).toBe(true);
     expect(await ui.find({ type: "Text", text: tokens >= 200_000 ? /^ You're out of the $/ : /^ You're nearly out of the $/ })).toBeDefined();
     expect((await ui.find({ type: "Text", text: /^▌ .* Compact ▐$/ }))?.props).toMatchObject({ color: "#c7d2fe", backgroundColor: "#4f46e5" });
-    const depth = new Map([[220_000, "just into"], [250_000, "well into"], [450_000, "very deep into"]]).get(tokens);
+    const depth = new Map([[220_000, "just into"], [250_000, "just into"], [400_000, "well into"], [500_000, "deep into"], [700_000, "very deep into"]]).get(tokens);
     if (depth) expect(await ui.find({ type: "Text", text: `. Same model, ${depth} the dumb zone now. ` })).toBeDefined();
     await ui.press({ key: "compact" });
     expect(ran).toEqual(["compact"]);
