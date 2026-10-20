@@ -1,5 +1,23 @@
 import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionCompactResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
-import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test } from "claude-code/testing";
+import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test as kitTest, type TestRest } from "claude-code/testing";
+
+// The host has a console too, which the API's globals leave out.
+declare const console: { log: (...data: unknown[]) => void };
+// The tests run in a random order, so one that counts on another's leftovers fails. The kit has no shuffle and the host
+// no environment to pass a seed in: the log names each run's seed.
+const seed = Math.floor(Math.random() * 2 ** 32); // a logged seed here replays its order
+const queued: [string, TestRest][] = [];
+const test = (name: string, ...rest: TestRest) => void queued.push([name, rest]);
+// A seeded generator of [0, 1), an LCG, so an order replays.
+function shuffled<T>(items: T[]): T[] {
+  let s = seed;
+  const next = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32;
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    [items[i], items[j]] = [items[j] as T, items[i] as T];
+  }
+  return items;
+}
 
 // The test host has setTimeout, but the API's globals leave it out; a test waits on it for the hooks it started.
 declare function setTimeout(handler: () => void, ms: number): unknown;
@@ -1728,4 +1746,7 @@ describe("statusline", () => {
     });
     expect(written).toEqual([["gradients", true]]);
   });
+
+  console.log(`statusline tests in random order, seed ${seed}`);
+  for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
 });
