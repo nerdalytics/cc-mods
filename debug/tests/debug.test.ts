@@ -1,5 +1,23 @@
 import type { On } from "claude-code";
-import { describe, type Engine, expect, test } from "claude-code/testing";
+import { describe, type Engine, expect, test as kitTest, type TestRest } from "claude-code/testing";
+
+// The host has a console too, which the API's globals leave out.
+declare const console: { log: (...data: unknown[]) => void };
+// The tests run in a random order, so one that counts on another's leftovers fails. The kit has no shuffle and the host
+// no environment to pass a seed in: the log names each run's seed.
+const seed = Math.floor(Math.random() * 2 ** 32); // a logged seed here replays its order
+const queued: [string, TestRest][] = [];
+const test = (name: string, ...rest: TestRest) => void queued.push([name, rest]);
+// A seeded generator of [0, 1), an LCG, so an order replays.
+function shuffled<T>(items: T[]): T[] {
+  let s = seed;
+  const next = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32;
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    [items[i], items[j]] = [items[j] as T, items[i] as T];
+  }
+  return items;
+}
 
 const PANES = [
   { option: "probe", command: "debug:probe", name: "Probe pane" },
@@ -43,4 +61,7 @@ describe("debug", () => {
   test("marks no render site when markers is switched off", { options: { markers: false } }, async ($, on) => {
     expect(await turnLine($, on)).toEqual(["Cooked for 7s"]);
   });
+
+  console.log(`debug tests in random order, seed ${seed}`);
+  for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
 });
