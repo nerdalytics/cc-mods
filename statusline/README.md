@@ -30,7 +30,7 @@ The first command fetches the marketplace and installs the versions it bumps, an
 
 ## What it shows
 
-The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side.
+The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side. Each row starts at the left edge or the right one, and the `density` option sets how close its tags sit. See [Spacing and alignment](#spacing-and-alignment).
 
 ### Status row
 
@@ -164,6 +164,22 @@ Each drop writes only the options it changed, one `/config` write at a time. The
 
 Each save writes the `colors` option, a comma list of `name=#rrggbb` with only the colours you changed, and the button writes `gradients`. Both are in `/config` too.
 
+## Spacing and alignment
+
+The `density` option sets how close the tags sit, in three steps:
+
+| `density` | Between the tags | Inside the git row's folders, branch and worktree |
+|---|---|---|
+| `compact` | No space in the status row. The git row keeps one. | No spaces: `spike›cc-mods⎇develop` |
+| `standard`, the default | One column | One space: `spike › cc-mods⎇ develop` |
+| `roomy` | Two columns, in both rows | One space, as `standard` |
+
+Under `compact` the model name keeps one column after it, because it has no tag of its own to stop it running into the next one. A default branch keeps one space before it too, because it has no `⎇` to separate it from the folder.
+
+`row_git_align` and `row_status_align` start their row at the `left` edge, the default, or draw it against the `right` one. A row too wide for the window wraps between its tags either way. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences.
+
+`density` replaces the `compact` option of 0.15.0 and earlier, which Claude Code no longer passes to the mod once it is gone from the manifest. If you had `compact` on, set `density` to `compact` in `/config`.
+
 ## Options
 
 <img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
@@ -174,8 +190,10 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 |---|---|---|---|
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
+| Git row › alignment | `row_git_align` | left | Starts the git row at the `left` edge, or draws it against the `right` one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
+| Status row › alignment | `row_status_align` | left | Starts the status row at the `left` edge, or draws it against the `right` one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
 | Lines › order | `line_order` | git,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` (cold cache), `compact` (smart zone) and `forecast` (limit forecast). A name left out goes last; an unknown one is ignored. |
 | Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
@@ -183,7 +201,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
 | Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
 | Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default; an unknown one, or a colour that does not read, is ignored. `/statusline:colors` writes it. |
-| Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
+| Density | `density` | standard | How close the tags sit: `compact`, `standard` or `roomy`, as described under [Spacing and alignment](#spacing-and-alignment). Replaces the `compact` option of 0.15.0 and earlier. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
 | Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the line with the `Start fresh` button once a handoff exists: with the cache cold, or until your next message while it is warm. |

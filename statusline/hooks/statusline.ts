@@ -44,8 +44,8 @@ type Segment = (ui: Ui, s: Snapshot) => Parts;
 const SEGMENTS = {
   model: ({ Box, Text }, s) => {
     const { from, to, bold } = modelStyle(s.model);
-    // Bare text, not a chip: compact spacing keeps a column after it, so it doesn't run into the next tag.
-    return [Box({ paddingRight: 1 - gap, children: [run(Box, Text, formatModel(s.model), (i, n) => sweep(from, to, i, n, s.phase), bold)] })];
+    // Bare text, not a chip: compact density keeps a column after it, so it doesn't run into the next tag.
+    return [Box({ paddingRight: gap > 0 ? 0 : 1, children: [run(Box, Text, formatModel(s.model), (i, n) => sweep(from, to, i, n, s.phase), bold)] })];
   },
   limits: ({ Box, Text }, s) => {
     const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
@@ -363,8 +363,11 @@ let keepWarm = 0;
 let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
-// The columns between a row's tags: none with the compact option on.
+// The columns between a row's tags, by the density option: none compact, one standard, two roomy.
+const DENSITY_GAPS: Record<string, number> = { compact: 0, standard: 1, roomy: 2 };
 let gap = 1;
+// The rows drawn against the right edge, by the row_git_align and row_status_align options; the rest start at the left.
+let rightAligned = { git: false, status: false };
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
 // smart_zone option off.
 let smartZone = 200_000;
@@ -405,7 +408,8 @@ export const register: Register = (on, options) => {
   autoCompact = options.auto_compact === true;
   keepWarm = typeof options.keep_warm_pings === "number" ? Math.max(0, Math.floor(options.keep_warm_pings)) : 0;
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
-  gap = options.compact === true ? 0 : 1;
+  gap = DENSITY_GAPS[String(options.density)] ?? 1;
+  rightAligned = { git: options.row_git_align === "right", status: options.row_status_align === "right" };
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
@@ -710,13 +714,24 @@ async function drawRows($: EngineInterface, ui: Ui, layout: Layout[]): Promise<R
   const s: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
   return (
     layout
-      // The git row is bare text, no chips to tell its tags apart: compact spacing leaves its gaps.
-      .map((names) => ({ parts: names.flatMap((name) => SEGMENTS[name](ui, s)), columnGap: names === GIT_ROW ? 1 : gap }))
+      // The git row is bare text, no chips to tell its tags apart: compact density leaves its gaps.
+      .map((names) => {
+        const isGit = names === GIT_ROW;
+        return { parts: names.flatMap((name) => SEGMENTS[name](ui, s)), columnGap: isGit ? Math.max(gap, 1) : gap, right: isGit ? rightAligned.git : rightAligned.status };
+      })
       .filter(({ parts }) => parts.length > 0)
       // Too narrow for a row, it wraps between segments, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
       // The gap, not a leading space, parts segments, so a wrapped line starts flush.
       // ponytail: no shrink steps; a single segment wider than the line still gets squeezed.
-      .map(({ parts, columnGap }) => ui.Box({ flexDirection: "row", flexWrap: "wrap", columnGap, children: parts.map((part) => ui.Box({ flexShrink: 0, children: [part] })) }))
+      .map(({ parts, columnGap, right }) =>
+        ui.Box({
+          flexDirection: "row",
+          flexWrap: "wrap",
+          columnGap,
+          justifyContent: right ? "flex-end" : "flex-start",
+          children: parts.map((part) => ui.Box({ flexShrink: 0, children: [part] })),
+        }),
+      )
   );
 }
 
@@ -1487,7 +1502,7 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
     // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
     [{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])],
     [
-      // A bare branch name would run into the folder under compact spacing; a ⎇ before it parts them already.
+      // A bare branch name would run into the folder under compact density; a ⎇ before it parts them already.
       { text: !gap && g.branch && g.branch === g.defaultBranch ? " " : "" },
       {
         text: !g.branch
@@ -1529,8 +1544,9 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
   ] satisfies (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
   const shown = segments.map((pieces, k) => ({ pieces, path: k < 3 })).filter(({ pieces }) => pieces.some((p) => p.text !== ""));
   const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1))) }));
-  // The folders, branch and worktree are one path: compact spacing closes it up; the row's gap parts what follows.
-  return [Box({ flexDirection: "row", columnGap: gap, children: parts.filter((p) => p.path).map((p) => p.part) }), ...parts.filter((p) => !p.path).map((p) => p.part)];
+  // The folders, branch and worktree are one path: compact density closes it up, roomy keeps one column inside it; the
+  // row's gap parts what follows.
+  return [Box({ flexDirection: "row", columnGap: Math.min(gap, 1), children: parts.filter((p) => p.path).map((p) => p.part) }), ...parts.filter((p) => !p.path).map((p) => p.part)];
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.

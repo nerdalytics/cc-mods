@@ -207,7 +207,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("leaves out what /config turns off, and the gaps with compact spacing on", { options: { segment_limits: false, compact: true } }, async ($, on) => {
+  test("leaves out what /config turns off, and the gaps with compact density", { options: { segment_limits: false, density: "compact" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
@@ -223,6 +223,32 @@ describe("statusline", () => {
     expect(rows[0]?.props.columnGap).toBe(0);
     // The model name has no chip around it: one column still parts it from the next tag.
     expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(true);
+    await ui.unmount();
+  });
+
+  test("parts the status row's tags by two columns under roomy density, and draws it against the right edge", { options: { density: "roomy", row_status_align: "right" } }, async ($, on) => {
+    stubHint(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const rows = (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap");
+    expect(rows.map((b) => [b.props.columnGap, b.props.justifyContent])).toEqual([[2, "flex-end"]]);
+    // The gap parts the model name from the next tag: no padding of its own.
+    expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(false);
+    await ui.unmount();
+  });
+
+  test("starts each row at the left edge by default", async ($, on) => {
+    stubHint(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const rows = (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap");
+    expect(rows.map((b) => [b.props.columnGap, b.props.justifyContent])).toEqual([[1, "flex-start"]]);
     await ui.unmount();
   });
 
@@ -987,11 +1013,13 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  for (const [options, path] of [
-    [{}, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike"],
-    [{ compact: true }, "spike›cc-mods⎇develop⎇feat/gitline⎇spike"],
+  // The row's gap, then the gap inside the path of folders, branch and worktree, by density.
+  for (const [options, path, rowGaps] of [
+    [{}, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [1, 1]],
+    [{ density: "compact" }, "spike›cc-mods⎇develop⎇feat/gitline⎇spike", [1, 0]],
+    [{ density: "roomy" }, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [2, 1]],
   ] as const)
-  test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${options.compact ? ", the path closed up under compact spacing" : ""}`, { options }, async ($, on) => {
+  test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${"density" in options ? `, under ${options.density} density` : ""}`, { options }, async ($, on) => {
     stubHint(on);
     // A branch made off develop in a linked worktree, on no remote, one behind origin/main with a merge that conflicts.
     const out: Record<string, { stdout: string; exitCode?: number }> = {
@@ -1048,7 +1076,7 @@ describe("statusline", () => {
     const glyphs = (await ui.findAll({ type: "Text" })).map(glyph);
     expect(glyphs.join("")).toContain(path);
     const gaps = (await ui.findAll({ type: "Box" })).map((b) => b.props.columnGap).filter((g) => g !== undefined);
-    expect(gaps).toEqual([1, options.compact ? 0 : 1]);
+    expect(gaps).toEqual(rowGaps);
     // Nothing unknown was asked of git.
     expect(ran.filter((k) => !(k in out))).toEqual([]);
     await ui.unmount();
@@ -1092,7 +1120,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("keeps a space before the default branch under compact spacing: no ⎇ parts it from the folder", { options: { compact: true } }, async ($, on) => {
+  test("keeps a space before the default branch under compact spacing: no ⎇ parts it from the folder", { options: { density: "compact" } }, async ($, on) => {
     stubHint(on);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -1413,7 +1441,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("shows the folder outside a repository, and nothing of git, with its gaps under compact spacing", { options: { compact: true } }, async ($, on) => {
+  test("shows the folder outside a repository, and nothing of git, with its gaps under compact spacing", { options: { density: "compact" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));

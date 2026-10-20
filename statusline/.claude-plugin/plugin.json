@@ -35,6 +35,16 @@
       ],
       "default": "above"
     },
+    "row_git_align": {
+      "type": "string",
+      "title": "Statusline: Git row › alignment",
+      "description": "Where the git row's tags start: at the left edge, or against the right one. left (default) / right",
+      "options": [
+        "left",
+        "right"
+      ],
+      "default": "left"
+    },
     "row_status": {
       "type": "boolean",
       "title": "Statusline: Status row",
@@ -50,6 +60,16 @@
         "below"
       ],
       "default": "below"
+    },
+    "row_status_align": {
+      "type": "string",
+      "title": "Statusline: Status row › alignment",
+      "description": "Where the status row's tags start: at the left edge, or against the right one. left (default) / right",
+      "options": [
+        "left",
+        "right"
+      ],
+      "default": "left"
     },
     "line_order": {
       "type": "string",
@@ -117,11 +137,16 @@
       "description": "Your colours, as a comma list of name=#rrggbb, such as turns.from=#60a5fa,pr.open=#facc15. A name left out keeps its default, an unknown one or a colour that does not read is ignored. Set by typing in /statusline:colors. (default: none)",
       "default": ""
     },
-    "compact": {
-      "type": "boolean",
-      "title": "Statusline: Compact spacing",
-      "description": "No space between the tags of the status row, nor in the git row's folders, branch and worktree. true / false (default)",
-      "default": false
+    "density": {
+      "type": "string",
+      "title": "Statusline: Density",
+      "description": "How close the tags sit: compact leaves no space between the status row's tags and closes up the git row's folders, branch and worktree; standard leaves one column; roomy two. compact / standard (default) / roomy",
+      "options": [
+        "compact",
+        "standard",
+        "roomy"
+      ],
+      "default": "standard"
     },
     "auto_handoff": {
       "type": "boolean",
