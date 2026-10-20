@@ -38,7 +38,7 @@ By default the status row sits under the prompt, below Claude Code's hint line. 
 
 | Tag | Shows | On hover |
 |---|---|---|
-| Model name | The main loop's model. Its colour shows the family, and Mythos is bold. A gradient sweeps across the name, faster the higher the effort of the last request. It stops when that request carried no effort. | |
+| Model name | The main loop's model. Its colour shows the family, and Mythos is bold. A gradient sweeps across the name, faster the higher the effort of the last request. It stops when that request carried no effort. With the `gradients` option off the name is one colour and does not sweep, so it no longer shows the effort. | |
 | `7d`, `5h` | Two bars per limit. The top half is the time left until the window resets. The bottom half is the usage left. Limits belong to your account, so once any of your sessions is refused on one, this session shows it used up too, until it resets. Any other window Claude Code reports shows as its name and a percentage. | The time until the reset. |
 | `◇` `◆` `○` `◔` `◑` `◕` `●` `⊙` | The context window as two bars. The top half is the smart zone left, the first 200,000 tokens by default, where recall is precise. The bottom half is the context left before auto-compaction, at the threshold Claude Code reports. Past the threshold the bottom fills again in red, one full bar per 25% over. The glyph is a diamond inside the smart zone, a moon that fills up beyond it, and `⊙` past the threshold. The badge turns from green to red as the context fills. With the `smart_zone` option off, the bar shows only the context left, in full-height blocks. | The tokens left. |
 | `⏎` | The prompts you sent, then the model requests the main conversation made for them. | Once a subagent has run, the subagents that ran and the requests they made. |
@@ -71,7 +71,7 @@ Outside a repository the row shows only the folders.
 
 ### Clicking and hovering
 
-A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on dark green is a button.
+A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on indigo, between two half blocks, is a button. The colours are the defaults; [`/statusline:colors`](#colours) changes them.
 
 The git row is made of links, and a click opens them the way your terminal opens any link:
 
@@ -153,6 +153,17 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
+## Colours
+
+`/statusline:colors` opens a pane with a field for every colour the mod draws, grouped by what it colours, each after a swatch of how it draws now. So you can pick colours by what they mean, for example a context bar whose three colours you can tell apart.
+
+- Type a colour as six hex digits, such as `#22d3d8`, with or without the `#`, and press Enter to save it. An empty field, or the default typed out, goes back to the default. A colour that does not read writes nothing and says so.
+- A gradient has two fields, its light end and its dark end. The badge of a limit and the mark of a chip sit on the dark end.
+- Some colours do more than one job, and the field's label says which: the palette colours the git row's parts in turn and the model's name by family, the cold cache's light end also colours the fresh-start line's `$`, and the warnings colour the compaction line's diamond and link and the limit forecast's sign.
+- The button at the top turns gradients off and on. With them off each gradient draws in its first colour, the model's name does not sweep, and the pane asks for that first colour only. The context bar keeps its three colours, as bands rather than a blend, because each one means something: plenty left, half used, nearly full. A dark end you saved stays saved, and comes back when you turn gradients on again.
+
+Each save writes the `colors` option, a comma list of `name=#rrggbb` with only the colours you changed, and the button writes `gradients`. Both are in `/config` too.
+
 ## Options
 
 <img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
@@ -170,6 +181,8 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
 | Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
+| Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
+| Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default; an unknown one, or a colour that does not read, is ignored. `/statusline:colors` writes it. |
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
 | Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |
@@ -184,7 +197,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 ## Needs
 
-- Claude Code 2.1.287 or later, the version that added mods. The mod was built against 2.1.296, and its tests pass on 2.1.301.
+- Claude Code 2.1.287 or later, the version that added mods. The mod was built against 2.1.296, and its tests pass on 2.1.304.
 - A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the conflict warning, and the `Start fresh` button's icon.
 - `git` for the git row, and `gh`, signed in, for the pull request details.
 

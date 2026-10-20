@@ -1566,4 +1566,101 @@ describe("statusline", () => {
     expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "context", "turns", "tokens", "hidden", "limits"] });
     await ui.unmount();
   });
+
+  // The colours: the colors option's overrides, and with the gradients option off one colour per gradient.
+  async function barsOf($: Engine, on: On, tokens: number) {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({
+      value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() }] },
+    }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("agent.list", () => ({ value: [] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const limit = must(await ui.find({ type: "Box", key: "five_hour" }), "the 5h bar");
+    const context = must(await ui.find({ type: "Box", key: "context" }), "the context bar");
+    // A cell's bottom half, its background: the usage left, or the context window left.
+    const colours = (cells: readonly unknown[]) => elements(cells).map(({ props }) => props.backgroundColor);
+    await ui.unmount();
+    return { badge: elements(limit.children)[0]?.props, cells: colours(limit.children.slice(1, -1)), context: elements(context.children)[0]?.props, contextCells: colours(context.children.slice(1, -1)) };
+  }
+
+  test("draws the colors option's colours, a gradient from one to the other", { options: { colors: "limit.5h.from=#112233, limit.5h.to=#FFFFFF,context.low=0000ff,pr.nope=#123456,turns.from=red" } }, async ($, on) => {
+    const { badge, cells, context } = await barsOf($, on, 1_000);
+    expect(badge).toMatchObject({ backgroundColor: "#ffffff", color: "#000000" });
+    // 40% used of 10 cells: the first 6 lit, from the light end towards the dark.
+    expect(cells[0]).toBe("#112233");
+    expect(cells[1]).not.toBe("#112233");
+    // 0% used, the badge on the context bar's first colour.
+    expect(context).toMatchObject({ backgroundColor: "#0000ff" });
+  });
+
+  test("with gradients off draws each gradient in its first colour and the context bar in bands", { options: { gradients: false, colors: "limit.5h.from=#112233,limit.5h.to=#ffffff" } }, async ($, on) => {
+    const { badge, cells, contextCells } = await barsOf($, on, 1_000);
+    expect(badge).toMatchObject({ backgroundColor: "#112233" });
+    expect(cells.slice(0, 6)).toEqual(Array(6).fill("#112233"));
+    // Cell by cell from 90% down to 0%: red to 75%, yellow to 25%, green below, the default context colours.
+    expect(contextCells).toEqual(["#ef4444", "#ef4444", "#facc15", "#facc15", "#facc15", "#facc15", "#facc15", "#22c55e", "#22c55e", "#22c55e"]);
+  });
+
+  async function colorsPane($: Engine, on: On, options: Record<string, unknown>, act: (ui: Mounted<"terminal", "Pane">) => Promise<void>) {
+    const written: [string, unknown][] = [];
+    const toasts: string[] = [];
+    // Another plugin's colors row comes first: the write still goes to the mod's own.
+    const other: ConfigRow = { ...configRow("colors", ""), key: "otherplugin.colors", provider: { plugin: "otherplugin", tier: "user" } };
+    on("config.list", () => ({ value: [other, configRow("colors", typeof options.colors === "string" ? options.colors : ""), configRow("gradients", options.gradients !== false)] }));
+    on("config.set", (_$, e) => {
+      written.push([e.key.replace("statusline.", ""), e.value]);
+      return { value: e.value };
+    });
+    on("ui.toast", (_$, e) => {
+      toasts.push(e.text);
+      return { value: undefined };
+    });
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    await act(ui);
+    await ui.unmount();
+    return { written, toasts };
+  }
+
+  test("a colour typed in the colours pane joins the colors option", { options: { colors: "pr.open=#000000" } }, async ($, on) => {
+    const { written } = await colorsPane($, on, { colors: "pr.open=#000000" }, async (ui) => {
+      await ui.input({ key: "turns.to", text: " #ABCDEF " });
+    });
+    expect(written).toEqual([["colors", "pr.open=#000000,turns.to=#abcdef"]]);
+  });
+
+  test("an empty field drops the colour from the colors option", { options: { colors: "pr.open=#000000,turns.to=#abcdef" } }, async ($, on) => {
+    const { written } = await colorsPane($, on, { colors: "pr.open=#000000,turns.to=#abcdef" }, async (ui) => {
+      await ui.input({ key: "turns.to", text: "" });
+    });
+    expect(written).toEqual([["colors", "pr.open=#000000"]]);
+  });
+
+  test("the default typed out drops the colour from the colors option", { options: { colors: "pr.open=#000000" } }, async ($, on) => {
+    const { written } = await colorsPane($, on, { colors: "pr.open=#000000" }, async (ui) => {
+      await ui.input({ key: "pr.open", text: "#facc15" });
+    });
+    expect(written).toEqual([["colors", ""]]);
+  });
+
+  test("a colour that does not read writes nothing and says why", async ($, on) => {
+    const { written, toasts } = await colorsPane($, on, {}, async (ui) => {
+      await ui.input({ key: "turns.from", text: "blue" });
+    });
+    expect(written).toEqual([]);
+    expect(toasts).toEqual(["Statusline colours: blue is not a colour. Type six hex digits, as #22d3d8."]);
+  });
+
+  test("with gradients off the colours pane asks for a gradient's first colour only, and its button turns them on", { options: { gradients: false } }, async ($, on) => {
+    const { written } = await colorsPane($, on, { gradients: false }, async (ui) => {
+      expect(await ui.find({ type: "Input", key: "turns.from" })).toBeDefined();
+      expect(await ui.find({ type: "Input", key: "turns.to" })).toBeUndefined();
+      expect(await ui.find({ type: "Input", key: "context.mid" })).toBeDefined();
+      await ui.press({ key: "gradients" });
+    });
+    expect(written).toEqual([["gradients", true]]);
+  });
 });

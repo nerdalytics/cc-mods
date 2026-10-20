@@ -105,6 +105,18 @@
       "description": "The status row's tags, left to right, as a comma list of model, limits, context, turns, tokens, cache. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limits,context,turns,tokens,cache)",
       "default": "model,limits,context,turns,tokens,cache"
     },
+    "gradients": {
+      "type": "boolean",
+      "title": "Statusline: Colours › gradients",
+      "description": "Text and bars blend from one colour to the next, and the model's name sweeps. Off, each draws in one colour, the first of its gradient, and the context bar in its three colours as bands. Set in /statusline:colors. true (default) / false",
+      "default": true
+    },
+    "colors": {
+      "type": "string",
+      "title": "Statusline: Colours",
+      "description": "Your colours, as a comma list of name=#rrggbb, such as turns.from=#60a5fa,pr.open=#facc15. A name left out keeps its default, an unknown one or a colour that does not read is ignored. Set by typing in /statusline:colors. (default: none)",
+      "default": ""
+    },
     "compact": {
       "type": "boolean",
       "title": "Statusline: Compact spacing",

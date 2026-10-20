@@ -89,6 +89,7 @@ let statusTags: Layout = STATUS_ROW;
 // The /statusline:order pane: the lines around a prompt marker, then the status row's tags, each a list to drag. What
 // stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
 const ORDER_PANE = "statusline-order";
+const COLORS_PANE = "statusline-colors";
 const LABELS: Record<string, string> = {
   git: "git + pull request",
   status: "status",
@@ -213,47 +214,114 @@ const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
 // A log scale, each step half as far again as the last, so the words move on by a share of the context, not by a fixed
 // count of tokens: on a 200K zone, just into up to 300K, well into up to 450K, deep into up to 675K.
 const DUMB_ZONE_DEPTHS: [number, string][] = [[1.5, "just into"], [2.25, "well into"], [3.375, "deep into"]];
-// statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
-const OVERFLOW_RED: RGB = [239, 68, 68];
-// A pull request's number, whole in one colour by state: open yellow, draft white, merged purple, closed grey.
-const PR_COLORS: Record<string, RGB> = { open: [250, 204, 21], draft: [240, 240, 245], merged: [168, 85, 247], closed: [130, 135, 152] };
-const LIMITS: { kind: string; badge: string; seconds: number; segments: number; from: RGB; to: RGB }[] = [
-  { kind: "seven_day", badge: "7d", seconds: 604_800, segments: 7, from: [192, 132, 252], to: [100, 50, 150] },
-  { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10, from: [34, 211, 238], to: [15, 140, 150] },
+const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number; segments: number }[] = [
+  { kind: "seven_day", badge: "7d", seconds: 604_800, segments: 7 },
+  { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10 },
 ];
-// The four stops of statusline.zsh's _sl_pal: cyan, blue, purple, pink.
-const PALETTE: readonly [RGB, RGB, RGB, RGB] = [
-  [34, 211, 216],
-  [96, 165, 250],
-  [168, 85, 247],
-  [217, 70, 239],
-];
-// The stop at a position that wraps around the four.
-const stop = (i: number): RGB => PALETTE[i % PALETTE.length] ?? PALETTE[0];
-const EMPTY_FG: RGB = [55, 58, 72];
-// The colour code, by what a thing does:
-// - hoverable: a tag, then the value on the grey above (EMPTY_FG), which a hover lays its own value over;
+// Every colour the mod draws, by its name in the colors option: the /statusline:colors pane's rows, under the group the
+// first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
+// its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
+// what a thing does:
+// - hoverable: a tag, then the value on the grey (empty), which a hover lays its own value over;
 // - data without a hover: a tag, then the value on no background;
 // - plain text: coloured or dim, on no background;
-// - a button: icon and label on one fill, between two half-block bars, in a colour no chip uses (BUTTON);
+// - a button: icon and label on one fill, between two half-block bars, in a colour no chip uses;
 // - a link: gradient text on no background, opened by a click.
+const COLORS = {
+  // The four stops of statusline.zsh's _sl_pal. The git row's parts each take a gradient one stop wide, starting at blue
+  // and stepping on per part; the model's name a window one step wide that slides towards pink as the family gets stronger.
+  "palette.1": { group: "Palette: the git row's parts in turn, and the model's name by family", label: "cyan: Haiku", rgb: [34, 211, 216] },
+  "palette.2": { group: "", label: "blue: the git row's folders, Opus", rgb: [96, 165, 250] },
+  "palette.3": { group: "", label: "purple: Fable and Mythos", rgb: [168, 85, 247] },
+  "palette.4": { group: "", label: "pink", rgb: [217, 70, 239] },
+  "limit.7d.from": { group: "7d limit bar and badge", label: "", rgb: [192, 132, 252] },
+  "limit.7d.to": { group: "", label: "the badge", rgb: [100, 50, 150] },
+  "limit.5h.from": { group: "5h limit bar and badge", label: "", rgb: [34, 211, 238] },
+  "limit.5h.to": { group: "", label: "the badge", rgb: [15, 140, 150] },
+  // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
+  // as a band of its own.
+  "context.low": { group: "Context bar and badge", label: "plenty left", rgb: [34, 197, 94] },
+  "context.mid": { group: "", label: "half used", rgb: [250, 204, 21] },
+  "context.high": { group: "", label: "nearly full", rgb: [239, 68, 68] },
+  // statusline.zsh's overflow colour: its piecewise blend toward purple never ran, as nothing set the tokens it scaled.
+  "context.over": { group: "", label: "past auto-compaction", rgb: [239, 68, 68] },
+  // The chips' stops, lighter to darker, as the limits' are: the mark sits on the darker.
+  "turns.from": { group: "Prompts chip", label: "", rgb: [96, 165, 250] },
+  "turns.to": { group: "", label: "the mark", rgb: [37, 99, 235] },
+  "costs.from": { group: "Costs chip", label: "", rgb: [217, 70, 239] },
+  "costs.to": { group: "", label: "the mark", rgb: [134, 25, 143] },
+  "agents.from": { group: "Subagents' costs chip", label: "", rgb: [251, 191, 36] },
+  "agents.to": { group: "", label: "the mark", rgb: [180, 83, 9] },
+  // The cache chip: green while the next prompt reads the cache, red once it writes it again.
+  "cache.warm.from": { group: "Cache chip, warm", label: "", rgb: [74, 222, 128] },
+  "cache.warm.to": { group: "", label: "the mark", rgb: [21, 128, 61] },
+  "cache.cold.from": { group: "Cache chip, cold", label: "the fresh-start line's $", rgb: [248, 113, 113] },
+  "cache.cold.to": { group: "", label: "the mark", rgb: [185, 28, 28] },
+  notice: { group: "Warnings", label: "the compaction line's diamond and link, the limit forecast's sign", rgb: [251, 191, 36] },
+  // A pull request's number, whole in one colour by state; a failed check's cross stands out from the row's gradient.
+  "pr.open": { group: "Pull request", label: "open", rgb: [250, 204, 21] },
+  "pr.draft": { group: "", label: "draft", rgb: [240, 240, 245] },
+  "pr.merged": { group: "", label: "merged", rgb: [168, 85, 247] },
+  "pr.closed": { group: "", label: "closed", rgb: [130, 135, 152] },
+  "pr.failed": { group: "", label: "a failed check's cross", rgb: [239, 68, 68] },
+  empty: { group: "Empty", label: "bar cells past their end, the grey behind a value that hovers", rgb: [55, 58, 72] },
+  // main: the action an offer makes; secondary: the cross that hides it.
+  "button.main.fill": { group: "Buttons: Start fresh and Compact", label: "fill", rgb: [79, 70, 229] },
+  "button.main.label": { group: "", label: "label", rgb: [199, 210, 254] },
+  "button.secondary.fill": { group: "Buttons: the cross that hides an offer", label: "fill", rgb: [51, 65, 85] },
+  "button.secondary.label": { group: "", label: "label", rgb: [203, 213, 225] },
+} satisfies Record<string, { group: string; label: string; rgb: RGB }>;
+type ColorName = keyof typeof COLORS;
+// The names of the gradients: the colours with a .from.
+type Gradient = ColorName extends infer N ? (N extends `${infer G}.from` ? G : never) : never;
+const isColor = (name: string): name is ColorName => Object.hasOwn(COLORS, name);
+// The colors option's overrides, by name, and the gradients option; set as the module registers.
+let overrides = new Map<ColorName, RGB>();
+let gradients = true;
+// A colour as drawn: the person's, else the default; with gradients off a .to is its .from.
+function color(name: ColorName): RGB {
+  const from = gradients ? undefined : name.replace(/\.to$/, ".from");
+  if (from !== undefined && from !== name && isColor(from)) return color(from);
+  return overrides.get(name) ?? COLORS[name].rgb;
+}
+const stops = (name: Gradient) => ({ from: color(`${name}.from`), to: color(`${name}.to`) });
+const PALETTE = ["palette.1", "palette.2", "palette.3", "palette.4"] as const;
+// The stop at a position that wraps around the four.
+const stop = (i: number): RGB => color(PALETTE[i % PALETTE.length] ?? PALETTE[0]);
 type ButtonLook = { fill: RGB; label: RGB };
-// main: the action an offer makes; secondary: the cross that hides it.
-const BUTTON: Record<"main" | "secondary", ButtonLook> = {
-  main: { fill: [79, 70, 229], label: [199, 210, 254] },
-  secondary: { fill: [51, 65, 85], label: [203, 213, 225] },
-};
+const buttonLook = (kind: "main" | "secondary"): ButtonLook => ({ fill: color(`button.${kind}.fill`), label: color(`button.${kind}.label`) });
 type ModelStyle = { from: RGB; to: RGB; bold?: true };
-// A window one palette step wide that slides from cyan towards pink as the family gets stronger.
-// Mythos is Fable's model without Fable's safeguards: Fable's colours, bold.
-const MODEL_STYLES: Record<string, ModelStyle> = {
-  haiku: { from: PALETTE[0], to: PALETTE[1] },
-  // Glyph 1 of 3 in a lerp is the halfway colour.
-  sonnet: { from: lerp(PALETTE[0], PALETTE[1], 1, 3), to: lerp(PALETTE[1], PALETTE[2], 1, 3) },
-  opus: { from: PALETTE[1], to: PALETTE[2] },
-  fable: { from: PALETTE[2], to: PALETTE[3] },
-  mythos: { from: PALETTE[2], to: PALETTE[3], bold: true },
-};
+// Mythos is Fable's model without Fable's safeguards: Fable's colours, bold. Without gradients a family is its first stop.
+function modelStyles(): Record<string, ModelStyle> {
+  const step = (from: RGB, to: RGB, bold?: true): ModelStyle => ({ from, to: gradients ? to : from, bold });
+  return {
+    haiku: step(stop(0), stop(1)),
+    // Glyph 1 of 3 in a lerp is the halfway colour.
+    sonnet: step(lerp(stop(0), stop(1), 1, 3), lerp(stop(1), stop(2), 1, 3)),
+    opus: step(stop(1), stop(2)),
+    fable: step(stop(2), stop(3)),
+    mythos: step(stop(2), stop(3), true),
+  };
+}
+
+// The colors option, a comma list of name=#rrggbb: an unknown name or a colour that does not read is left out.
+function overridesOf(option: unknown): Map<ColorName, RGB> {
+  const found = new Map<ColorName, RGB>();
+  for (const entry of typeof option === "string" ? option.split(",") : []) {
+    const [name = "", value = ""] = entry.split("=").map((part) => part.trim());
+    const rgb = rgbOf(value);
+    if (isColor(name) && rgb) found.set(name, rgb);
+  }
+  return found;
+}
+
+// Six hex digits, with a # or without, in either case.
+function rgbOf(text: string): RGB | undefined {
+  const m = /^#?([0-9a-f]{6})$/i.exec(text);
+  if (!m?.[1]) return undefined;
+  const n = parseInt(m[1], 16);
+  return [n >> 16, (n >> 8) & 255, n & 255];
+}
 // GitHub's own icons (octicons) and Font Awesome's, from the Nerd Font: CommitMono draws ✓ and ✗ as √ and X, and has no
 // ⚠, ✎ or ✉ (each checked in the font's cmap).
 const OCT_CHECK = "\uf42e";
@@ -268,14 +336,6 @@ const REVIEW_MARKS: Record<string, string> = { APPROVED: ` ${OCT_CHECK}`, CHANGE
 // CommitMono and came from a fallback font; ⏎ (U+23CE) is.
 const AGENT_MARK = "\uf0e7";
 const PROMPT_MARK = "⏎";
-// The chips' stops, lighter to darker, as the limits' are: prompts blue, the main session's tokens pink, its
-// subagents' amber.
-const TURNS_CHIP: { from: RGB; to: RGB } = { from: [96, 165, 250], to: [37, 99, 235] };
-const TOKENS_CHIP: { from: RGB; to: RGB } = { from: [217, 70, 239], to: [134, 25, 143] };
-const AGENTS_CHIP: { from: RGB; to: RGB } = { from: [251, 191, 36], to: [180, 83, 9] };
-// The cache chip: green while the next prompt reads the cache, red once it writes it again.
-const WARM_CHIP: { from: RGB; to: RGB } = { from: [74, 222, 128], to: [21, 128, 61] };
-const COLD_CHIP: { from: RGB; to: RGB } = { from: [248, 113, 113], to: [185, 28, 28] };
 // The moon's phases, empty to full: the context icon's fill, and the cache chip's time left (empty once cold).
 const MOON = [..."○◔◑◕●"];
 
@@ -360,6 +420,8 @@ export const register: Register = (on, options) => {
   belowLines = shownLines.filter((name) => !isAbove(name));
   rowList = [...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !shownLines.includes(name))];
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
+  overrides = overridesOf(options.colors);
+  gradients = options.gradients !== false;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
     const { value: stretch } = await $.state.get(STRETCH);
@@ -438,16 +500,55 @@ export const register: Register = (on, options) => {
     const wanted = (isRows ? rowOptions : segmentOptions)(data);
     const changed = Object.entries(wanted).filter(([field, value]) => value !== options[field]);
     changed.sort(([, a], [, b]) => Number(typeof b === "boolean") - Number(typeof a === "boolean"));
-    const known = await $.config.list();
     for (const [field, value] of changed) {
-      const key = known.find((row) => row.key.endsWith(`.${field}`))?.key;
-      const { deny } = key ? await $.config.set({ key, value }) : { deny: `no /config row ${field}` };
+      const deny = await setOption($, field, value);
       if (deny) {
         $.ui.toast(`Statusline order: ${deny}`);
         return { props: { items: current, labels: LABELS, fixed: markers, rev: Date.now() } };
       }
     }
     return { props: { items: data, labels: LABELS, fixed: markers, rev: Date.now() } };
+  });
+
+  on("command.run", { command: "statusline:colors" }, async ($) => {
+    await $.ui.open({ id: COLORS_PANE, title: "Statusline colours", focus: true });
+    return { text: "Statusline colours pane opened." };
+  });
+
+  // The /statusline:colors pane: a swatch and a field per colour, under the group it colours, and a button that turns the
+  // gradients off and on. Without gradients only a gradient's first colour is asked for; the other keeps what was saved.
+  on("ui.render", { component: "Pane", requestId: COLORS_PANE }, ($, e, next) => {
+    if (e.surface !== "terminal") return next(e);
+    const { Box, Text, Button, Input } = $.ui.resolve(e);
+    const fields = Object.entries(COLORS).flatMap(([name, { group, label, rgb }]) => {
+      if (!isColor(name) || (!gradients && name.endsWith(".to"))) return [];
+      const end = name.endsWith(".from") ? (gradients ? "light end" : "colour") : name.endsWith(".to") ? "dark end" : "";
+      const field = Box({
+        flexDirection: "row",
+        children: [
+          Text({ color: hex(color(name)), children: "██ " }),
+          Input({ key: name, label: `${[end, label].filter(Boolean).join(", ")} `, value: hex(color(name)), placeholder: hex(rgb), submitLabel: "save", onSubmit: (value) => saveColor($, options.colors, name, value) }),
+        ],
+      });
+      return group ? [Box({ height: 1 }), Text({ bold: true, children: group }), field] : [field];
+    });
+    return Box({
+      flexDirection: "column",
+      children: [
+        Text({ bold: true, children: "Statusline colours" }),
+        Text({ dimColor: true, children: "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default." }),
+        Box({ height: 1 }),
+        Button({
+          key: "gradients",
+          label: gradients ? "Gradients on: turn off, one colour per gradient" : "Gradients off: turn on",
+          onPress: async () => {
+            const deny = await setOption($, "gradients", !gradients);
+            if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+          },
+        }),
+        ...fields,
+      ],
+    });
   });
 
   on("turn.step", async function* ($, e, next) {
@@ -552,6 +653,31 @@ export const register: Register = (on, options) => {
     return ui.Box({ flexDirection: "column", paddingX: 1, children: rows });
   });
 };
+
+// Writes one of the mod's /config options, never another plugin's of the same name; a write loads the module again. Why
+// it was not written, when it was not.
+async function setOption($: EngineInterface, field: string, value: string | boolean): Promise<string | undefined> {
+  const key = (await $.config.list()).find((row) => row.provider.plugin === "statusline" && row.key.endsWith(`.${field}`))?.key;
+  return key ? (await $.config.set({ key, value })).deny : `no /config row ${field}`;
+}
+
+// Saves a colour typed in the colours pane into the colors option, as name=#rrggbb; an empty field, or the default typed
+// out, drops the name, so the default stands. A colour that does not read writes nothing.
+async function saveColor($: EngineInterface, option: unknown, name: ColorName, text: string): Promise<void> {
+  const typed = text.trim();
+  const rgb = rgbOf(typed);
+  if (typed && !rgb) {
+    $.ui.toast(`Statusline colours: ${typed} is not a colour. Type six hex digits, as #22d3d8.`);
+    return;
+  }
+  const saved = overridesOf(option);
+  if (rgb && hex(rgb) !== hex(COLORS[name].rgb)) saved.set(name, rgb);
+  else saved.delete(name);
+  const value = [...saved].map(([key, c]) => `${key}=${hex(c)}`).join(",");
+  if (value === (typeof option === "string" ? option : "")) return;
+  const deny = await setOption($, "colors", value);
+  if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+}
 
 // The named lines, in order, each as the elements it draws now (none for an offer that does not hold).
 async function drawLines($: EngineInterface, ui: Ui, names: Line[], isWorking: boolean) {
@@ -763,9 +889,9 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
   return Box({
     flexDirection: "row",
     children: [
-      Text({ color: hex(COLD_CHIP.from), children: "$" }),
+      Text({ color: hex(color("cache.cold.from")), children: "$" }),
       Text({ dimColor: true, children: cold ? ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` : ` Handoff written: fresh start ~${usd(fresh)} ` }),
-      Button({ key: "resume", plain: true, onPress: () => void resumeFrom($, handoff.path), children: buttonLabel(Text, BUTTON.main, "\uf15c", "Start fresh") }),
+      Button({ key: "resume", plain: true, onPress: () => void resumeFrom($, handoff.path), children: buttonLabel(Text, buttonLook("main"), "\uf15c", "Start fresh") }),
       dismissButton($, "fresh", Button, Text),
     ],
   });
@@ -780,11 +906,11 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
   return Box({
     flexDirection: "row",
     children: [
-      Text({ color: hex(AGENTS_CHIP.from), children: "\u25c6" }),
+      Text({ color: hex(color("notice")), children: "\u25c6" }),
       Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
-      Link({ href: SMART_ZONE_URL, children: Text({ color: hex(AGENTS_CHIP.from), underline: true, children: "Smart zone" }) }),
+      Link({ href: SMART_ZONE_URL, children: Text({ color: hex(color("notice")), underline: true, children: "Smart zone" }) }),
       Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? "very deep into"} the dumb zone now. ` : ". " }),
-      Button({ key: "compact", plain: true, onPress: () => void compactSession($), children: buttonLabel(Text, BUTTON.main, "\uf066", "Compact") }),
+      Button({ key: "compact", plain: true, onPress: () => void compactSession($), children: buttonLabel(Text, buttonLook("main"), "\uf066", "Compact") }),
       dismissButton($, "compact", Button, Text),
     ],
   });
@@ -817,7 +943,7 @@ async function forecastLines($: EngineInterface, { Box, Text }: Ui) {
       Box({
         flexDirection: "row",
         children: [
-          Text({ color: hex(AGENTS_CHIP.from), children: WARN_MARK }),
+          Text({ color: hex(color("notice")), children: WARN_MARK }),
           Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
         ],
       }),
@@ -848,7 +974,7 @@ function dismissButton($: EngineInterface, offer: Offer, Button: Ui["Button"], T
       await $.state.set(DISMISSED, { ...value, [offer]: await $.clock.now() });
       $.ui.invalidate("ui.render");
     },
-    children: buttonLabel(Text, BUTTON.secondary, "\u2715"),
+    children: buttonLabel(Text, buttonLook("secondary"), "\u2715"),
   });
 }
 
@@ -1286,13 +1412,15 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - now : undefined;
   const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, limit.segments);
   const usageLeft = cells(100 - found.percentUsed, limit.segments);
-  const parts = [Text({ color: hex(contrast(limit.to)), backgroundColor: hex(limit.to), children: ` ${limit.badge} ` })];
+  const { from, to } = stops(`limit.${limit.badge}`);
+  const empty = color("empty");
+  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
   for (let i = 0; i < limit.segments; i++) {
-    const lit = lerp(limit.from, limit.to, i, limit.segments);
+    const lit = lerp(from, to, i, limit.segments);
     parts.push(
       Text({
-        color: hex(i < timeLeft ? lit : EMPTY_FG),
-        backgroundColor: hex(i < usageLeft ? lit : EMPTY_FG),
+        color: hex(i < timeLeft ? lit : empty),
+        backgroundColor: hex(i < usageLeft ? lit : empty),
         children: "▀",
       }),
     );
@@ -1300,7 +1428,7 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
   if (left !== undefined && left > 0) {
     const shown = `${countdown(left)} `.padStart(limit.segments);
     parts.push(
-      hoverOver(Box, ` ${limit.badge} `.length + limit.segments - [...shown].length, Text({ color: hex(limit.from), backgroundColor: hex(EMPTY_FG), bold: true, children: shown })),
+      hoverOver(Box, ` ${limit.badge} `.length + limit.segments - [...shown].length, Text({ color: hex(from), backgroundColor: hex(empty), bold: true, children: shown })),
     );
   }
   return Box({ key: limit.kind, flexDirection: "row", children: parts });
@@ -1312,9 +1440,9 @@ function tokenParts(Box: Ui["Box"], Text: Ui["Text"], t: StatusTokens, merged: b
   const { main, agents } = t;
   const all = merged && agents.count > 0;
   const spend = all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced } : main;
-  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(spend), hover: formatTokens(spend.tokens), ...TOKENS_CHIP })];
+  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(spend), hover: formatTokens(spend.tokens), ...stops("costs") })];
   if (agents.count && !all) {
-    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(agents), hover: formatTokens(agents.tokens), ...AGENTS_CHIP }));
+    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(agents), hover: formatTokens(agents.tokens), ...stops("agents") }));
   }
   return parts;
 }
@@ -1333,11 +1461,11 @@ function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
   const children = [
     Text({ color: hex(contrast(c.to)), backgroundColor: hex(c.to), children: tag }),
     // The grey says a hover has more; a chip without one stands on no background.
-    run(Box, Text, pad(c.value), gradient(c), undefined, c.hover ? EMPTY_FG : undefined),
+    run(Box, Text, pad(c.value), gradient(c), undefined, c.hover ? color("empty") : undefined),
   ];
   if (c.hover) {
     children.push(
-      hoverOver(Box, [...tag].length, run(Box, Text, pad(c.hover), gradient(c.hoverStops ?? c), undefined, EMPTY_FG)),
+      hoverOver(Box, [...tag].length, run(Box, Text, pad(c.hover), gradient(c.hoverStops ?? c), undefined, color("empty"))),
     );
   }
   return Box({ key: c.key, flexDirection: "row", children });
@@ -1374,7 +1502,7 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
     ],
     // Hidden when the branch already names it.
     [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
-    [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? PR_COLORS[pr.state] : undefined }],
+    [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }],
     pr?.state === "draft" ? ` ${DRAFT_MARK}` : "",
     live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : "",
     pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
@@ -1392,8 +1520,7 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
       const tab = pr.url ? `${pr.url}/checks` : undefined;
       const groups: Piece[][] = [
         c.pending > 0 ? [{ text: `${OCT_DOT}${c.pending}`, href: tab }] : [],
-        // Red, so a failure stands out from the row's gradient.
-        pr.failedUrls.map((url) => ({ text: OCT_X, href: url || tab, color: OVERFLOW_RED })),
+        pr.failedUrls.map((url) => ({ text: OCT_X, href: url || tab, color: color("pr.failed") })),
         c.success > 0 ? [{ text: `${OCT_CHECK}${c.success}`, href: tab }] : [],
       ].filter((g) => g.length > 0);
       return groups.flatMap((g, k): Piece[] => (k > 0 ? [{ text: " " }, ...g] : g));
@@ -1401,7 +1528,7 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
     (g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : ""),
   ] satisfies (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
   const shown = segments.map((pieces, k) => ({ pieces, path: k < 3 })).filter(({ pieces }) => pieces.some((p) => p.text !== ""));
-  const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => lerp(stop(i + 1), stop(i + 2), j, n)) }));
+  const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1))) }));
   // The folders, branch and worktree are one path: compact spacing closes it up; the row's gap parts what follows.
   return [Box({ flexDirection: "row", columnGap: gap, children: parts.filter((p) => p.path).map((p) => p.part) }), ...parts.filter((p) => !p.path).map((p) => p.part)];
 }
@@ -1439,7 +1566,7 @@ function linkRun(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], pieces: Pie
 function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, t: StatusTokens | undefined) {
   const value = t ? `${turns} / ${t.main.requests}` : String(turns);
   const hover = t?.agents.count ? `${AGENT_MARK} ${t.agents.count} / ${t.agents.requests}` : undefined;
-  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value, hover, ...TURNS_CHIP });
+  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value, hover, ...stops("turns") });
 }
 
 // Warm: the time left before the cache expires and what the next prompt's cached prefix costs read; hovered, in the
@@ -1451,8 +1578,8 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
   // The first second after a request has the whole TTL left, which reads 1h0m (5m on a short cache) before the next
   // second reads 59m (4m): one second short of the TTL reads the same from the start.
   return left > 0
-    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, hover: usd(c.write), hoverStops: COLD_CHIP, ...WARM_CHIP })
-    : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...COLD_CHIP });
+    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, hover: usd(c.write), hoverStops: stops("cache.cold"), ...stops("cache.warm") })
+    : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
 }
 
 // Seconds the cache has left. The TTL runs from the last request sent or answered, whichever is later; a send is known
@@ -1489,17 +1616,18 @@ function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["co
   const overflow = remaining < 0;
   const bottom = overflow ? Math.min(Math.floor(((pct - 100) * CONTEXT_CELLS) / 25), CONTEXT_CELLS) : cells(100 - pct, CONTEXT_CELLS);
   const top = smart > 0 ? cells(((smart - Math.min(current, smart)) * 100) / smart, CONTEXT_CELLS) : 0;
-  const badgeBg = overflow ? OVERFLOW_RED : ramp(Math.min(pct, 100));
+  const badgeBg = overflow ? color("context.over") : ramp(Math.min(pct, 100));
   const badge = ` ${contextIcon(current, usable, remaining, smart)} `;
+  const empty = color("empty");
   const parts = [Text({ color: hex(contrast(badgeBg)), backgroundColor: hex(badgeBg), children: badge })];
   for (let i = 0; i < CONTEXT_CELLS; i++) {
     const lit = ramp(Math.trunc(((CONTEXT_CELLS - 1 - i) * 100) / CONTEXT_CELLS));
-    const under = i < bottom ? (overflow ? OVERFLOW_RED : lit) : EMPTY_FG;
-    parts.push(Text({ color: hex(smart <= 0 ? under : i < top ? lit : EMPTY_FG), backgroundColor: hex(under), children: "▀" }));
+    const under = i < bottom ? (overflow ? color("context.over") : lit) : empty;
+    parts.push(Text({ color: hex(smart <= 0 ? under : i < top ? lit : empty), backgroundColor: hex(under), children: "▀" }));
   }
   const shown = `${formatTokens(remaining)} `.padStart(CONTEXT_CELLS);
   parts.push(
-    hoverOver(Box, [...badge].length + CONTEXT_CELLS - [...shown].length, Text({ color: hex(badgeBg), backgroundColor: hex(EMPTY_FG), bold: true, children: shown })),
+    hoverOver(Box, [...badge].length + CONTEXT_CELLS - [...shown].length, Text({ color: hex(badgeBg), backgroundColor: hex(empty), bold: true, children: shown })),
   );
   return [Box({ key: "context", flexDirection: "row", children: parts })];
 }
@@ -1546,14 +1674,11 @@ function sweep(a: RGB, b: RGB, i: number, n: number, phase: number): RGB {
   return lerp(a, b, Math.round((t < 0.5 ? t * 2 : 2 - t * 2) * 100), 101);
 }
 
-// Mirrors _sl_gyr_ramp: green to yellow at 50%, then to red.
+// Mirrors _sl_gyr_ramp: low to mid at 50%, then to high, on a whole percentage. Without gradients the nearest of the three.
 function ramp(pct: number): RGB {
-  if (pct <= 50) {
-    const r = pct * 2;
-    return [34 + Math.trunc((216 * r) / 100), 197 + Math.trunc((7 * r) / 100), 94 + Math.trunc((-73 * r) / 100)];
-  }
-  const r = (pct - 50) * 2;
-  return [250 + Math.trunc((-11 * r) / 100), 204 + Math.trunc((-136 * r) / 100), 21 + Math.trunc((47 * r) / 100)];
+  const [low, mid, high] = [color("context.low"), color("context.mid"), color("context.high")];
+  if (!gradients) return pct < 25 ? low : pct < 75 ? mid : high;
+  return pct <= 50 ? lerp(low, mid, pct * 2, 101) : lerp(mid, high, (pct - 50) * 2, 101);
 }
 
 // Mirrors calc_badge_fg in _sl_color_bar_badge: black text on light badges, white on dark.
@@ -1601,6 +1726,6 @@ function formatModel(id: string): string {
 // Matches the family anywhere in the name, so an ID, a display name or an alias all find it;
 // an unknown family sweeps cyan to purple.
 function modelStyle(model: string): ModelStyle {
-  const style = Object.entries(MODEL_STYLES).find(([family]) => model.toLowerCase().includes(family))?.[1];
-  return style ?? { from: PALETTE[0], to: PALETTE[2] };
+  const style = Object.entries(modelStyles()).find(([family]) => model.toLowerCase().includes(family))?.[1];
+  return style ?? { from: stop(0), to: gradients ? stop(2) : stop(0) };
 }
