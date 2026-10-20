@@ -803,10 +803,12 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  for (const [title, options, minutes, shown] of [
-    ["keeps a dismissed compaction line hidden for the rest of the session", {}, 11, false],
-    ["brings a dismissed compaction line back after dismiss_minutes", { dismiss_minutes: 10 }, 11, true],
-    ["keeps it hidden within dismiss_minutes", { dismiss_minutes: 10 }, 9, false],
+  // Half a minute, not ten: the clock fires every 100 ms frame on its way, and ten minutes of frames ran 3 to 4 s
+  // of a test's 5.
+  for (const [title, options, seconds, shown] of [
+    ["keeps a dismissed compaction line hidden for the rest of the session", {}, 33, false],
+    ["brings a dismissed compaction line back after dismiss_minutes", { dismiss_minutes: 0.5 }, 33, true],
+    ["keeps it hidden within dismiss_minutes", { dismiss_minutes: 0.5 }, 27, false],
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
@@ -836,7 +838,7 @@ describe("statusline", () => {
     expect((await ui.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
     // A prompt of the person's does not bring it back.
     await typeAtComposer($, "go on");
-    await clock.advance(minutes * 60_000);
+    await clock.advance(seconds * 1_000);
     await settle();
     await ui.unmount();
     const again = await mountHint($);
