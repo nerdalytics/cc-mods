@@ -30,7 +30,7 @@ The first command fetches the marketplace and installs the versions it bumps, an
 
 ## What it shows
 
-The mod draws a status row and a git row. An option places each one above or below the prompt.
+The mod draws a status row and a git row, and under the prompt a line for each of the cold cache and the smart zone when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side.
 
 ### Status row
 
@@ -145,9 +145,9 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 `/statusline:order` opens a pane with two lists. Press a row, drag it, release to drop it.
 
-- **Rows.** The git and pull request row and the status row sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A row above the marker draws above your prompt. A row below it draws under your prompt. A drop writes `row_git_position`, `row_status_position` and `row_order`.
+- **Lines.** The git and pull request row, the status row, and the lines of the cold-cache fresh start and the smart-zone compaction sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A line above the marker draws above your prompt. A line below it draws under your prompt, below the hint line. Lines on one side stack in the order listed, so the two offer lines can sit above, under, or between the rows. A drop writes `line_order` and the dropped line's `…_position` option.
 - **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
-- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. A row or tag dropped under it is switched off: `row_git`, `row_status` or `segment_<name>` becomes false, and the pane draws it dim and struck through. Dragged back above the marker, it is switched on again. The markers do not drag.
+- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. A line or tag dropped under it is switched off: `row_git`, `row_status`, `segment_<name>`, `fresh_start` or `compact_hint` becomes false, and the pane draws it dim and struck through. Dragged back above the marker, it is switched on again. The markers do not drag.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -162,9 +162,10 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
 | Status row | `row_status` | true | Shows the status row. |
-| Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. When both rows share a place, the git row comes first, unless `row_order` is `status_first`. |
+| Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
-| Rows › order | `row_order` | git_first | Which row comes first when both draw on the same side of the prompt: `git_first` or `status_first`. |
+| Lines › order | `line_order` | git,status,fresh,compact | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` (cold cache) and `compact` (smart zone). A name left out goes last; an unknown one is ignored. |
+| Offer a fresh start, Offer a compaction › position | `fresh_start_position`, `compact_hint_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
 | Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |

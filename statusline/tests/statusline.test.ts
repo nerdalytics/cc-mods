@@ -1450,9 +1450,10 @@ describe("statusline", () => {
     configRow("row_git_position", "above"),
     configRow("row_status", true),
     configRow("row_status_position", "below"),
-    configRow("row_order", "git_first"),
+    configRow("line_order", "git,status,fresh,compact"),
     configRow("segment_order", "model,limits,context,turns,tokens,cache"),
     ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => configRow(`segment_${name}`, true)),
+    ...["fresh_start", "compact_hint"].flatMap((field) => [configRow(field, true), configRow(`${field}_position`, "below")]),
   ];
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
     const written: [string, unknown][] = [];
@@ -1468,12 +1469,12 @@ describe("statusline", () => {
     await ui.unmount();
     return written;
   }
-  const PINNED = { row_git: true, row_status: true, row_git_position: "above", row_status_position: "below", row_order: "git_first" };
+  const PINNED = { row_git: true, row_status: true, row_git_position: "above", row_status_position: "below" };
 
-  test("dragging the git row below the prompt marker saves its side and the row order", { options: PINNED }, async ($, on) => {
-    // git, ── prompt ──, status, ── hidden ──: git dropped on status's row goes below the prompt, after status.
+  test("dragging the git row below the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
+    // git, ── prompt ──, status, fresh, compact, ── hidden ──: git dropped on status's row goes below the prompt, after status.
     const written = await dragIn(on, $, PINNED, "rows", 0, 2);
-    expect(written).toEqual([["row_git_position", "below"], ["row_order", "status_first"]]);
+    expect(written).toEqual([["row_git_position", "below"], ["line_order", "status,git,fresh,compact"]]);
   });
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
@@ -1489,18 +1490,26 @@ describe("statusline", () => {
   });
 
   test("dragging a row into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "rows", 2, 3)).toEqual([["row_status", false]]);
+    expect(await dragIn(on, $, PINNED, "rows", 2, 5)).toEqual([["row_status", false], ["line_order", "git,fresh,compact,status"]]);
+  });
+
+  test("dragging the compaction line above the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 4, 0)).toEqual([["compact_hint_position", "above"], ["line_order", "compact,git,status,fresh"]]);
+  });
+
+  test("dragging the compaction line into the hidden zone switches off its toggle", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 4, 5)).toEqual([["compact_hint", false]]);
   });
 
   test("a drop that changes nothing writes nothing", { options: PINNED }, async ($, on) => {
     expect(await dragIn(on, $, PINNED, "rows", 0, 0)).toEqual([]);
   });
 
-  test("the order pane lists the rows around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", row_order: "status_first", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
+  test("the order pane lists the lines around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", line_order: "status,git,fresh,compact", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "hidden"] });
+    expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "fresh", "compact", "hidden"] });
     expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "context", "turns", "tokens", "hidden", "limits"] });
     await ui.unmount();
   });

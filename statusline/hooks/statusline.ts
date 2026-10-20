@@ -66,17 +66,26 @@ const SEGMENTS = {
   git: ({ Box, Text, Link }, s) => (s.git ? gitParts(Box, Text, Link, s.git, s.pr) : []),
 } satisfies Record<string, Segment>;
 
-// The two rows' segments, left to right. Each row, and each segment of the status row, is a /config toggle (row_git,
-// row_status, segment_<name>), and each row's place a picker (row_git_position, row_status_position): above the prompt,
-// or under it below the engine's hint line. Two rows in one place stack git first, unless row_order says status first;
-// the status row's tags follow segment_order. /statusline:order writes all three by dragging. Applied in register.
+// The lines around the prompt: the git row, the status row (its segments, left to right), and a line of the mod's own
+// for each offer. Each is a /config toggle and each has a place, above the prompt or under it below the engine's hint
+// line (the pickers); lines in one place stack in line_order, and the status row's tags follow segment_order.
+// /statusline:order writes all of them by dragging. Applied in register.
 type Layout = (keyof typeof SEGMENTS)[];
 const GIT_ROW: Layout = ["git"];
 const STATUS_ROW: Layout = ["model", "limits", "context", "turns", "tokens", "cache"];
-let aboveRows: Layout[] = [GIT_ROW];
-let belowRows: Layout[] = [STATUS_ROW];
+const LINES = ["git", "status", "fresh", "compact"] as const;
+type Line = (typeof LINES)[number];
+const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
+  git: { on: "row_git", at: "row_git_position" },
+  status: { on: "row_status", at: "row_status_position" },
+  fresh: { on: "fresh_start", at: "fresh_start_position" },
+  compact: { on: "compact_hint", at: "compact_hint_position" },
+};
+let aboveLines: Line[] = ["git"];
+let belowLines: Line[] = ["status", "fresh", "compact"];
+let statusTags: Layout = STATUS_ROW;
 
-// The /statusline:order pane: the two rows around a prompt marker, then the status row's tags, each a list to drag. What
+// The /statusline:order pane: the lines around a prompt marker, then the status row's tags, each a list to drag. What
 // stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
 const ORDER_PANE = "statusline-order";
 const LABELS: Record<string, string> = {
@@ -88,12 +97,14 @@ const LABELS: Record<string, string> = {
   turns: "turns",
   tokens: "costs",
   cache: "cache",
+  fresh: "cold cache: fresh start",
+  compact: "smart zone: compaction",
   prompt: "━━ your prompt ━━",
   hidden: "╌╌ hidden: switched off ╌╌",
 };
 const ROW_MARKERS = ["prompt", "hidden"];
 const SEGMENT_MARKERS = ["hidden"];
-let rowList: string[] = ["git", "prompt", "status", "hidden"];
+let rowList: string[] = ["git", "prompt", "status", "fresh", "compact", "hidden"];
 let segmentList: string[] = [...STATUS_ROW, "hidden"];
 
 // A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their default order.
@@ -117,14 +128,14 @@ function zonesOf(list: string[], markers: string[]): string[][] {
   return zones;
 }
 
-// What a row list says, as the /config options it is saved in: whether each row shows, a shown row's side of the prompt,
-// and which comes first (only when both show: the order of the list).
+// What the line list says, as the /config options it is saved in: whether each line shows, a shown line's side of the
+// prompt, and every line in the list's order, the hidden ones last.
 function rowOptions(list: string[]): Record<string, string | boolean> {
   const [above = [], below = [], hidden = []] = zonesOf(list, ROW_MARKERS);
-  const shown = [...above, ...below];
-  const saved: Record<string, string | boolean> = { row_git: !hidden.includes("git"), row_status: !hidden.includes("status") };
-  for (const name of shown) saved[`row_${name}_position`] = above.includes(name) ? "above" : "below";
-  if (shown.includes("git") && shown.includes("status")) saved.row_order = shown.indexOf("git") < shown.indexOf("status") ? "git_first" : "status_first";
+  const saved: Record<string, string | boolean> = {};
+  for (const name of LINES) saved[LINE_OPTIONS[name].on] = !hidden.includes(name);
+  for (const name of [...above, ...below]) saved[LINE_OPTIONS[name as Line].at] = above.includes(name) ? "above" : "below";
+  saved.line_order = [...above, ...below, ...hidden].join(",");
   return saved;
 }
 
@@ -328,16 +339,13 @@ export const register: Register = (on, options) => {
   const tags = ordered(options.segment_order, STATUS_ROW);
   const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
   segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
-  const rows: Record<"git" | "status", Layout> = {
-    git: options.row_git === true ? GIT_ROW : [],
-    status: options.row_status === true ? shownTags : [],
-  };
-  const stacked: ("git" | "status")[] = options.row_order === "status_first" ? ["status", "git"] : ["git", "status"];
-  const shownRows = stacked.filter((name) => options[`row_${name}`] === true);
-  const isAbove = (name: "git" | "status") => (name === "git" ? options.row_git_position : options.row_status_position) === "above";
-  aboveRows = shownRows.filter(isAbove).map((name) => rows[name]);
-  belowRows = shownRows.filter((name) => !isAbove(name)).map((name) => rows[name]);
-  rowList = [...shownRows.filter(isAbove), "prompt", ...shownRows.filter((name) => !isAbove(name)), "hidden", ...stacked.filter((name) => !shownRows.includes(name))];
+  statusTags = shownTags;
+  const lines = ordered(options.line_order, LINES);
+  const shownLines = lines.filter((name) => options[LINE_OPTIONS[name].on] === true);
+  const isAbove = (name: Line) => options[LINE_OPTIONS[name].at] === "above";
+  aboveLines = shownLines.filter(isAbove);
+  belowLines = shownLines.filter((name) => !isAbove(name));
+  rowList = [...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !shownLines.includes(name))];
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
@@ -390,8 +398,8 @@ export const register: Register = (on, options) => {
         Text({ bold: true, children: "Statusline order" }),
         Text({ dimColor: true, children: "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off." }),
         gap(),
-        Text({ bold: true, children: "Rows" }),
-        Text({ dimColor: true, children: "A row above the prompt marker draws above your prompt. A row below it draws under your prompt." }),
+        Text({ bold: true, children: "Lines around the prompt" }),
+        Text({ dimColor: true, children: "A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache and smart zone lines show only while they apply." }),
         list("rows", rowList, ROW_MARKERS),
         gap(),
         Text({ bold: true, children: "Status row" }),
@@ -508,27 +516,41 @@ export const register: Register = (on, options) => {
   });
 
 
-  // Under the prompt the hint line draws, then the status row, then a line of the mod's own for each offer that holds:
-  // a fresh start once the cache is cold, a compaction once the smart zone is nearly spent. A draft in the prompt keeps them, as a reminder
-  // not to keep going. The fresh start waits while Claude works; the compaction does not, for the command queues and runs
-  // once the session is idle. Each has a button that hides it, for the rest of the session or the dismiss_minutes option.
+  // Under the prompt the engine's hint line draws, then the lines placed below it, in line_order. Among them are the
+  // mod's own, one for each offer that holds: a fresh start once the cache is cold, a compaction once the smart zone is
+  // nearly spent. A draft in the prompt keeps them, as a reminder not to keep going. The fresh start waits while Claude
+  // works; the compaction does not, for the command queues and runs once the session is idle. Each has a button that
+  // hides it, for the rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
     const drawn = await next(e);
     const ui = $.ui.resolve(e);
-    const rows = await drawRows($, ui, belowRows);
-    const offers = [e.props.isWorking ? undefined : await freshStartLine($, ui), await compactLine($, ui)].filter((line) => line !== undefined);
-    return rows.length + offers.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows, ...offers] });
+    const rows = await drawLines($, ui, belowLines, e.props.isWorking);
+    return rows.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows] });
   });
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.surface !== "terminal" || e.props.hasSurvey) return next(e);
     const ui = $.ui.resolve(e);
-    const rows = await drawRows($, ui, aboveRows);
+    const rows = await drawLines($, ui, aboveLines, e.props.isWorking);
     if (rows.length === 0) return next(e);
     return ui.Box({ flexDirection: "column", paddingX: 1, children: rows });
   });
 };
+
+// The named lines, in order, each as the elements it draws now (none for an offer that does not hold).
+async function drawLines($: EngineInterface, ui: Ui, names: Line[], isWorking: boolean) {
+  const drawn: ReturnType<Ui["Box"]>[] = [];
+  for (const name of names) {
+    const found =
+      name === "git" ? await drawRows($, ui, [GIT_ROW])
+      : name === "status" ? await drawRows($, ui, [statusTags])
+      : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
+      : [await compactLine($, ui)];
+    for (const line of found) if (line !== undefined) drawn.push(line);
+  }
+  return drawn;
+}
 
 // The rows from the state, none until the first usage reading; read every frame (the tick), so they move live.
 async function drawRows($: EngineInterface, ui: Ui, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {

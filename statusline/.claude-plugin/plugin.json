@@ -51,15 +51,11 @@
       ],
       "default": "below"
     },
-    "row_order": {
+    "line_order": {
       "type": "string",
-      "title": "Statusline: Rows › order",
-      "description": "Which row comes first when both draw on the same side of the prompt. git_first (default) / status_first. Set by dragging in /statusline:order.",
-      "options": [
-        "git_first",
-        "status_first"
-      ],
-      "default": "git_first"
+      "title": "Statusline: Lines › order",
+      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,status,fresh,compact)",
+      "default": "git,status,fresh,compact"
     },
     "segment_model": {
       "type": "boolean",
@@ -134,6 +130,16 @@
       "description": "Once this session wrote a handoff, a line under the prompt offers a fresh session from it, with a button that starts it. With the cache cold it also shows what the next message costs here; with it warm, the line hides on your next message. true (default) / false",
       "default": true
     },
+    "fresh_start_position": {
+      "type": "string",
+      "title": "Statusline: Offer a fresh start › position",
+      "description": "Where the fresh-start line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
+      "options": [
+        "above",
+        "below"
+      ],
+      "default": "below"
+    },
     "auto_compact": {
       "type": "boolean",
       "title": "Statusline: Compact when the smart zone is nearly used",
@@ -145,6 +151,16 @@
       "title": "Statusline: Offer a compaction when the smart zone is nearly used",
       "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does. true (default) / false",
       "default": true
+    },
+    "compact_hint_position": {
+      "type": "string",
+      "title": "Statusline: Offer a compaction › position",
+      "description": "Where the compaction line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
+      "options": [
+        "above",
+        "below"
+      ],
+      "default": "below"
     },
     "dismiss_minutes": {
       "type": "number",
