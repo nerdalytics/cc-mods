@@ -30,7 +30,7 @@ The first command fetches the marketplace and installs the versions it bumps, an
 
 ## What it shows
 
-The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side. Each row starts at the left edge or the right one, and the `density` option sets how close its tags sit. See [Spacing and alignment](#spacing-and-alignment).
+The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side and of each row's tags. Spacers push a row's tags towards the left and right edges, and the `density` option sets how close the tags sit. See [Spacing and alignment](#spacing-and-alignment).
 
 ### Status row
 
@@ -60,18 +60,19 @@ When the 7d or 5h limit would reach 100% before it resets, a line under the hint
 
 ### Git row
 
-By default the git row sits above the prompt. Its parts, left to right:
+By default the git row sits above the prompt. Its parts, left to right by default, each with its name in `git_order`:
 
-- The project folder. When you `cd` elsewhere, the current folder follows it.
-- The branch. The default branch shows bare, and any other branch after `⎇`. A branch made from a branch other than the default shows that branch first.
-- The worktree after `⎇`, unless the branch name already contains it.
-- The pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. After an open or draft pull request come its glyphs: a pencil for a draft, a check when the review approved it, a cross when changes were requested, `⋯` when a review is required, and an envelope and a count for the comments. A merged or closed pull request shows only its number.
-- `↑` and `↓` with the commits ahead and behind. A `?` after them means no remote has the branch, so the mod counts against the default branch.
-- A warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
-- The checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
-- `+`, `-` and `~` with the lines added, the lines deleted and the files changed.
+- `path`: the project folder, the branch and the worktree.
+  - The project folder. When you `cd` elsewhere, the current folder follows it.
+  - The branch. The default branch shows bare, and any other branch after `⎇`. A branch made from a branch other than the default shows that branch first.
+  - The worktree after `⎇`, unless the branch name already contains it.
+- `pr`: the pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. After an open or draft pull request come its glyphs: a pencil for a draft, a check when the review approved it, a cross when changes were requested, `⋯` when a review is required, and an envelope and a count for the comments. A merged or closed pull request shows only its number.
+- `sync`: `↑` and `↓` with the commits ahead and behind. A `?` after them means no remote has the branch, so the mod counts against the default branch.
+- `conflict`: a warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
+- `checks`: the checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
+- `changes`: `+`, `-` and `~` with the lines added, the lines deleted and the files changed.
 
-Outside a repository the row shows only the folders.
+Outside a repository the row shows only the folders. Each part's gradient follows the order it draws in, whatever that order is.
 
 ### Clicking and hovering
 
@@ -149,11 +150,13 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 ## Order and hide
 
-`/statusline:order` opens a pane with two lists. Press a row, drag it, release to drop it.
+`/statusline:order` opens a pane with three lists. Press a row, drag it, release to drop it. In a narrow pane a long label wraps under itself, and a press anywhere on it picks it up.
 
 - **Lines.** The git and pull request row, the status row, and the lines of the cold-cache fresh start, the smart-zone compaction and the limit forecast sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A line above the marker draws above your prompt. A line below it draws under your prompt, below the hint line. Lines on one side stack in the order listed, so the three offer lines can sit above, under, or between the rows. A drop writes `line_order` and the dropped line's `…_position` option.
+- **Git row.** The parts are listed in the order they draw. A drop writes `git_order`.
 - **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
-- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. Dropping a line or tag under it switches it off, which sets its `row_git`, `row_status`, `segment_<name>`, `fresh_start`, `compact_hint` or `limit_forecast` option to false, and the pane draws it dim and struck through. Dragging it back above the marker switches it on again. The markers do not drag.
+- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. Dropping a line, part or tag under it switches it off, which sets its `row_git`, `row_status`, `git_<name>`, `segment_<name>`, `fresh_start`, `compact_hint` or `limit_forecast` option to false, and the pane draws it dim and struck through. Dragging it back above the marker switches it on again. The markers do not drag.
+- **Spacers.** Under each hidden marker waits a spacer, dim. Drag it out to add a spacer where you drop it, and another one waits in its place, so you can add as many as you want. Drop a spacer under the marker to take it away. In the git and status rows a spacer pushes tags apart, as described under [Spacing and alignment](#spacing-and-alignment). Among the lines a spacer is a blank line on its side of the prompt. It has nothing of its own to show, so it always draws, even while the offer lines beside it are not showing: a spacer next to the fresh-start line leaves its blank line when the offer is gone.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -180,7 +183,17 @@ The `density` option sets how close the tags sit, in three steps:
 
 Under `compact` the model name keeps one column after it, because it has no tag of its own to stop it running into the next one. A default branch keeps one space before it too, because it has no `⎇` to separate it from the folder.
 
-`row_git_align` and `row_status_align` start their row at the `left` edge, the default, or draw it against the `right` one. A row too wide for the window wraps between its tags either way. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences.
+A row starts at the left edge unless it has spacers. A spacer takes a share of the columns the row's tags leave free, so the tags before it are pushed left and the tags after it right. Spacers next to each other take a share each, so two side by side push twice as hard as one. Some `segment_order` values:
+
+| Order | Draws |
+|---|---|
+| `spacer,model,…` | The whole row against the right edge. |
+| `model,limits,context,spacer,turns,tokens,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
+| `model,tokens,spacer,spacer,limits,spacer,turns,spacer,spacer,cache,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
+
+A tag that has nothing to show, such as the costs before the first token count, leaves its spacers meeting. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
+
+Spacers replace the `row_git_align` and `row_status_align` options of 0.16.x. Claude Code no longer passes them to the mod once they are gone from the manifest. If you had a row set to `right`, drag a spacer to the top of that row's list.
 
 `density` replaces the `compact` option of 0.15.0 and earlier, which Claude Code no longer passes to the mod once it is gone from the manifest. If you had `compact` on, set `density` to `compact` in `/config`.
 
@@ -194,15 +207,15 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 |---|---|---|---|
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
-| Git row › alignment | `row_git_align` | left | Starts the git row at the `left` edge, or draws it against the `right` one. See [Spacing and alignment](#spacing-and-alignment). |
+| Git row › path, pull request, ahead and behind, conflict, checks, changes | `git_path`, `git_pr`, `git_sync`, `git_conflict`, `git_checks`, `git_changes` | true | One toggle per part of the git row. |
+| Git row › order | `git_order` | path,pr,sync,conflict,checks,changes | The git row's parts, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes last, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
-| Status row › alignment | `row_status_align` | left | Starts the status row at the `left` edge, or draws it against the `right` one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
-| Lines › order | `line_order` | git,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` for the cold cache, `compact` for the smart zone and `forecast` for the limit forecast. A name left out goes last, and the mod ignores an unknown one. |
+| Lines › order | `line_order` | git,prompt,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` for the cold cache, `compact` for the smart zone and `forecast` for the limit forecast, with `spacer` for a blank line and `prompt` between the two sides. A line's side comes from its position option, a spacer's from where it stands against `prompt`. A name left out goes last, and the mod ignores an unknown one. |
 | Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
-| Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last, and the mod ignores an unknown one. |
+| Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes last, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
 | Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default, and the mod ignores an unknown name or a colour that does not read. `/statusline:colors` writes it. |
 | Density | `density` | standard | How close the tags sit: `compact`, `standard` or `roomy`, as described under [Spacing and alignment](#spacing-and-alignment). Replaces the `compact` option of 0.15.0 and earlier. |

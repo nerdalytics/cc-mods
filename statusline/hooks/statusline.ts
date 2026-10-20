@@ -63,16 +63,21 @@ const SEGMENTS = {
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
   tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
-  git: ({ Box, Text, Link }, s) => (s.git ? gitParts(Box, Text, Link, s.git, s.pr) : []),
 } satisfies Record<string, Segment>;
 
-// The lines around the prompt: the git row, the status row (its segments, left to right), and a line of the mod's own
-// for each offer. Each is a /config toggle and each has a place, above the prompt or under it below the engine's hint
-// line (the pickers); lines in one place stack in line_order, and the status row's tags follow segment_order.
+// The lines around the prompt: the git row, the status row, and a line of the mod's own for each offer. Each is a
+// /config toggle and each has a place, above the prompt or under it below the engine's hint line (the pickers); lines
+// in one place stack in line_order. Each row's tags are toggles too, drawn in git_order and segment_order.
 // /statusline:order writes all of them by dragging. Applied in register.
-type Layout = (keyof typeof SEGMENTS)[];
-const GIT_ROW: Layout = ["git"];
-const STATUS_ROW: Layout = ["model", "limits", "context", "turns", "tokens", "cache"];
+// A spacer in a row takes a share of the room the tags leave, so what stands before it is pushed left and what stands
+// after it right; spacers side by side take a share each. Among the lines a spacer is a blank line.
+const SPACER = "spacer";
+type Spacer = typeof SPACER;
+const isSpacer = (name: string): name is Spacer => name === SPACER;
+const STATUS_ROW = ["model", "limits", "context", "turns", "tokens", "cache"] as const;
+type StatusTag = (typeof STATUS_ROW)[number];
+const GIT_ROW = ["path", "pr", "sync", "conflict", "checks", "changes"] as const;
+type GitTag = (typeof GIT_ROW)[number];
 const LINES = ["git", "status", "fresh", "compact", "forecast"] as const;
 type Line = (typeof LINES)[number];
 const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
@@ -82,12 +87,14 @@ const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
   compact: { on: "compact_hint", at: "compact_hint_position" },
   forecast: { on: "limit_forecast", at: "limit_forecast_position" },
 };
-let aboveLines: Line[] = ["git"];
-let belowLines: Line[] = ["status", "fresh", "compact", "forecast"];
-let statusTags: Layout = STATUS_ROW;
+let aboveLines: (Line | Spacer)[] = ["git"];
+let belowLines: (Line | Spacer)[] = ["status", "fresh", "compact", "forecast"];
+let statusTags: (StatusTag | Spacer)[] = [...STATUS_ROW];
+let gitTags: (GitTag | Spacer)[] = [...GIT_ROW];
 
-// The /statusline:order pane: the lines around a prompt marker, then the status row's tags, each a list to drag. What
-// stands after a list's "hidden" marker is switched off; the markers themselves do not drag.
+// The /statusline:order pane: the lines around a prompt marker, then each row's tags, each a list to drag. What stands
+// after a list's "hidden" marker is switched off; the markers themselves do not drag. Each list keeps one spacer
+// after its hidden marker, to drag out: a spacer dropped there is gone.
 const ORDER_PANE = "statusline-order";
 const COLORS_PANE = "statusline-colors";
 const LABELS: Record<string, string> = {
@@ -99,21 +106,46 @@ const LABELS: Record<string, string> = {
   turns: "turns",
   tokens: "costs",
   cache: "cache",
+  path: "folders, branch and worktree",
+  pr: "pull request, its review and comments",
+  sync: "commits ahead and behind",
+  conflict: "conflict",
+  checks: "checks",
+  changes: "changes",
   fresh: "cold cache: fresh start",
   compact: "smart zone: compaction",
   forecast: "limit forecast",
   prompt: "━━ your prompt ━━",
   hidden: "╌╌ hidden: switched off ╌╌",
+  spacer: "↔ spacer",
 };
-const ROW_MARKERS = ["prompt", "hidden"];
-const SEGMENT_MARKERS = ["hidden"];
-let rowList: string[] = ["git", "prompt", "status", "fresh", "compact", "forecast", "hidden"];
-let segmentList: string[] = [...STATUS_ROW, "hidden"];
+const LISTS = {
+  rows: { markers: ["prompt", "hidden"], labels: { ...LABELS, spacer: "↕ spacer: a blank line" } },
+  git: { markers: ["hidden"], labels: LABELS },
+  segments: { markers: ["hidden"], labels: LABELS },
+};
+type ListKey = keyof typeof LISTS;
+const isList = (key: string): key is ListKey => Object.hasOwn(LISTS, key);
+let lists: Record<ListKey, string[]> = {
+  rows: ["git", "prompt", "status", "fresh", "compact", "forecast", "hidden", SPACER],
+  git: [...GIT_ROW, "hidden", SPACER],
+  segments: [...STATUS_ROW, "hidden", SPACER],
+};
+const listProps = (key: ListKey, items: string[], rev: number) => ({ items, labels: LISTS[key].labels, fixed: LISTS[key].markers, rev });
 
-// A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their default order.
-function ordered<T extends string>(option: unknown, defaults: readonly T[]): T[] {
+// A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their
+// default order. Spacers stay where they are named, as many as are named.
+function ordered<T extends string>(option: unknown, defaults: readonly T[]): (T | Spacer)[] {
   const named = typeof option === "string" ? option.split(",").map((name) => name.trim()) : [];
-  return [...new Set([...named.filter((name): name is T => defaults.some((known) => known === name)), ...defaults])];
+  const seen = new Set<string>();
+  const kept = named.filter((name): name is T | Spacer => isSpacer(name) || (defaults.some((known) => known === name) && !seen.has(name) && Boolean(seen.add(name))));
+  return [...kept, ...defaults.filter((name) => !seen.has(name))];
+}
+
+// A list as the pane draws it: its shown names, the hidden marker, the one spacer to drag out, the hidden names.
+function withSpare(list: string[]): string[] {
+  const at = list.indexOf("hidden");
+  return [...list.slice(0, at + 1), SPACER, ...list.slice(at + 1).filter((name) => !isSpacer(name))];
 }
 
 // A list's names by zone: before the first marker, between the markers, after the last.
@@ -132,23 +164,29 @@ function zonesOf(list: string[], markers: string[]): string[][] {
 }
 
 // What the line list says, as the /config options it is saved in: whether each line shows, a shown line's side of the
-// prompt, and every line in the list's order, the hidden ones last.
+// prompt, and every line in the list's order, the spacers where they stand, the prompt between the sides, the hidden
+// lines last.
 function rowOptions(list: string[]): Record<string, string | boolean> {
-  const [above = [], below = [], hidden = []] = zonesOf(list, ROW_MARKERS);
+  const [above = [], below = [], hidden = []] = zonesOf(list, LISTS.rows.markers);
   const saved: Record<string, string | boolean> = {};
   for (const name of LINES) saved[LINE_OPTIONS[name].on] = !hidden.includes(name);
-  for (const name of [...above, ...below]) saved[LINE_OPTIONS[name as Line].at] = above.includes(name) ? "above" : "below";
-  saved.line_order = [...above, ...below, ...hidden].join(",");
+  for (const name of [...above, ...below]) {
+    if (!isSpacer(name)) saved[LINE_OPTIONS[name as Line].at] = above.includes(name) ? "above" : "below";
+  }
+  saved.line_order = [...above, "prompt", ...below, ...hidden.filter((name) => !isSpacer(name))].join(",");
   return saved;
 }
 
-// The same for the status row's tags: each tag's toggle, and every tag in order, the hidden ones last.
-function segmentOptions(list: string[]): Record<string, string | boolean> {
-  const [shown = [], hidden = []] = zonesOf(list, SEGMENT_MARKERS);
-  const saved: Record<string, string | boolean> = { segment_order: [...shown, ...hidden].join(",") };
-  for (const name of STATUS_ROW) saved[`segment_${name}`] = shown.includes(name);
+// The same for a row's tags: each tag's toggle, and every tag in order, the spacers where they stand, the hidden tags last.
+function tagOptions(list: string[], tags: readonly string[], prefix: string, order: string): Record<string, string | boolean> {
+  const [shown = [], hidden = []] = zonesOf(list, ["hidden"]);
+  const saved: Record<string, string | boolean> = { [order]: [...shown, ...hidden.filter((name) => !isSpacer(name))].join(",") };
+  for (const name of tags) saved[`${prefix}${name}`] = shown.includes(name);
   return saved;
 }
+
+const listOptions = (key: ListKey, list: string[]) =>
+  key === "rows" ? rowOptions(list) : key === "git" ? tagOptions(list, GIT_ROW, "git_", "git_order") : tagOptions(list, STATUS_ROW, "segment_", "segment_order");
 
 const USAGE = { plugin: "statusline", key: "usage" } as const;
 const MODEL = { plugin: "statusline", key: "model" } as const;
@@ -366,8 +404,6 @@ let pingAt = -Infinity;
 // The columns between a row's tags, by the density option: none compact, one standard, two roomy.
 const DENSITY_GAPS: Record<string, number> = { compact: 0, standard: 1, roomy: 2 };
 let gap = 1;
-// The rows drawn against the right edge, by the row_git_align and row_status_align options; the rest start at the left.
-let rightAligned = { git: false, status: false };
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
 // smart_zone option off.
 let smartZone = 200_000;
@@ -409,20 +445,35 @@ export const register: Register = (on, options) => {
   keepWarm = typeof options.keep_warm_pings === "number" ? Math.max(0, Math.floor(options.keep_warm_pings)) : 0;
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   gap = DENSITY_GAPS[String(options.density)] ?? 1;
-  rightAligned = { git: options.row_git_align === "right", status: options.row_status_align === "right" };
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
-  const tags = ordered(options.segment_order, STATUS_ROW);
-  const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
-  segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
-  statusTags = shownTags;
-  const lines = ordered(options.line_order, LINES);
-  const shownLines = lines.filter((name) => options[LINE_OPTIONS[name].on] === true);
-  const isAbove = (name: Line) => options[LINE_OPTIONS[name].at] === "above";
-  aboveLines = shownLines.filter(isAbove);
-  belowLines = shownLines.filter((name) => !isAbove(name));
-  rowList = [...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !shownLines.includes(name))];
+  // A row's tags in their order, those switched off left out; the spacers stand where they are named.
+  const tagsOf = <T extends string>(order: unknown, tags: readonly T[], prefix: string) => {
+    const all = ordered(order, tags);
+    const shown = all.filter((name) => isSpacer(name) || options[`${prefix}${name}`] === true);
+    return { shown, list: withSpare([...shown, "hidden", ...all.filter((name) => !shown.includes(name))]) };
+  };
+  const status = tagsOf(options.segment_order, STATUS_ROW, "segment_");
+  const git = tagsOf(options.git_order, GIT_ROW, "git_");
+  statusTags = status.shown;
+  gitTags = git.shown;
+  // A line takes its side from its position option; a spacer from where it stands against the prompt in line_order.
+  const lines = ordered(options.line_order, [...LINES, "prompt"]);
+  const shownLine = (name: string): name is Line => !isSpacer(name) && name !== "prompt" && options[LINE_OPTIONS[name as Line].on] === true;
+  aboveLines = [];
+  belowLines = [];
+  let side = aboveLines;
+  for (const name of lines) {
+    if (name === "prompt") side = belowLines;
+    else if (isSpacer(name)) side.push(name);
+    else if (shownLine(name)) (options[LINE_OPTIONS[name].at] === "above" ? aboveLines : belowLines).push(name);
+  }
+  lists = {
+    rows: withSpare([...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !isSpacer(name) && name !== "prompt" && !shownLine(name))]),
+    git: git.list,
+    segments: status.list,
+  };
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
@@ -468,50 +519,41 @@ export const register: Register = (on, options) => {
 
   on("ui.render", { component: "Pane", requestId: ORDER_PANE }, ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
-    const { Box, Text, Client } = $.ui.resolve(e);
-    const list = (key: string, items: string[], fixed: string[]) => Client({ key, module: "./order-list.ts", props: { items, labels: LABELS, fixed, rev: 0 } });
-    const gap = () => Box({ height: 1 });
-    return Box({
-      flexDirection: "column",
-      children: [
-        Text({ bold: true, children: "Statusline order" }),
-        Text({ dimColor: true, children: "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off." }),
-        gap(),
-        Text({ bold: true, children: "Lines around the prompt" }),
-        Text({ dimColor: true, children: "A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache, smart zone and limit forecast lines show only while they apply." }),
-        list("rows", rowList, ROW_MARKERS),
-        gap(),
-        Text({ bold: true, children: "Status row" }),
-        Text({ dimColor: true, children: "The tags draw left to right in this order." }),
-        list("segments", segmentList, SEGMENT_MARKERS),
-      ],
-    });
+    const ui = $.ui.resolve(e);
+    // As wide as the pane, so a label wraps inside it rather than past its edge.
+    const list = (key: ListKey) => ui.Client({ key, module: "./order-list.ts", width: "100%", props: listProps(key, lists[key], 0) });
+    const spacers = "Drag the spacer out of hidden to add one, and drop one under hidden to take it away.";
+    return pane(ui, "Statusline order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
+      ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
+      list("rows"),
+      ...section(ui, "Git row", `The parts draw left to right in this order. A spacer takes a share of the room the parts leave, pushing what stands before it left and what stands after it right. Spacers side by side take a share each, so they push harder. ${spacers}`),
+      list("git"),
+      ...section(ui, "Status row", `The tags draw left to right in this order, with spacers as in the git row: one spacer first draws the row against the right edge. ${spacers}`),
+      list("segments"),
+    ]);
   });
 
   // Each drop writes the /config options it changed, switches first: one write per option, since a write loads the module again.
+  // The order is the same names moved, a spacer as many times as before, the markers in their order.
   on("ui.message", { requestId: ORDER_PANE }, async ($, e, next) => {
-    const isRows = e.element === "rows";
-    const current = isRows ? rowList : e.element === "segments" ? segmentList : undefined;
-    const markers = isRows ? ROW_MARKERS : SEGMENT_MARKERS;
+    const key = e.element;
     const data = e.data;
-    const isOrder =
-      current !== undefined &&
-      Array.isArray(data) &&
-      data.length === current.length &&
-      current.every((name) => data.includes(name)) &&
-      markers.every((name, i) => i === 0 || data.indexOf(markers[i - 1]) < data.indexOf(name));
-    if (!isOrder) return next(e);
-    const wanted = (isRows ? rowOptions : segmentOptions)(data);
-    const changed = Object.entries(wanted).filter(([field, value]) => value !== options[field]);
+    if (!isList(key) || !Array.isArray(data) || !data.every((name) => typeof name === "string")) return next(e);
+    const current = lists[key];
+    const { markers } = LISTS[key];
+    const sameNames = [...data].sort().join(",") === [...current].sort().join(",");
+    if (!sameNames || !markers.every((name, i) => i === 0 || data.indexOf(markers[i - 1] ?? "") < data.indexOf(name))) return next(e);
+    const changed = Object.entries(listOptions(key, data)).filter(([field, value]) => value !== options[field]);
     changed.sort(([, a], [, b]) => Number(typeof b === "boolean") - Number(typeof a === "boolean"));
     for (const [field, value] of changed) {
       const deny = await setOption($, field, value);
       if (deny) {
         $.ui.toast(`Statusline order: ${deny}`);
-        return { props: { items: current, labels: LABELS, fixed: markers, rev: Date.now() } };
+        return { props: listProps(key, current, Date.now()) };
       }
     }
-    return { props: { items: data, labels: LABELS, fixed: markers, rev: Date.now() } };
+    lists = { ...lists, [key]: withSpare(data) };
+    return { props: listProps(key, lists[key], Date.now()) };
   });
 
   on("command.run", { command: "statusline:colors" }, async ($) => {
@@ -523,7 +565,8 @@ export const register: Register = (on, options) => {
   // gradients off and on. Without gradients only a gradient's first colour is asked for; the other keeps what was saved.
   on("ui.render", { component: "Pane", requestId: COLORS_PANE }, ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
-    const { Box, Text, Button, Input } = $.ui.resolve(e);
+    const ui = $.ui.resolve(e);
+    const { Box, Text, Input } = ui;
     const fields = Object.entries(COLORS).flatMap(([name, { group, label, rgb }]) => {
       if (!isColor(name) || (!gradients && name.endsWith(".to"))) return [];
       const end = name.endsWith(".from") ? (gradients ? "light end" : "colour") : name.endsWith(".to") ? "dark end" : "";
@@ -537,35 +580,20 @@ export const register: Register = (on, options) => {
           Box({ flexShrink: 0, children: [Input({ key: name, value: hex(color(name)), placeholder: hex(rgb), submitLabel: "save", onSubmit: (value) => saveColor($, options.colors, name, value) })] }),
         ],
       });
-      return group ? [Box({ height: 1 }), Text({ bold: true, children: group }), field] : [field];
+      return group ? [...section(ui, group), field] : [field];
     });
-    return Box({
-      flexDirection: "column",
-      children: [
-        Text({ bold: true, children: "Statusline colours" }),
-        Text({ dimColor: true, children: "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default." }),
-        Box({ height: 1 }),
-        // The mod's own button face, as the offer lines draw theirs, after the setting it changes.
-        // Too narrow for both, the button goes whole to the next line rather than splitting.
-        Box({
-          flexDirection: "row",
-          flexWrap: "wrap",
-          children: [
-            Text({ dimColor: true, children: gradients ? "Gradients are on. " : "Gradients are off: one colour per gradient. " }),
-            Box({ flexShrink: 0, children: [Button({
-              key: "gradients",
-              plain: true,
-              onPress: async () => {
-                const deny = await setOption($, "gradients", !gradients);
-                if (deny) $.ui.toast(`Statusline colours: ${deny}`);
-              },
-              children: buttonLabel(Text, buttonLook("main"), "◑", gradients ? "Turn gradients off" : "Turn gradients on"),
-            })] }),
-          ],
-        }),
-        ...fields,
-      ],
-    });
+    const toggle = async () => {
+      const deny = await setOption($, "gradients", !gradients);
+      if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+    };
+    return pane(ui, "Statusline colours", "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default.", [
+      Box({ height: 1 }),
+      sentence(ui, [
+        Text({ dimColor: true, children: gradients ? "Gradients are on. " : "Gradients are off: one colour per gradient. " }),
+        button(ui, "gradients", "main", "◑", gradients ? "Turn gradients off" : "Turn gradients on", toggle),
+      ]),
+      ...fields,
+    ]);
   });
 
   on("turn.step", async function* ($, e, next) {
@@ -697,13 +725,14 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
   if (deny) $.ui.toast(`Statusline colours: ${deny}`);
 }
 
-// The named lines, in order, each as the elements it draws now (none for an offer that does not hold).
-async function drawLines($: EngineInterface, ui: Ui, names: Line[], isWorking: boolean) {
+// The named lines, in order, each as the elements it draws now (none for an offer that does not hold); a spacer is a
+// blank line.
+async function drawLines($: EngineInterface, ui: Ui, names: (Line | Spacer)[], isWorking: boolean) {
   const drawn: ReturnType<Ui["Box"]>[] = [];
   for (const name of names) {
     const found =
-      name === "git" ? await drawRows($, ui, [GIT_ROW])
-      : name === "status" ? await drawRows($, ui, [statusTags])
+      name === SPACER ? [ui.Box({ height: 1 })]
+      : name === "git" || name === "status" ? [await drawRow($, ui, name)]
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
       : await forecastLines($, ui);
@@ -712,11 +741,11 @@ async function drawLines($: EngineInterface, ui: Ui, names: Line[], isWorking: b
   return drawn;
 }
 
-// The rows from the state, none until the first usage reading; read every frame (the tick), so they move live.
-async function drawRows($: EngineInterface, ui: Ui, layout: Layout[]): Promise<ReturnType<Ui["Box"]>[]> {
+// A row from the state, none until the first usage reading; read every frame (the tick), so it moves live.
+async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status"): Promise<ReturnType<Ui["Box"]> | undefined> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
-  if (!usage) return [];
+  if (!usage) return undefined;
   const { value: model = "" } = await $.state.get(MODEL);
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: turns } = await $.state.get(TURNS);
@@ -726,27 +755,33 @@ async function drawRows($: EngineInterface, ui: Ui, layout: Layout[]): Promise<R
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
   const s: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
-  return (
-    layout
-      // The git row is bare text, no chips to tell its tags apart: compact density leaves its gaps.
-      .map((names) => {
-        const isGit = names === GIT_ROW;
-        return { parts: names.flatMap((name) => SEGMENTS[name](ui, s)), columnGap: isGit ? Math.max(gap, 1) : gap, right: isGit ? rightAligned.git : rightAligned.status };
-      })
-      .filter(({ parts }) => parts.length > 0)
-      // Too narrow for a row, it wraps between segments, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
-      // The gap, not a leading space, parts segments, so a wrapped line starts flush.
-      // ponytail: no shrink steps; a single segment wider than the line still gets squeezed.
-      .map(({ parts, columnGap, right }) =>
-        ui.Box({
-          flexDirection: "row",
-          flexWrap: "wrap",
-          columnGap,
-          justifyContent: right ? "flex-end" : "flex-start",
-          children: parts.map((part) => ui.Box({ flexShrink: 0, children: [part] })),
-        }),
-      )
-  );
+  // The git row is bare text, no chips to tell its tags apart: compact density leaves its gaps.
+  if (row === "git") return s.git ? rowOf(ui, gitParts(ui, s.git, s.pr, gitTags), Math.max(gap, 1)) : undefined;
+  return rowOf(ui, statusTags.map((name) => (isSpacer(name) ? name : SEGMENTS[name](ui, s))), gap);
+}
+
+// A row of tags, each a list of parts, and spacers; nothing when no tag has a part. A run of spacers between two tags
+// is one Box that grows by as many shares as it has spacers.
+// Too narrow for a row, it wraps between parts, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
+// The gap, not a leading space, parts them, so a wrapped line starts flush.
+// ponytail: no shrink steps; a single part wider than the line still gets squeezed. A spacer adds a gap of its own
+// beside each neighbour, so a full row reads one gap wider at a spacer.
+function rowOf(ui: Ui, tags: (Parts | Spacer)[], columnGap: number) {
+  const children: Parts = [];
+  let shares = 0;
+  for (const tag of tags) {
+    if (tag === SPACER) {
+      shares++;
+      continue;
+    }
+    if (tag.length === 0) continue;
+    if (shares > 0) children.push(ui.Box({ flexGrow: shares }));
+    shares = 0;
+    children.push(...tag.map((part) => ui.Box({ flexShrink: 0, children: [part] })));
+  }
+  if (children.length === 0) return undefined;
+  if (shares > 0) children.push(ui.Box({ flexGrow: shares }));
+  return ui.Box({ flexDirection: "row", flexWrap: "wrap", columnGap, children });
 }
 
 function poll($: EngineInterface): void {
@@ -901,7 +936,7 @@ async function findHandoff($: EngineInterface): Promise<void> {
 // conversation to the cache again, against a fresh session from the handoff file, a button. While the cache is warm it
 // shows only until the person's next prompt, which a handoff written while they were away has not met yet. A handoff
 // that later requests have moved past is not offered, cold or warm: a fresh session from it would lose what came after.
-async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
+async function freshStartLine($: EngineInterface, ui: Ui) {
   if (!freshStart || (await dismissed($, "fresh"))) return undefined;
   const { value: tokens } = await $.state.get(TOKENS);
   const { value: handoff } = await $.state.get(HANDOFF);
@@ -915,34 +950,27 @@ async function freshStartLine($: EngineInterface, { Box, Text, Button }: Ui) {
   const fresh = c.write === undefined || c.prompt === 0 ? undefined : (c.write * (c.base + handoff.bytes / 4)) / c.prompt;
   // A line of its own under the engine's, a red $ in the column of its mode glyph. The prices are the context; the
   // button names the action alone.
-  return Box({
-    flexDirection: "row",
-    children: [
-      Text({ color: hex(color("cache.cold.from")), children: "$" }),
-      Text({ dimColor: true, children: cold ? ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` : ` Handoff written: fresh start ~${usd(fresh)} ` }),
-      Button({ key: "resume", plain: true, onPress: () => void resumeFrom($, handoff.path), children: buttonLabel(Text, buttonLook("main"), "\uf15c", "Start fresh") }),
-      dismissButton($, "fresh", Button, Text),
-    ],
-  });
+  return notice(ui, "$", color("cache.cold.from"), [
+    ui.Text({ dimColor: true, children: cold ? ` Cache cold: next message ${usd(c.write)}, fresh start ~${usd(fresh)} ` : ` Handoff written: fresh start ~${usd(fresh)} ` }),
+    button(ui, "resume", "main", "\uf15c", "Start fresh", () => void resumeFrom($, handoff.path)),
+    dismissButton($, ui, "fresh"),
+  ]);
 }
 
 // From the context having used COMPACT_HINT_AT of the smart zone on, the line that offers to compact: recall is precise
 // only inside the zone, and a compaction swaps the conversation for its summary. Not drawn with no smart zone.
-async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) {
+async function compactLine($: EngineInterface, ui: Ui) {
+  const { Text, Link } = ui;
   const { value: usage } = await $.state.get(USAGE);
   const used = usage?.context.tokens;
   if (!compactHint || compacting || (await dismissed($, "compact")) || smartZone <= 0 || used === undefined || used < smartZone * COMPACT_HINT_AT) return undefined;
-  return Box({
-    flexDirection: "row",
-    children: [
-      Text({ color: hex(color("notice")), children: "\u25c6" }),
-      Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
-      Link({ href: SMART_ZONE_URL, children: Text({ color: hex(color("notice")), underline: true, children: "Smart zone" }) }),
-      Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? "very deep into"} the dumb zone now. ` : ". " }),
-      Button({ key: "compact", plain: true, onPress: () => void compactSession($), children: buttonLabel(Text, buttonLook("main"), "\uf066", "Compact") }),
-      dismissButton($, "compact", Button, Text),
-    ],
-  });
+  return notice(ui, "\u25c6", color("notice"), [
+    Text({ dimColor: true, children: used >= smartZone ? " You're out of the " : " You're nearly out of the " }),
+    Link({ href: SMART_ZONE_URL, children: Text({ color: hex(color("notice")), underline: true, children: "Smart zone" }) }),
+    Text({ dimColor: true, children: used >= smartZone ? `. Same model, ${DUMB_ZONE_DEPTHS.find(([upTo]) => used / smartZone < upTo)?.[1] ?? "very deep into"} the dumb zone now. ` : ". " }),
+    button(ui, "compact", "main", "\uf066", "Compact", () => void compactSession($)),
+    dismissButton($, ui, "compact"),
+  ]);
 }
 
 // At the pace the window has run at since it began, as of the response that reported it: seconds from now until it
@@ -959,7 +987,7 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
 
 // A line under the prompt for each limit that runs out before it resets: the pace is the whole window's so far, idle
 // nights included, so it is the one to plan by, not a burst's. Drawn only while the session's reading is fresh.
-async function forecastLines($: EngineInterface, { Box, Text }: Ui) {
+async function forecastLines($: EngineInterface, ui: Ui) {
   if (!limitForecast) return [];
   const { value: usage } = await $.state.get(USAGE);
   const { value: readAt = 0 } = await $.state.get(READ);
@@ -969,13 +997,9 @@ async function forecastLines($: EngineInterface, { Box, Text }: Ui) {
     const hit = found ? forecastOf(limit, found, readAt, now) : undefined;
     if (!found || !hit) return [];
     return [
-      Box({
-        flexDirection: "row",
-        children: [
-          Text({ color: hex(color("notice")), children: WARN_MARK }),
-          Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
-        ],
-      }),
+      notice(ui, WARN_MARK, color("notice"), [
+        ui.Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
+      ]),
     ];
   });
 }
@@ -987,23 +1011,43 @@ async function dismissed($: EngineInterface, offer: Offer): Promise<boolean> {
   return at !== undefined && (dismissFor === 0 || (await $.clock.now()) - at < dismissFor);
 }
 
-// A button's face as one Text, so a pointer over it inverts the whole of it, bars included: the half blocks are its first
-// and last characters, the label's colour against the fill.
-function buttonLabel(Text: Ui["Text"], look: ButtonLook, icon: string, label?: string) {
-  return Text({ color: hex(look.label), backgroundColor: hex(look.fill), children: `▌ ${icon}${label ? ` ${label}` : ""} ▐` });
+// The mod's drawing pieces, so each thing looks the same wherever it is drawn: panes, their sections, sentences that
+// wrap, the offer and warning lines, and buttons.
+
+// A pane: its title, bold, what it is for, dim, then what it holds, one under another.
+function pane({ Box, Text }: Ui, title: string, about: string, children: Parts) {
+  return Box({ flexDirection: "column", children: [Text({ bold: true, children: title }), Text({ dimColor: true, children: about }), ...children] });
+}
+
+// A section of a pane: a blank line, its heading, bold, and what it is for, dim, when it says.
+function section({ Box, Text }: Ui, heading: string, about?: string): Parts {
+  return [Box({ height: 1 }), Text({ bold: true, children: heading }), ...(about ? [Text({ dimColor: true, children: about })] : [])];
+}
+
+// Text and buttons on one line; too narrow for all of it, the text wraps and a button goes whole to the next line.
+function sentence({ Box }: Ui, children: Parts) {
+  return Box({ flexDirection: "row", flexWrap: "wrap", children });
+}
+
+// An offer or a warning: its mark in its colour, then the sentence.
+function notice(ui: Ui, mark: string, rgb: RGB, children: Parts) {
+  return sentence(ui, [ui.Text({ color: hex(rgb), children: mark }), ...children]);
+}
+
+// A button in the mod's own face, which it keeps whole: one Text, so a pointer over it inverts all of it, bars included.
+// The half blocks are its first and last characters, the label's colour against the fill.
+function button({ Box, Button, Text }: Ui, key: string, kind: "main" | "secondary", icon: string, label: string | undefined, onPress: () => void) {
+  const look = buttonLook(kind);
+  const face = Text({ color: hex(look.label), backgroundColor: hex(look.fill), children: `▌ ${icon}${label ? ` ${label}` : ""} ▐` });
+  return Box({ flexShrink: 0, children: [Button({ key, plain: true, onPress, children: face })] });
 }
 
 // The secondary button after an offer's: hides the offer. The state is the session's, so a reload keeps it hidden.
-function dismissButton($: EngineInterface, offer: Offer, Button: Ui["Button"], Text: Ui["Text"]) {
-  return Button({
-    key: "dismiss",
-    plain: true,
-    onPress: async () => {
-      const { value } = await $.state.get(DISMISSED);
-      await $.state.set(DISMISSED, { ...value, [offer]: await $.clock.now() });
-      $.ui.invalidate("ui.render");
-    },
-    children: buttonLabel(Text, buttonLook("secondary"), "\u2715"),
+function dismissButton($: EngineInterface, ui: Ui, offer: Offer) {
+  return button(ui, "dismiss", "secondary", "\u2715", undefined, async () => {
+    const { value } = await $.state.get(DISMISSED);
+    await $.state.set(DISMISSED, { ...value, [offer]: await $.clock.now() });
+    $.ui.invalidate("ui.render");
   });
 }
 
@@ -1500,11 +1544,12 @@ function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
   return Box({ key: c.key, flexDirection: "row", children });
 }
 
-// statusline.zsh's REPO row: each segment a gradient one palette stop wide, starting at blue and stepping on per segment.
-// The PR's parts sit where zsh put them: number, draft, review and comments after the worktree, checks after the conflict.
+// statusline.zsh's REPO row: each segment a gradient one palette stop wide, starting at blue and stepping on per segment
+// drawn. By default the PR's parts sit where zsh put them: number, draft, review and comments after the worktree,
+// checks after the conflict; git_order moves them, and spacers stand where it names them.
 // Links: the folders open the folder on disk (the project's, the shell's), the branch and the worktree the checkout's,
 // the PR its page; a click opens them as the terminal opens a link, in the default app.
-function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusGit, pr: StatusPr | null | undefined) {
+function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | undefined, tags: (GitTag | Spacer)[]): (Parts | Spacer)[] {
   const mark = g.vsDefault ? "?" : "";
   const c = pr?.checks;
   // A merged or closed pull request keeps only its number: its review, comments, conflict and checks no longer matter.
@@ -1512,55 +1557,72 @@ function gitParts(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], g: StatusG
   const folder = (path: string) => (path ? `file://${encodeURI(path)}` : undefined);
   const name = (path: string) => path.split("/").pop() || "~";
   const sp = gap ? " " : "";
-  const segments = ([
-    // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
-    [{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])],
-    [
-      // A bare branch name would run into the folder under compact density; a ⎇ before it parts them already.
-      { text: !gap && g.branch && g.branch === g.defaultBranch ? " " : "" },
-      {
-        text: !g.branch
-          ? ""
-          : g.branch === g.defaultBranch
-            ? g.branch
-            : g.basedOff && g.basedOff !== g.defaultBranch && g.basedOff !== g.branch
-              ? `⎇${sp}${g.basedOff}${sp}⎇${sp}${g.branch}`
-              : `⎇${sp}${g.branch}`,
-        href: folder(g.top),
-      },
+  const segments: Record<GitTag, (string | Piece[])[]> = {
+    path: [
+      // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
+      [{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])],
+      [
+        // A bare branch name would run into the folder under compact density; a ⎇ before it parts them already.
+        { text: !gap && g.branch && g.branch === g.defaultBranch ? " " : "" },
+        {
+          text: !g.branch
+            ? ""
+            : g.branch === g.defaultBranch
+              ? g.branch
+              : g.basedOff && g.basedOff !== g.defaultBranch && g.basedOff !== g.branch
+                ? `⎇${sp}${g.basedOff}${sp}⎇${sp}${g.branch}`
+                : `⎇${sp}${g.branch}`,
+          href: folder(g.top),
+        },
+      ],
+      // Hidden when the branch already names it.
+      [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
     ],
-    // Hidden when the branch already names it.
-    [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
-    [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }],
-    pr?.state === "draft" ? ` ${DRAFT_MARK}` : "",
-    live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : "",
-    pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
+    pr: [
+      [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }],
+      pr?.state === "draft" ? ` ${DRAFT_MARK}` : "",
+      live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : "",
+      pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
+    ],
     // Behind links the remote branch's history, newest first, where the commits not pulled yet sit on top. Ahead
     // links nothing: those commits exist only here.
-    [
-      { text: g.ahead > 0 ? `↑${g.ahead}${mark}` : "" },
-      { text: g.ahead > 0 && g.behind > 0 ? " " : "" },
-      { text: g.behind > 0 ? `↓${g.behind}${mark}` : "", href: g.web ? `${g.web}/commits/${encodeURI(g.base)}` : undefined },
+    sync: [
+      [
+        { text: g.ahead > 0 ? `↑${g.ahead}${mark}` : "" },
+        { text: g.ahead > 0 && g.behind > 0 ? " " : "" },
+        { text: g.behind > 0 ? `↓${g.behind}${mark}` : "", href: g.web ? `${g.web}/commits/${encodeURI(g.base)}` : undefined },
+      ],
     ],
-    g.conflict || (live && pr?.conflicting) ? ` ${WARN_MARK}` : "",
+    conflict: [g.conflict || (live && pr?.conflicting) ? ` ${WARN_MARK}` : ""],
     // Running and passed as counts, linking the PR's checks tab; each failure a cross of its own, linking its check.
-    (() => {
-      if (!c || !pr || !live) return [];
-      const tab = pr.url ? `${pr.url}/checks` : undefined;
-      const groups: Piece[][] = [
-        c.pending > 0 ? [{ text: `${OCT_DOT}${c.pending}`, href: tab }] : [],
-        pr.failedUrls.map((url) => ({ text: OCT_X, href: url || tab, color: color("pr.failed") })),
-        c.success > 0 ? [{ text: `${OCT_CHECK}${c.success}`, href: tab }] : [],
-      ].filter((g) => g.length > 0);
-      return groups.flatMap((g, k): Piece[] => (k > 0 ? [{ text: " " }, ...g] : g));
-    })(),
-    (g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : ""),
-  ] satisfies (string | Piece[])[]).map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t));
-  const shown = segments.map((pieces, k) => ({ pieces, path: k < 3 })).filter(({ pieces }) => pieces.some((p) => p.text !== ""));
-  const parts = shown.map(({ pieces, path }, i) => ({ path, part: linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1))) }));
-  // The folders, branch and worktree are one path: compact density closes it up, roomy keeps one column inside it; the
-  // row's gap parts what follows.
-  return [Box({ flexDirection: "row", columnGap: Math.min(gap, 1), children: parts.filter((p) => p.path).map((p) => p.part) }), ...parts.filter((p) => !p.path).map((p) => p.part)];
+    checks: [
+      (() => {
+        if (!c || !pr || !live) return [];
+        const tab = pr.url ? `${pr.url}/checks` : undefined;
+        const groups: Piece[][] = [
+          c.pending > 0 ? [{ text: `${OCT_DOT}${c.pending}`, href: tab }] : [],
+          pr.failedUrls.map((url) => ({ text: OCT_X, href: url || tab, color: color("pr.failed") })),
+          c.success > 0 ? [{ text: `${OCT_CHECK}${c.success}`, href: tab }] : [],
+        ].filter((g) => g.length > 0);
+        return groups.flatMap((g, k): Piece[] => (k > 0 ? [{ text: " " }, ...g] : g));
+      })(),
+    ],
+    changes: [(g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : "")],
+  };
+  let drawn = 0;
+  return tags.map((tag) => {
+    if (isSpacer(tag)) return tag;
+    const runs = segments[tag]
+      .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))
+      .filter((pieces) => pieces.some((p) => p.text !== ""))
+      .map((pieces) => {
+        const i = drawn++;
+        return linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1)));
+      });
+    // The folders, branch and worktree are one path: compact density closes it up, roomy keeps one column inside it;
+    // the row's gap parts what follows.
+    return tag === "path" && runs.length > 0 ? [Box({ flexDirection: "row", columnGap: Math.min(gap, 1), children: runs })] : runs;
+  });
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.

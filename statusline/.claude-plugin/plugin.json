@@ -35,15 +35,47 @@
       ],
       "default": "above"
     },
-    "row_git_align": {
+    "git_order": {
       "type": "string",
-      "title": "Statusline: Git row › alignment",
-      "description": "Where the git row's tags start: at the left edge, or against the right one. left (default) / right",
-      "options": [
-        "left",
-        "right"
-      ],
-      "default": "left"
+      "title": "Statusline: Git row › order",
+      "description": "The git row's parts, left to right, as a comma list of path, pr, sync, conflict, checks, changes, with spacer where a spacer stands. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: path,pr,sync,conflict,checks,changes)",
+      "default": "path,pr,sync,conflict,checks,changes"
+    },
+    "git_path": {
+      "type": "boolean",
+      "title": "Statusline: Git row › path",
+      "description": "The project folder, the shell's folder when it is elsewhere, the branch and the worktree. true (default) / false",
+      "default": true
+    },
+    "git_pr": {
+      "type": "boolean",
+      "title": "Statusline: Git row › pull request",
+      "description": "The branch's pull request: its number, draft mark, review and comments. true (default) / false",
+      "default": true
+    },
+    "git_sync": {
+      "type": "boolean",
+      "title": "Statusline: Git row › ahead and behind",
+      "description": "The commits ahead of the remote branch and behind it. true (default) / false",
+      "default": true
+    },
+    "git_conflict": {
+      "type": "boolean",
+      "title": "Statusline: Git row › conflict",
+      "description": "A mark when a merge or rebase is midway, or the branch or its pull request conflicts. true (default) / false",
+      "default": true
+    },
+    "git_checks": {
+      "type": "boolean",
+      "title": "Statusline: Git row › checks",
+      "description": "The pull request's checks: running, failed and passed. true (default) / false",
+      "default": true
+    },
+    "git_changes": {
+      "type": "boolean",
+      "title": "Statusline: Git row › changes",
+      "description": "The lines added and deleted, and the files changed, since the last commit. true (default) / false",
+      "default": true
     },
     "row_status": {
       "type": "boolean",
@@ -61,21 +93,11 @@
       ],
       "default": "below"
     },
-    "row_status_align": {
-      "type": "string",
-      "title": "Statusline: Status row › alignment",
-      "description": "Where the status row's tags start: at the left edge, or against the right one. left (default) / right",
-      "options": [
-        "left",
-        "right"
-      ],
-      "default": "left"
-    },
     "line_order": {
       "type": "string",
       "title": "Statusline: Lines › order",
-      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,status,fresh,compact,forecast)",
-      "default": "git,status,fresh,compact,forecast"
+      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast, with spacer for a blank line and prompt between the two sides. A line's side is its position option's; a spacer's is where it stands against prompt. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,prompt,status,fresh,compact,forecast)",
+      "default": "git,prompt,status,fresh,compact,forecast"
     },
     "segment_model": {
       "type": "boolean",
@@ -122,7 +144,7 @@
     "segment_order": {
       "type": "string",
       "title": "Statusline: Status row › order",
-      "description": "The status row's tags, left to right, as a comma list of model, limits, context, turns, tokens, cache. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limits,context,turns,tokens,cache)",
+      "description": "The status row's tags, left to right, as a comma list of model, limits, context, turns, tokens, cache, with spacer where a spacer stands, as in the git row's order: one spacer first draws the row against the right edge. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limits,context,turns,tokens,cache)",
       "default": "model,limits,context,turns,tokens,cache"
     },
     "gradients": {
