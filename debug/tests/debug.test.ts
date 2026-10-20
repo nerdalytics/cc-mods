@@ -62,6 +62,21 @@ describe("debug", () => {
     expect(await turnLine($, on)).toEqual(["Cooked for 7s"]);
   });
 
+  test("wraps a long trace line to the pane's width and keeps the newest rows that fit", { options: { markers: false } }, async ($, on) => {
+    on("state.get", { plugin: "statusline" }, () => ({ value: { value: ["12:00:01 old", "12:00:02 cache window open, no handoff: a turn is running"], version: 1 } }));
+    const ui = await $.ui.mount({ plugin: "debug", surface: "terminal", component: "Pane", requestId: "handoff-trace", props: { title: "Handoff trace", isFocused: true, bodyColumns: 20, placement: "dock", scroll: { offset: 0, bodyRows: 24 }, view: {} } });
+    const rows = (await ui.findAll({ type: "Text" })).map((text) => [text.children[0] ?? text.text, text.props.wrap]);
+    await ui.unmount();
+    // 20 columns: the second line in four rows, broken between words, each cut at the edge, never wrapped again.
+    expect(rows).toEqual([
+      ["12:00:01 old", "truncate-end"],
+      ["12:00:02 cache", "truncate-end"],
+      ["window open, no", "truncate-end"],
+      ["handoff: a turn is", "truncate-end"],
+      ["running", "truncate-end"],
+    ]);
+  });
+
   console.log(`debug tests in random order, seed ${seed}`);
   for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
 });

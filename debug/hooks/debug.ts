@@ -47,11 +47,30 @@ async function mark<E extends RenderInput>($: EngineInterface, e: E, next: (e: E
   return Box({ flexDirection: "row", children: [Text({ color: "#ff0000", bold: true, children: `X ${e.component} ` }), drawn] });
 }
 
-// The newest lines of a statusline trace that fit the pane, or what to say while it has none.
-function traceLines({ Box, Text }: Elements["terminal"], e: { viewport?: { rows: number } }, value: unknown, empty: string) {
-  const lines = Array.isArray(value) ? value.map(String) : [];
+// A line's rows at a width, broken between words, a word longer than the width cut; whole at width 0.
+function wrap(text: string, width: number): string[] {
+  if (width <= 0) return [text];
+  const rows: string[] = [];
+  let row = "";
+  for (const word of text.split(" ")) {
+    const joined = row ? `${row} ${word}` : word;
+    if ([...joined].length <= width) row = joined;
+    else {
+      if (row) rows.push(row);
+      const chars = [...word];
+      while (chars.length > width) rows.push(chars.splice(0, width).join(""));
+      row = chars.join("");
+    }
+  }
+  return [...rows, row];
+}
+
+// The newest rows of a statusline trace that fit the pane, a long line wrapped to the pane's width, or what to say while
+// it has none. The pane wraps the lines itself, so it counts the rows they take.
+function traceLines({ Box, Text }: Elements["terminal"], e: { props: { bodyColumns: number }; viewport?: { rows: number } }, value: unknown, empty: string) {
+  const rows = (Array.isArray(value) ? value.map(String) : []).flatMap((line) => wrap(line, e.props.bodyColumns));
   const room = Math.max(1, (e.viewport?.rows ?? 24) - 4);
-  return Box({ flexDirection: "column", children: lines.length ? lines.slice(-room).map((line) => Text({ children: line })) : [Text({ dimColor: true, children: empty })] });
+  return Box({ flexDirection: "column", children: rows.length ? rows.slice(-room).map((row) => Text({ wrap: "truncate-end", children: row })) : [Text({ dimColor: true, children: empty })] });
 }
 
 export const register: Register = (on, options) => {
