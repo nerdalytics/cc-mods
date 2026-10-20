@@ -73,16 +73,17 @@ const SEGMENTS = {
 type Layout = (keyof typeof SEGMENTS)[];
 const GIT_ROW: Layout = ["git"];
 const STATUS_ROW: Layout = ["model", "limits", "context", "turns", "tokens", "cache"];
-const LINES = ["git", "status", "fresh", "compact"] as const;
+const LINES = ["git", "status", "fresh", "compact", "forecast"] as const;
 type Line = (typeof LINES)[number];
 const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
   git: { on: "row_git", at: "row_git_position" },
   status: { on: "row_status", at: "row_status_position" },
   fresh: { on: "fresh_start", at: "fresh_start_position" },
   compact: { on: "compact_hint", at: "compact_hint_position" },
+  forecast: { on: "limit_forecast", at: "limit_forecast_position" },
 };
 let aboveLines: Line[] = ["git"];
-let belowLines: Line[] = ["status", "fresh", "compact"];
+let belowLines: Line[] = ["status", "fresh", "compact", "forecast"];
 let statusTags: Layout = STATUS_ROW;
 
 // The /statusline:order pane: the lines around a prompt marker, then the status row's tags, each a list to drag. What
@@ -99,12 +100,13 @@ const LABELS: Record<string, string> = {
   cache: "cache",
   fresh: "cold cache: fresh start",
   compact: "smart zone: compaction",
+  forecast: "limit forecast",
   prompt: "━━ your prompt ━━",
   hidden: "╌╌ hidden: switched off ╌╌",
 };
 const ROW_MARKERS = ["prompt", "hidden"];
 const SEGMENT_MARKERS = ["hidden"];
-let rowList: string[] = ["git", "prompt", "status", "fresh", "compact", "hidden"];
+let rowList: string[] = ["git", "prompt", "status", "fresh", "compact", "forecast", "hidden"];
 let segmentList: string[] = [...STATUS_ROW, "hidden"];
 
 // A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their default order.
@@ -155,6 +157,7 @@ const COMPACT_AT = { plugin: "statusline", key: "compactAt" } as const;
 type Offer = "fresh" | "compact";
 const DISMISSED = { plugin: "statusline", key: "dismissed" } as const;
 const SENT = { plugin: "statusline", key: "sent" } as const;
+const READ = { plugin: "statusline", key: "readAt" } as const;
 const GIT = { plugin: "statusline", key: "git" } as const;
 const PR = { plugin: "statusline", key: "pr" } as const;
 const REJECTED = { plugin: "statusline", key: "rejected" } as const;
@@ -198,6 +201,11 @@ const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high:
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
 const CONTEXT_CELLS = 10;
+// A limit is the account's, but a session hears its figure only in its own responses, so the forecast line needs one from
+// this session this recent: the session being prompted is the one that warns, an idle one's figure is stale.
+const FORECAST_FRESH_MS = 10 * 60_000;
+// Early in a window the pace is noise: no forecast until this share of it has gone.
+const FORECAST_FROM = 0.1;
 // The share of the smart zone the context has used when the line offering a compaction appears.
 const COMPACT_HINT_AT = 0.9;
 const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
@@ -322,6 +330,8 @@ let prBusy = false;
 let turnRate = false;
 // The merge_costs option: one cost chip for the main conversation and its subagents together.
 let mergeCosts = false;
+// The limit_forecast option: a line when a limit runs out before its reset at the pace so far.
+let limitForecast = false;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
 
@@ -336,6 +346,7 @@ export const register: Register = (on, options) => {
   gap = options.compact === true ? 0 : 1;
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
+  limitForecast = options.limit_forecast === true;
   const tags = ordered(options.segment_order, STATUS_ROW);
   const shownTags = tags.filter((name) => options[`segment_${name}`] === true);
   segmentList = [...shownTags, "hidden", ...tags.filter((name) => !shownTags.includes(name))];
@@ -399,7 +410,7 @@ export const register: Register = (on, options) => {
         Text({ dimColor: true, children: "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off." }),
         gap(),
         Text({ bold: true, children: "Lines around the prompt" }),
-        Text({ dimColor: true, children: "A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache and smart zone lines show only while they apply." }),
+        Text({ dimColor: true, children: "A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache, smart zone and limit forecast lines show only while they apply." }),
         list("rows", rowList, ROW_MARKERS),
         gap(),
         Text({ bold: true, children: "Status row" }),
@@ -448,6 +459,8 @@ export const register: Register = (on, options) => {
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
+    // ponytail: only the main conversation's response stamps the reading; whether a subagent's updates the limits is unchecked.
+    if (!e.agentId && response.usage) void $.state.set(READ, Date.now());
     tokensStale = true;
     return response;
   });
@@ -518,9 +531,9 @@ export const register: Register = (on, options) => {
 
   // Under the prompt the engine's hint line draws, then the lines placed below it, in line_order. Among them are the
   // mod's own, one for each offer that holds: a fresh start once the cache is cold, a compaction once the smart zone is
-  // nearly spent. A draft in the prompt keeps them, as a reminder not to keep going. The fresh start waits while Claude
-  // works; the compaction does not, for the command queues and runs once the session is idle. Each has a button that
-  // hides it, for the rest of the session or the dismiss_minutes option.
+  // nearly spent, a warning when a limit runs out before it resets. A draft in the prompt keeps them, as a reminder not
+  // to keep going. The fresh start waits while Claude works; the compaction does not, for the command queues and runs
+  // once the session is idle. The first two have a button that hides them, for the rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
     const drawn = await next(e);
@@ -546,7 +559,8 @@ async function drawLines($: EngineInterface, ui: Ui, names: Line[], isWorking: b
       name === "git" ? await drawRows($, ui, [GIT_ROW])
       : name === "status" ? await drawRows($, ui, [statusTags])
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
-      : [await compactLine($, ui)];
+      : name === "compact" ? [await compactLine($, ui)]
+      : await forecastLines($, ui);
     for (const line of found) if (line !== undefined) drawn.push(line);
   }
   return drawn;
@@ -771,6 +785,41 @@ async function compactLine($: EngineInterface, { Box, Text, Button, Link }: Ui) 
       Button({ key: "compact", plain: true, onPress: () => void compactSession($), children: buttonLabel(Text, BUTTON.main, "\uf066", "Compact") }),
       dismissButton($, "compact", Button, Text),
     ],
+  });
+}
+
+// At the pace the window has run at since it began, as of the response that reported it: seconds from now until it
+// reaches 100%, and until it resets. Nothing while it is on track, out already, early in its window, or its reading old.
+function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number): { hitIn: number; left: number } | undefined {
+  if (!found.resetsAt || found.percentUsed <= 0 || found.percentUsed >= 100 || now - readAt > FORECAST_FRESH_MS) return undefined;
+  const resetAt = Date.parse(found.resetsAt);
+  const elapsed = limit.seconds - (resetAt - readAt) / 1000;
+  if (!(elapsed >= limit.seconds * FORECAST_FROM)) return undefined;
+  const hitIn = (elapsed * (100 - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
+  const left = (resetAt - now) / 1000;
+  return hitIn > 0 && hitIn < left ? { hitIn, left } : undefined;
+}
+
+// A line under the prompt for each limit that runs out before it resets: the pace is the whole window's so far, idle
+// nights included, so it is the one to plan by, not a burst's. Drawn only while the session's reading is fresh.
+async function forecastLines($: EngineInterface, { Box, Text }: Ui) {
+  if (!limitForecast) return [];
+  const { value: usage } = await $.state.get(USAGE);
+  const { value: readAt = 0 } = await $.state.get(READ);
+  const now = Date.now();
+  return LIMITS.flatMap((limit) => {
+    const found = usage?.rateLimits.find((r) => r.kind === limit.kind);
+    const hit = found ? forecastOf(limit, found, readAt, now) : undefined;
+    if (!found || !hit) return [];
+    return [
+      Box({
+        flexDirection: "row",
+        children: [
+          Text({ color: hex(AGENTS_CHIP.from), children: WARN_MARK }),
+          Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
+        ],
+      }),
+    ];
   });
 }
 

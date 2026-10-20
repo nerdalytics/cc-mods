@@ -538,6 +538,57 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
+  test("draws the limit forecast above the prompt when its position says so", { options: { limit_forecast_position: "above" } }, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "statusline", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 }}));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    expect(await above.find({ type: "Text", text: /at this pace/ })).toBeDefined();
+    await above.unmount();
+    const below = await mountHint($);
+    expect(await below.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
+    await below.unmount();
+  });
+
+  // The 5h window is 300 minutes long. 70% used with 2h left is 3h in: at that pace 100% comes 1h17m from now, 43m before the reset.
+  // The reading's time is the last response of this session, which the test stands in for with its age in minutes.
+  for (const [title, used, resetsInMin, readAgoMin, options, shown] of [
+    ["warns when a limit runs out before it resets at the pace so far", 70, 120, 0, {}, true],
+    ["stays quiet while the pace reaches the reset with room to spare", 40, 120, 0, {}, false],
+    ["stays quiet early in a window, where the pace is noise", 70, 290, 0, {}, false],
+    ["stays quiet when this session's last response is over 10 minutes old", 70, 120, 11, {}, false],
+    ["stays quiet when the person turned limit_forecast off", 70, 120, 0, { limit_forecast: false }, false],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({
+      value: {
+        startedAt: 0,
+        context: { window: 1_000_000 },
+        rateLimits: [
+          { kind: "five_hour", percentUsed: used, resetsAt: new Date(now + resetsInMin * 60_000).toISOString() },
+          // 7d is 85% gone at 20% used: on track, so it never gets a line of its own.
+          { kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() },
+        ],
+      },
+    }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "statusline", key: "readAt" }, () => ({ value: { value: now - readAgoMin * 60_000 - 1_000, version: 1 } }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const line = await ui.find({ type: "Text", text: /at this pace/ });
+    if (shown) expect(line?.text).toMatch(/^ 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/);
+    else expect(line).toBeUndefined();
+    expect(await ui.find({ type: "Text", text: /7d at/ })).toBeUndefined();
+    await ui.unmount();
+  });
+
   const idle = [subagent("completed")];
   const working = [subagent("running")];
   for (const [title, files, offered, lastAgo, options, agents, prompted, handoffBefore = 0.5] of [
@@ -1450,10 +1501,10 @@ describe("statusline", () => {
     configRow("row_git_position", "above"),
     configRow("row_status", true),
     configRow("row_status_position", "below"),
-    configRow("line_order", "git,status,fresh,compact"),
+    configRow("line_order", "git,status,fresh,compact,forecast"),
     configRow("segment_order", "model,limits,context,turns,tokens,cache"),
     ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => configRow(`segment_${name}`, true)),
-    ...["fresh_start", "compact_hint"].flatMap((field) => [configRow(field, true), configRow(`${field}_position`, "below")]),
+    ...["fresh_start", "compact_hint", "limit_forecast"].flatMap((field) => [configRow(field, true), configRow(`${field}_position`, "below")]),
   ];
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
     const written: [string, unknown][] = [];
@@ -1472,9 +1523,9 @@ describe("statusline", () => {
   const PINNED = { row_git: true, row_status: true, row_git_position: "above", row_status_position: "below" };
 
   test("dragging the git row below the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
-    // git, ── prompt ──, status, fresh, compact, ── hidden ──: git dropped on status's row goes below the prompt, after status.
+    // git, ── prompt ──, status, fresh, compact, forecast, ── hidden ──: git dropped on status's row goes below the prompt, after status.
     const written = await dragIn(on, $, PINNED, "rows", 0, 2);
-    expect(written).toEqual([["row_git_position", "below"], ["line_order", "status,git,fresh,compact"]]);
+    expect(written).toEqual([["row_git_position", "below"], ["line_order", "status,git,fresh,compact,forecast"]]);
   });
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
@@ -1490,26 +1541,26 @@ describe("statusline", () => {
   });
 
   test("dragging a row into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "rows", 2, 5)).toEqual([["row_status", false], ["line_order", "git,fresh,compact,status"]]);
+    expect(await dragIn(on, $, PINNED, "rows", 2, 6)).toEqual([["row_status", false], ["line_order", "git,fresh,compact,forecast,status"]]);
   });
 
-  test("dragging the compaction line above the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "rows", 4, 0)).toEqual([["compact_hint_position", "above"], ["line_order", "compact,git,status,fresh"]]);
+  test("dragging the forecast line above the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 5, 0)).toEqual([["limit_forecast_position", "above"], ["line_order", "forecast,git,status,fresh,compact"]]);
   });
 
-  test("dragging the compaction line into the hidden zone switches off its toggle", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "rows", 4, 5)).toEqual([["compact_hint", false]]);
+  test("dragging the forecast line into the hidden zone switches off its toggle", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "rows", 5, 6)).toEqual([["limit_forecast", false]]);
   });
 
   test("a drop that changes nothing writes nothing", { options: PINNED }, async ($, on) => {
     expect(await dragIn(on, $, PINNED, "rows", 0, 0)).toEqual([]);
   });
 
-  test("the order pane lists the lines around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", line_order: "status,git,fresh,compact", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
+  test("the order pane lists the lines around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", line_order: "status,git,fresh,compact,forecast", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false } }, async ($, on) => {
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "fresh", "compact", "hidden"] });
+    expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "fresh", "compact", "forecast", "hidden"] });
     expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "context", "turns", "tokens", "hidden", "limits"] });
     await ui.unmount();
   });

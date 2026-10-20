@@ -30,7 +30,7 @@ The first command fetches the marketplace and installs the versions it bumps, an
 
 ## What it shows
 
-The mod draws a status row and a git row, and under the prompt a line for each of the cold cache and the smart zone when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side.
+The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side.
 
 ### Status row
 
@@ -51,6 +51,8 @@ Once this session has written a handoff, a line appears under Claude Code's hint
 Once the context has used 90% of the smart zone, another line appears there: `You're nearly out of the Smart zone.`, with `Smart zone` linking to its [definition](https://www.aihero.dev/ai-coding-dictionary/smart-zone), and a `Compact` button that runs `/compact`. Past the smart zone it reads `You're out of the Smart zone. Same model, just into the dumb zone now.`, and the further the context grows the further in it says: `just into` up to 1.25 times the smart zone, then `well into`, `deep into` from 1.5 times and `very deep into` from 2 times. The line follows the `smart_zone_tokens` option. It stays while Claude works, a subagent runs and you type: the `Compact` button queues `/compact`, which runs once the session is idle. The line disappears while a compaction runs, whoever started it, and comes back if the compaction ends without compacting, for example when you cancel it with Esc. A cross after the button hides it for the rest of the session, or for the minutes the `dismiss_minutes` option sets. The `compact_hint` option turns it off, and with the `smart_zone` option off it never appears.
 
 With the `auto_compact` option on, the mod runs `/compact` itself, without the button. It waits until the session is idle and the context has used 90% of the smart zone, the point where the line appears. It runs once between two of your prompts. Like the handoff, it does not run while a subagent is at work, with a usage limit used up, or with the 5h limit at 98%, or 90% on Fable and Mythos. The option is off by default, because a compaction replaces the conversation with its summary.
+
+When the 7d or 5h limit would reach 100% before it resets, a line under the hint line, or above the prompt if `limit_forecast_position` says so, says so: `5h at 70%: at this pace it runs out in 1h17m, 43m before it resets.` The pace is the one the window has run at since it began, idle stretches included, so a quiet night counts. It is the account's figure, which every session's responses move. A session hears it only in its own responses, so the line shows only for a session that got one in the last 10 minutes: the session you are prompting warns, an idle one stays quiet. It waits until a tenth of the window has passed, because the pace is noise before that. It does not run on a window at 100%, which the bars already show. Turn it off with `limit_forecast`.
 
 ### Git row
 
@@ -145,9 +147,9 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 
 `/statusline:order` opens a pane with two lists. Press a row, drag it, release to drop it.
 
-- **Lines.** The git and pull request row, the status row, and the lines of the cold-cache fresh start and the smart-zone compaction sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A line above the marker draws above your prompt. A line below it draws under your prompt, below the hint line. Lines on one side stack in the order listed, so the two offer lines can sit above, under, or between the rows. A drop writes `line_order` and the dropped line's `…_position` option.
+- **Lines.** The git and pull request row, the status row, and the lines of the cold-cache fresh start, the smart-zone compaction and the limit forecast sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A line above the marker draws above your prompt. A line below it draws under your prompt, below the hint line. Lines on one side stack in the order listed, so the three offer lines can sit above, under, or between the rows. A drop writes `line_order` and the dropped line's `…_position` option.
 - **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
-- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. A line or tag dropped under it is switched off: `row_git`, `row_status`, `segment_<name>`, `fresh_start` or `compact_hint` becomes false, and the pane draws it dim and struck through. Dragged back above the marker, it is switched on again. The markers do not drag.
+- **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. A line or tag dropped under it is switched off: `row_git`, `row_status`, `segment_<name>`, `fresh_start`, `compact_hint` or `limit_forecast` becomes false, and the pane draws it dim and struck through. Dragged back above the marker, it is switched on again. The markers do not drag.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -164,8 +166,8 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
 | Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
-| Lines › order | `line_order` | git,status,fresh,compact | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` (cold cache) and `compact` (smart zone). A name left out goes last; an unknown one is ignored. |
-| Offer a fresh start, Offer a compaction › position | `fresh_start_position`, `compact_hint_position` | below | Places each of these lines `above` or `below` the prompt. |
+| Lines › order | `line_order` | git,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` (cold cache), `compact` (smart zone) and `forecast` (limit forecast). A name left out goes last; an unknown one is ignored. |
+| Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
 | Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list. A name left out goes last; an unknown one is ignored. |
 | Compact spacing | `compact` | false | Removes the space between the status row's tags. The model name keeps one column after it. In the git row it removes the spaces between and inside the folders, branch and worktree. The rest of the git row keeps its spaces. A default branch keeps one space before it, because it has no `⎇` to separate it from the folder. |
@@ -177,6 +179,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Dismissed offers stay hidden (minutes) | `dismiss_minutes` | 0 | How long the cross on the `Start fresh` and `Compact` lines hides its line. 0 hides it for the rest of the session. |
 | Smart zone on the context bar | `smart_zone` | true | Set to false, the context bar drops the smart zone. Each cell becomes a full-height block of the context left before auto-compaction. The glyph becomes a moon that fills across the whole window, and `⊙` past the threshold. |
 | Smart zone (tokens) | `smart_zone_tokens` | 200000 | The size of the smart zone that the context bar's top half shows. 0 draws the bar as if `smart_zone` were off. |
+| Warn when a limit will run out before its reset | `limit_forecast` | true | Shows the line described under [Status row](#status-row) when the 7d or 5h limit would reach 100% before it resets. |
 | Turn line › tokens per second | `turn_rate` | true | Shows the tokens per second in the line that closes a turn, as described under [End of turn](#end-of-turn). |
 
 ## Needs

@@ -54,8 +54,8 @@
     "line_order": {
       "type": "string",
       "title": "Statusline: Lines › order",
-      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,status,fresh,compact)",
-      "default": "git,status,fresh,compact"
+      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,status,fresh,compact,forecast)",
+      "default": "git,status,fresh,compact,forecast"
     },
     "segment_model": {
       "type": "boolean",
@@ -181,6 +181,22 @@
       "description": "The context size up to which recall stays precise; the context bar's top half shows how much of it is left. (default: 200000)",
       "default": 200000,
       "min": 0
+    },
+    "limit_forecast": {
+      "type": "boolean",
+      "title": "Statusline: Warn when a limit will run out before its reset",
+      "description": "A line under the prompt when, at the pace this window has run at so far, the 7d or 5h limit reaches 100% before it resets. It needs a response of this session from the last 10 minutes, since a session hears the account's figure only in its own responses. true (default) / false",
+      "default": true
+    },
+    "limit_forecast_position": {
+      "type": "string",
+      "title": "Statusline: Limit forecast › position",
+      "description": "Where the limit forecast line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
+      "options": [
+        "above",
+        "below"
+      ],
+      "default": "below"
     },
     "turn_rate": {
       "type": "boolean",
