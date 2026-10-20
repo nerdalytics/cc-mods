@@ -1687,6 +1687,9 @@ describe("statusline", () => {
       expect(await ui.find({ type: "Input", key: "turns.from" })).toBeDefined();
       expect(await ui.find({ type: "Input", key: "turns.to" })).toBeUndefined();
       expect(await ui.find({ type: "Input", key: "context.mid" })).toBeDefined();
+      // The mod's own button face, as Compact and Start fresh have, not the engine's [ label ].
+      expect((await ui.find({ type: "Button", key: "gradients" }))?.props.plain).toBe(true);
+      expect((await ui.find({ type: "Text", text: /^▌ ◑ Turn gradients on ▐$/ }))?.props).toMatchObject({ color: "#c7d2fe", backgroundColor: "#4f46e5" });
       await ui.press({ key: "gradients" });
     });
     expect(written).toEqual([["gradients", true]]);

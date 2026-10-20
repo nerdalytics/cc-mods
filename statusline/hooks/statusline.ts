@@ -542,13 +542,21 @@ export const register: Register = (on, options) => {
         Text({ bold: true, children: "Statusline colours" }),
         Text({ dimColor: true, children: "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default." }),
         Box({ height: 1 }),
-        Button({
-          key: "gradients",
-          label: gradients ? "Gradients on: turn off, one colour per gradient" : "Gradients off: turn on",
-          onPress: async () => {
-            const deny = await setOption($, "gradients", !gradients);
-            if (deny) $.ui.toast(`Statusline colours: ${deny}`);
-          },
+        // The mod's own button face, as the offer lines draw theirs, after the setting it changes.
+        Box({
+          flexDirection: "row",
+          children: [
+            Text({ dimColor: true, children: gradients ? "Gradients are on. " : "Gradients are off: one colour per gradient. " }),
+            Button({
+              key: "gradients",
+              plain: true,
+              onPress: async () => {
+                const deny = await setOption($, "gradients", !gradients);
+                if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+              },
+              children: buttonLabel(Text, buttonLook("main"), "◑", gradients ? "Turn gradients off" : "Turn gradients on"),
+            }),
+          ],
         }),
         ...fields,
       ],
