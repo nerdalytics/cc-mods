@@ -669,7 +669,8 @@ export const register: Register = (on, options) => {
 // Writes one of the mod's /config options, never another plugin's of the same name; a write loads the module again. Why
 // it was not written, when it was not.
 async function setOption($: EngineInterface, field: string, value: string | boolean): Promise<string | undefined> {
-  const key = (await $.config.list()).find((row) => row.provider.plugin === "statusline" && row.key.endsWith(`.${field}`))?.key;
+  // An installed copy is named for its marketplace too (statusline@cc-mods, settings.json's pluginConfigs key).
+  const key = (await $.config.list()).find((row) => /^statusline(@|$)/.test(row.provider.plugin) && row.key.endsWith(`.${field}`))?.key;
   return key ? (await $.config.set({ key, value })).deny : `no /config row ${field}`;
 }
 

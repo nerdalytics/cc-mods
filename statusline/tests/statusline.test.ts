@@ -1660,6 +1660,22 @@ describe("statusline", () => {
     expect(written).toEqual([["colors", "pr.open=#000000,turns.to=#abcdef"]]);
   });
 
+  test("writes to an installed copy's rows, named for its marketplace", async ($, on) => {
+    const written: string[] = [];
+    const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `statusline@cc-mods.${field}`, provider: { plugin: "statusline@cc-mods", tier: "user" } });
+    const other: ConfigRow = { ...configRow("gradients", true), key: "otherplugin.gradients", provider: { plugin: "otherplugin", tier: "user" } };
+    on("config.list", () => ({ value: [other, installed("colors", ""), installed("gradients", true)] }));
+    on("config.set", (_$, e) => {
+      written.push(e.key);
+      return { value: e.value };
+    });
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    await ui.press({ key: "gradients" });
+    await ui.input({ key: "turns.from", text: "#123456" });
+    await ui.unmount();
+    expect(written).toEqual(["statusline@cc-mods.gradients", "statusline@cc-mods.colors"]);
+  });
+
   test("an empty field drops the colour from the colors option", { options: { colors: "pr.open=#000000,turns.to=#abcdef" } }, async ($, on) => {
     const { written } = await colorsPane($, on, { colors: "pr.open=#000000,turns.to=#abcdef" }, async (ui) => {
       await ui.input({ key: "turns.to", text: "" });
