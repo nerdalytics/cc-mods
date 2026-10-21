@@ -1185,9 +1185,10 @@ function refreshGit($: EngineInterface): void {
     const git = await scanGit($);
     await $.state.set(GIT, git);
     // statusline.zsh asked gh only for a branch on a remote that is not the default; gh goes over the network,
-    // so the git parts draw first.
+    // so the git parts draw first. Nor is it asked while no shown part draws what it answers.
     const named = git.branch !== "" && git.branch !== "HEAD" && git.branch !== git.defaultBranch;
-    const branch = named && !git.vsDefault ? `${git.top}:${git.branch}` : "";
+    const shown = [...aboveLines, ...belowLines].includes("git") && gitTags.some((tag) => ["pr", "review", "comments", "conflict", "checks"].includes(tag));
+    const branch = named && !git.vsDefault && shown ? `${git.top}:${git.branch}` : "";
     const now = await $.clock.now();
     if (branch === prFor && now - prAt < (prBusy ? PR_BUSY_POLL_MS : PR_POLL_MS)) return;
     prFor = branch;

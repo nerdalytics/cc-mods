@@ -1363,11 +1363,14 @@ describe("statusline", () => {
   }
 
   // gh goes over the network: once a minute, but every 10 s while a check is running or queued.
-  for (const { name, status, calls } of [
+  // Nor at all while no shown part draws what it answers.
+  for (const { name, status, calls, options = {} } of [
     { name: "queued checks", status: "QUEUED", calls: 2 },
     { name: "finished checks", status: "COMPLETED", calls: 1 },
-  ]) {
-    test(`asks gh again within 10 s for ${name}: ${calls - 1} more asks`, async ($, on) => {
+    { name: "the pull request's parts hidden", status: "QUEUED", calls: 0, options: { git_pr: false, git_review: false, git_comments: false, git_conflict: false, git_checks: false } },
+    { name: "the git row hidden", status: "QUEUED", calls: 0, options: { row_git: false } },
+  ] as { name: string; status: string; calls: number; options?: Record<string, boolean> }[]) {
+    test(`asks gh ${calls} times in 12 s for ${name}`, { options }, async ($, on) => {
       stubHint(on);
       const clock = mock.clock(on);
       const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
@@ -1380,6 +1383,7 @@ describe("statusline", () => {
         "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
       };
       let asks = 0;
+      let scans = 0;
       on("session.start", ($, e) => ({ cwd: e.cwd }));
       on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
       on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -1388,6 +1392,7 @@ describe("statusline", () => {
       on("fs.exists", () => ({ value: false }));
       on("process.run", (_$, e) => {
         if (e.argv[0] === "gh") asks++;
+        else scans++;
         const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
         return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
       });
@@ -1398,6 +1403,8 @@ describe("statusline", () => {
         await clock.advance(2_000);
         await settle();
       }
+      // git ran, so no ask means one skipped.
+      expect(scans).toBeGreaterThan(0);
       expect(asks).toBe(calls);
     });
   }

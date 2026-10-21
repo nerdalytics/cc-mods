@@ -240,7 +240,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 - Claude Code 2.1.287 or later, the version that added mods. The mod was built against 2.1.296, and its tests pass on 2.1.304.
 - A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the conflict warning, and the `Start fresh` button's icon.
-- `git` for the git row, and `gh`, signed in, for the pull request details.
+- `git` for the git row, and `gh`, signed in, for the pull request details. Only GitHub knows whether the pull request still merges into its base branch after others push to it, so `conflict` needs `gh` too.
 
 ## Where an organization manages Claude Code
 
@@ -261,7 +261,7 @@ To run the hook, an administrator installs the mod through managed settings unde
 
 The mod reads the session's transcripts under `~/.claude/projects/` to count tokens and requests. When `$CLAUDE_CONFIG_DIR` is set, it reads `$CLAUDE_CONFIG_DIR/projects/` instead. It also reads the end of every transcript written in the last five hours, to find a limit any of your sessions was refused on. It reads Claude Code's merged settings once, when the session starts, for the `idleCompaction` key. It runs `git` in the project folder.
 
-Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that, or every 10 seconds while its checks are running or queued. It happens only while the branch is on a remote and is not the default branch. Nothing else leaves the machine.
+Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that, or every 10 seconds while its checks are running or queued. It happens only while the branch is on a remote and is not the default branch, and while the git row shows at least one of `pr`, `review`, `comments`, `conflict` and `checks`. Nothing else leaves the machine.
 
 ## License
 
