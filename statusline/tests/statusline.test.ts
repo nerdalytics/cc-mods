@@ -1281,6 +1281,21 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
+  // A /clear fires no session.start; its SessionStart hook starts the readings and the tick over.
+  test("draws the status row in a session a /clear started", async ($, on) => {
+    stubHint(on);
+    mock.clock(on);
+    on("classic.SessionStart", () => ({}));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("ui.panes", () => ({ value: [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] }));
+    await $.classic.SessionStart({ source: "clear" });
+    const ui = await mountHint($);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "context" })); i++) await settle();
+    expect(await ui.find({ type: "Box", key: "context" })).toBeDefined();
+    await ui.unmount();
+  });
+
   test("draws the branch's pull request from gh: number, draft, review, comments, conflict and checks", async ($, on) => {
     stubHint(on);
     const clock = mock.clock(on);

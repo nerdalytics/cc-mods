@@ -500,36 +500,15 @@ export const register: Register = (on, options) => {
   gradients = options.gradients !== false;
   on("session.start", async ($, e, next) => {
     const result = await next(e);
-    const { value: stretch } = await $.state.get(STRETCH);
-    if (stretch) ({ promptAt, handoffAt, compactedAt } = stretch);
-    tick?.cancel();
-    phase = 0;
-    frames = 0;
-    prFor = undefined;
-    // A copy of this module loaded before a /reload-plugins kept its tick running in the same session, and wrote its
-    // own (older) state shapes over this one's. The latest load stands in the state: an older copy's tick stops itself.
-    const load = Date.now() + Math.random();
-    await $.state.set(LOAD, load);
-    const own = (tick = $.clock.every(FRAME_MS, () => {
-      void $.state.get(LOAD).then(({ value }) => value !== load && own.cancel());
-      const steps = EFFORT_STEPS[String(effort)] ?? HIGH_STEPS;
-      phase = (phase + (FRAME_MS / 1000) * steps * STEP_CYCLES_PER_SECOND) % 1;
-      void $.state.set(TICK, Date.now());
-      // Read every frame, so a /model switch shows within a frame instead of when the next turn ends.
-      void $.session.model().then((model) => $.state.set(MODEL, model));
-      void readTurns($);
-      if (++frames % (POLL_MS / FRAME_MS) === 0) poll($);
-      if (frames % (REJECTED_POLL_MS / FRAME_MS) === 0) refreshRejected($);
-    }));
-    try {
-      idleCompaction = (await $.settings.read()).idleCompaction !== false;
-    } catch {
-      // The settings did not read: Claude Code's own default, on, stands.
-    }
-    await refresh($);
-    refreshTokens($);
-    refreshGit($);
-    refreshRejected($);
+    await startSession($);
+    return result;
+  });
+
+  // A /clear fires no session.start, and the new session starts with empty state: without this the tick reads no
+  // LOAD, takes it for a newer copy's and stops, and nothing is read again until the first response.
+  on("classic.SessionStart", async ($, e, next) => {
+    const result = await next(e);
+    if (e.source === "clear") await startSession($);
     return result;
   });
 
@@ -1165,6 +1144,41 @@ async function resumeFrom($: EngineInterface, path: string): Promise<void> {
 
 async function configDir($: EngineInterface): Promise<string> {
   return (await $.env.get("CLAUDE_CONFIG_DIR")) ?? `${await $.env.get("HOME")}/.claude`;
+}
+
+// A session's start, or a /clear's: the times the person's prompt stretched (none in a cleared session), the tick, and
+// the first readings.
+async function startSession($: EngineInterface): Promise<void> {
+  const { value: stretch } = await $.state.get(STRETCH);
+  ({ promptAt, handoffAt, compactedAt } = stretch ?? { promptAt: 0, handoffAt: 0, compactedAt: 0 });
+  tick?.cancel();
+  phase = 0;
+  frames = 0;
+  prFor = undefined;
+  // A copy of this module loaded before a /reload-plugins kept its tick running in the same session, and wrote its
+  // own (older) state shapes over this one's. The latest load stands in the state: an older copy's tick stops itself.
+  const load = Date.now() + Math.random();
+  await $.state.set(LOAD, load);
+  const own = (tick = $.clock.every(FRAME_MS, () => {
+    void $.state.get(LOAD).then(({ value }) => value !== load && own.cancel());
+    const steps = EFFORT_STEPS[String(effort)] ?? HIGH_STEPS;
+    phase = (phase + (FRAME_MS / 1000) * steps * STEP_CYCLES_PER_SECOND) % 1;
+    void $.state.set(TICK, Date.now());
+    // Read every frame, so a /model switch shows within a frame instead of when the next turn ends.
+    void $.session.model().then((model) => $.state.set(MODEL, model));
+    void readTurns($);
+    if (++frames % (POLL_MS / FRAME_MS) === 0) poll($);
+    if (frames % (REJECTED_POLL_MS / FRAME_MS) === 0) refreshRejected($);
+  }));
+  try {
+    idleCompaction = (await $.settings.read()).idleCompaction !== false;
+  } catch {
+    // The settings did not read: Claude Code's own default, on, stands.
+  }
+  await refresh($);
+  refreshTokens($);
+  refreshGit($);
+  refreshRejected($);
 }
 
 async function refresh($: EngineInterface): Promise<void> {
