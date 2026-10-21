@@ -676,7 +676,8 @@ describe("statusline", () => {
   for (const [title, files, offered, lastAgo, options, agents, prompted, handoffBefore = 0.5] of [
     ["offers a fresh session from this session's handoff file once the cache is cold", ["HANDOFF-2026-10-16-0900.md", "HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle],
     ["offers none from a handoff file older than the session", ["HANDOFF-2026-10-16-0900.md"], false, 120, {}, idle],
-    ["offers it while the cache is warm, for a handoff written since the person's last prompt", ["HANDOFF-2026-10-16-1200.md"], true, 10, {}, idle],
+    // Warm, the next prompt reads the 1,000,000 tokens for $0.20, less than the fresh start's $0.24.
+    ["offers none while the cache is warm and reading it costs less than a fresh start", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle],
     ["offers none once the person has prompted since a handoff, with the cache warm", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle, true],
     ["offers none when the person turned fresh_start off", ["HANDOFF-2026-10-16-1200.md"], false, 120, { fresh_start: false }, idle],
     ["offers none while a subagent is at work", ["HANDOFF-2026-10-16-1200.md"], false, 120, {}, working],
@@ -736,8 +737,7 @@ describe("statusline", () => {
       return ui.unmount();
     }
     expect(button).toBeDefined();
-    // Warm, the line leaves out the next message's price, which is no longer the cache write's.
-    expect(await ui.find({ type: "Text", text: lastAgo === 10 ? /^ Handoff written: fresh start ~\$0\.24 $/ : /^ Cache cold: next message \$8\.00, fresh start ~\$0\.24 $/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /^ Cache cold: next message \$8\.00, fresh start ~\$0\.24 $/ })).toBeDefined();
     // Its own line, led by a red $ where the engine's line has its mode glyph.
     // (The cost chips draw their own $ glyphs, on the chips' grey; this one stands bare.)
     const marks = await ui.findAll({ type: "Text", text: "$" });

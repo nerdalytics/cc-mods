@@ -1020,6 +1020,10 @@ async function freshStartLine($: EngineInterface, ui: Ui) {
   // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system
   // prompt is likely read from a cache other sessions keep warm, so this is an upper bound.
   const fresh = c.write === undefined || c.prompt === 0 ? undefined : (c.write * (c.base + handoff.bytes / 4)) / c.prompt;
+  // Offered only while it costs less than the next prompt here: once cold, the whole conversation written again; while
+  // warm, read, at a 12.5th (5m, 0.1x) to an 80th (1h, Fable 5.1's 0.025x) of the write price, so a warm cache rarely loses. Unpriced, it cannot be weighed.
+  const next = cold ? c.write : c.read;
+  if (fresh === undefined || next === undefined || fresh >= next) return undefined;
   // A line of its own under the engine's, a red $ in the column of its mode glyph. The prices are the context; the
   // button names the action alone.
   return notice(ui, "$", color("cache.cold.from"), [
