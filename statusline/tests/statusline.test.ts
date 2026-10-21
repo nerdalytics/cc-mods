@@ -48,10 +48,14 @@ const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
 const tagRows = async (ui: { findAll: Mounted["findAll"] }) => (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap" && b.props.columnGap !== undefined);
 // An element with no children of its own (a spacer, a blank line) is drawn with its props alone.
 const leaves = (nodes: readonly unknown[]) => nodes.filter((node): node is { props: Record<string, unknown> } => typeof node === "object" && node !== null && "props" in node);
-// What a row draws, a spacer run as "<n" for the shares it grows by, any other part as its text.
-const rowSpelled = (row: FoundElement | undefined) => leaves(row?.children ?? []).map((part) => (typeof part.props.flexGrow === "number" ? `<${part.props.flexGrow}` : flat(part).trim()));
-// The narrowest each spacer run of a row may get, in columns.
-const spacerWidths = (row: FoundElement | undefined) => leaves(row?.children ?? []).filter((part) => typeof part.props.flexGrow === "number").map((part) => part.props.minWidth);
+// What a row draws, a spacer run as "<n" for the shares it grows by, any other part as its text, and the columns after
+// each as "_n": the gaps, and the column between a tag's parts. A gap at the row's start is a Box of its own.
+const rowSpelled = (row: FoundElement | undefined) =>
+  leaves(row?.children ?? []).flatMap(({ props, ...part }) => {
+    const pad = typeof props.paddingRight === "number" && props.paddingRight > 0 ? [`_${props.paddingRight}`] : [];
+    if (typeof props.width === "number") return [`_${props.width}`];
+    return [typeof props.flexGrow === "number" ? `<${props.flexGrow}` : flat({ props, ...part }).trim(), ...pad];
+  });
 // A query the test counts on finding.
 function must<T>(found: T | undefined, what: string): T {
   if (found === undefined) throw new Error(`${what} did not draw`);
@@ -224,16 +228,15 @@ describe("statusline", () => {
     const halves = litCells(context.children.slice(1, -1));
     expect(halves).toBe("U_________");
     expect(flat(context.children.at(-1)).trim()).toBe("102.9K");
-    // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap
-    // parts them, so a wrapped line starts flush.
+    // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap is
+    // padding after a tag, so a wrapped line starts flush.
     const rows = await tagRows(ui);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.props.columnGap).toBe(1);
-    expect(elements(rows[0]?.children ?? []).every((part) => part.props.flexShrink === 0)).toBe(true);
+    expect(elements(rows[0]?.children ?? []).every((part) => part.props.flexShrink === 0 && part.props.paddingLeft === undefined)).toBe(true);
     await ui.unmount();
   });
 
-  test("leaves out what /config turns off, and the gaps with compact density", { options: { segment_limit_7d: false, density: "compact" } }, async ($, on) => {
+  test("leaves out what /config turns off, and draws tags with no gap between them touching", { options: { segment_limit_7d: false, segment_order: "model,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
@@ -246,13 +249,11 @@ describe("statusline", () => {
     expect(await ui.find({ type: "Text", text: /1d1h/ })).toBeUndefined();
     const rows = await tagRows(ui);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.props.columnGap).toBe(0);
-    // The model name has no chip around it: one column still parts it from the next tag.
-    expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(true);
+    expect(rowSpelled(rows[0]).map((part) => part.slice(0, 1))).toEqual(["O", "◇"]);
     await ui.unmount();
   });
 
-  test("parts the status row's tags by two columns under roomy density, and a spacer first draws it against the right edge", { options: { density: "roomy", segment_order: "spacer,model,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
+  test("parts the status row's tags by the gaps it names, and a spacer first draws it against the right edge", { options: { segment_order: "spacer,model,gap-2,limit_7d,gap-3,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -260,12 +261,9 @@ describe("statusline", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const rows = await tagRows(ui);
-    expect(rows.map((b) => b.props.columnGap)).toEqual([2]);
-    expect(rowSpelled(rows[0]).slice(0, 2)).toEqual(["<1", "Opus 5.5"]);
-    // Never narrower than the density's gap.
-    expect(spacerWidths(rows[0])).toEqual([2]);
-    // The gap parts the model name from the next tag: no padding of its own.
-    expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(false);
+    // No limit reading yet: its tag draws nothing and takes the gap after it along.
+    expect(rowSpelled(rows[0]).slice(0, 3)).toEqual(["<1", "Opus 5.5", "_2"]);
+    expect(rowSpelled(rows[0])).not.toContain("_3");
     await ui.unmount();
   });
 
@@ -277,7 +275,8 @@ describe("statusline", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const rows = await tagRows(ui);
-    expect(rows.map((b) => b.props.columnGap)).toEqual([1]);
+    // The default order parts each tag from the next by one column.
+    expect(rowSpelled(rows[0]).slice(0, 2)).toEqual(["Opus 5.5", "_1"]);
     expect(rowSpelled(rows[0]).some((part) => part.startsWith("<"))).toBe(false);
     await ui.unmount();
   });
@@ -305,8 +304,6 @@ describe("statusline", () => {
       const short = (part: string) => (part.startsWith("<") || part === "Opus 5.5" ? part : /^(7d|5h)/.exec(part)?.[0] ?? (part.startsWith("◇") ? "◇" : part.split(/\s+/)[0] ?? part));
       const row = (await tagRows(ui))[0];
       expect(rowSpelled(row).map(short)).toEqual(spelled);
-      // Under standard density a run is never narrower than a column per spacer in it.
-      expect(spacerWidths(row)).toEqual(spelled.filter((part) => part.startsWith("<")).map((part) => Number(part.slice(1))));
       await ui.unmount();
     });
   }
@@ -1074,13 +1071,12 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  // The row's gap by density: the folders, branch and worktree are parts of their own, parted by it.
-  for (const [options, path, rowGaps] of [
-    [{}, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [1]],
-    [{ density: "compact" }, "spike›cc-mods⎇develop⎇feat/gitline⎇spike", [1]],
-    [{ density: "roomy" }, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [2]],
+  // The folders, branch and worktree are parts of their own, parted by the default order's gaps, or touching without.
+  for (const [options, spelled] of [
+    [{}, ["spike › cc-mods", "_1", "⎇ develop ⎇ feat/gitline", "_1", "⎇ spike", "_1"]],
+    [{ git_order: "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes" }, ["spike › cc-mods", "⎇ develop ⎇ feat/gitline", "⎇ spike"]],
   ] as const)
-  test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${"density" in options ? `, under ${options.density} density` : ""}`, { options }, async ($, on) => {
+  test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${"git_order" in options ? ", with no gaps" : ""}`, { options }, async ($, on) => {
     stubHint(on);
     // A branch made off develop in a linked worktree, on no remote, one behind origin/main with a merge that conflicts.
     const out: Record<string, { stdout: string; exitCode?: number }> = {
@@ -1133,11 +1129,8 @@ describe("statusline", () => {
     // for the branch and the worktree.
     const hrefs = (await ui.findAll({ type: "Link" })).map((l) => l.props.href);
     expect(hrefs).toEqual(["file:///wt/spike", "file:///wt/spike/cc-mods", "file:///wt/spike", "file:///wt/spike"]);
-    // Flush: a segment starts at its first glyph, the row's gap parting it from the one before.
-    const glyphs = (await ui.findAll({ type: "Text" })).map(glyph);
-    expect(glyphs.join("")).toContain(path);
-    const gaps = (await ui.findAll({ type: "Box" })).map((b) => b.props.columnGap).filter((g) => g !== undefined);
-    expect(gaps).toEqual(rowGaps);
+    // Flush: a segment starts at its first glyph, a gap after the one before parting them.
+    expect(rowSpelled((await tagRows(ui))[0]).slice(0, spelled.length)).toEqual(spelled);
     // Nothing unknown was asked of git.
     expect(ran.filter((k) => !(k in out))).toEqual([]);
     await ui.unmount();
@@ -1181,7 +1174,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("parts the default branch from the folder under compact spacing, where no ⎇ does: the git row keeps a gap", { options: { density: "compact" } }, async ($, on) => {
+  test("parts the default branch from the folder by the default order's gap, where no ⎇ does", async ($, on) => {
     stubHint(on);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -1210,8 +1203,8 @@ describe("statusline", () => {
     const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
     const rows = await tagRows(ui);
-    expect(rowSpelled(rows[0])).toEqual(["cc-mods", "trunk"]);
-    expect(rows[0]?.props.columnGap).toBe(1);
+    // The gaps after trunk, before parts with nothing to show, are dropped at the row's end.
+    expect(rowSpelled(rows[0])).toEqual(["cc-mods", "_1", "trunk"]);
     await ui.unmount();
   });
 
@@ -1511,7 +1504,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("shows the folder outside a repository, and nothing of git, with its gaps under compact spacing", { options: { density: "compact" } }, async ($, on) => {
+  test("shows the folder outside a repository, and nothing of git", async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -1537,7 +1530,7 @@ describe("statusline", () => {
     }
     expect(folder).toBeDefined();
     expect(await ui.find({ type: "Text", text: "⎇" })).toBeUndefined();
-    expect((await ui.findAll({ type: "Box" })).find((b) => b.props.flexWrap === "wrap")?.props.columnGap).toBe(1);
+    expect(rowSpelled((await tagRows(ui))[0])).toEqual(["cc-mods"]);
     await ui.unmount();
   });
 
@@ -1622,7 +1615,15 @@ describe("statusline", () => {
     await ui.unmount();
     return written;
   }
-  const PINNED = { row_git: true, row_status: true, row_git_position: "above", row_status_position: "below" };
+  // The orders pinned with no gaps, so each tag takes one row of its list.
+  const PINNED = {
+    row_git: true,
+    row_status: true,
+    row_git_position: "above",
+    row_status_position: "below",
+    segment_order: "model,limit_7d,limit_5h,context,turns,tokens,cache",
+    git_order: "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes",
+  };
 
   test("dragging the git row below the prompt marker saves its side and the line order", { options: PINNED }, async ($, on) => {
     // git, ── prompt ──, status, fresh, compact, forecast, ── hidden ──, spacer: git dropped on status's row goes below
@@ -1632,14 +1633,15 @@ describe("statusline", () => {
   });
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
-    // model, 7d, 5h, context, turns, tokens, cache, ── hidden ──, spacer: the model tag dropped on the marker's row.
+    // model, 7d, 5h, context, turns, tokens, cache, ── hidden ──, spacer, gaps: the model tag dropped on the marker's row.
     const written = await dragIn(on, $, PINNED, "segments", 0, 7);
     expect(written).toEqual([["segment_model", false], ["segment_order", "limit_7d,limit_5h,context,turns,tokens,cache,model"]]);
   });
 
   test("dragging a hidden tag out turns it back on", { options: { ...PINNED, segment_model: false, segment_order: "limit_7d,limit_5h,context,turns,tokens,cache,model" } }, async ($, on) => {
-    // 7d..cache are shown (rows 0-5), ── hidden ── is row 6, the spare spacer row 7, model row 8: model dropped to the top.
-    const written = await dragIn(on, $, PINNED, "segments", 8, 0);
+    // 7d..cache are shown (rows 0-5), ── hidden ── is row 6, the spare spacer and gaps rows 7-10, model row 11: model
+    // dropped to the top.
+    const written = await dragIn(on, $, PINNED, "segments", 11, 0);
     expect(written).toEqual([["segment_model", true], ["segment_order", "model,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
 
@@ -1658,6 +1660,11 @@ describe("statusline", () => {
     expect(await dragIn(on, $, PINNED, "segments", 8, 1)).toEqual([["segment_order", "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
 
+  test("dragging a gap out of hidden adds it to the order", { options: PINNED }, async ($, on) => {
+    // ── hidden ── row 7, the spacer row 8, gap-1 to gap-3 rows 9-11: gap-2 dropped on the 7d limit's row, after the model.
+    expect(await dragIn(on, $, PINNED, "segments", 10, 1)).toEqual([["segment_order", "model,gap-2,limit_7d,limit_5h,context,turns,tokens,cache"]]);
+  });
+
   test("a second spacer is there to drag out once one is", { options: { ...PINNED, segment_order: "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
     // model, spacer, 7d .. cache (rows 0-7), ── hidden ── row 8, the spare row 9: dropped beside the first.
     expect(await dragIn(on, $, PINNED, "segments", 9, 1)).toEqual([["segment_order", "model,spacer,spacer,limit_7d,limit_5h,context,turns,tokens,cache"]]);
@@ -1673,7 +1680,7 @@ describe("statusline", () => {
   });
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
-    // folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, ── hidden ── (row 10), spacer:
+    // folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, ── hidden ── (row 10), spacer, gaps:
     // the review dropped on the marker's row.
     expect(await dragIn(on, $, PINNED, "git", 4, 10)).toEqual([["git_review", false], ["git_order", "folders,branch,worktree,pr,comments,sync,conflict,checks,changes,review"]]);
   });
@@ -1693,14 +1700,15 @@ describe("statusline", () => {
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
     expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "fresh", "compact", "forecast", "hidden", "spacer"] });
-    expect(await clientProps("git")).toMatchObject({ items: ["changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "conflict"] });
-    expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "limit_5h", "context", "turns", "tokens", "hidden", "spacer", "limit_7d"] });
+    expect(await clientProps("git")).toMatchObject({ items: ["changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "conflict"] });
+    expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "limit_5h", "context", "turns", "tokens", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d"] });
     // Each list as wide as the pane, so its labels wrap inside it.
     expect((await ui.findAll({ type: "Client" })).map((c) => c.props.width)).toEqual(["100%", "100%", "100%"]);
     await ui.unmount();
   });
 
-  test("draws a spacer among the lines as a blank line on its side of the prompt", { options: { line_order: "spacer,git,spacer,prompt,spacer,spacer,status,fresh,compact,forecast" } }, async ($, on) => {
+  // A gap is a row's: among the lines it is dropped.
+  test("draws a spacer among the lines as a blank line on its side of the prompt", { options: { line_order: "spacer,git,gap-1,spacer,prompt,spacer,spacer,status,fresh,compact,forecast" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));

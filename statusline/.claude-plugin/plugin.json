@@ -38,8 +38,8 @@
     "git_order": {
       "type": "string",
       "title": "Statusline: Git row › order",
-      "description": "The git row's parts, left to right, as a comma list of folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, with spacer where a spacer stands. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes)",
-      "default": "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes"
+      "description": "The git row's parts, left to right, as a comma list of folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, with spacer where a spacer stands and gap-1, gap-2 or gap-3 where a gap of that many columns does. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. Parts with neither between them touch. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes)",
+      "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes"
     },
     "git_folders": {
       "type": "boolean",
@@ -174,8 +174,8 @@
     "segment_order": {
       "type": "string",
       "title": "Statusline: Status row › order",
-      "description": "The status row's tags, left to right, as a comma list of model, limit_7d, limit_5h, context, turns, tokens, cache, with spacer where a spacer stands, as in the git row's order: one spacer first draws the row against the right edge. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limit_7d,limit_5h,context,turns,tokens,cache)",
-      "default": "model,limit_7d,limit_5h,context,turns,tokens,cache"
+      "description": "The status row's tags, left to right, as a comma list of model, limit_7d, limit_5h, context, turns, tokens, cache, with spacers and gaps as in the git row's order: one spacer first draws the row against the right edge. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache)",
+      "default": "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache"
     },
     "gradients": {
       "type": "boolean",
@@ -188,17 +188,6 @@
       "title": "Statusline: Colours",
       "description": "Your colours, as a comma list of name=#rrggbb, such as turns.from=#60a5fa,pr.open=#facc15. A name left out keeps its default, an unknown one or a colour that does not read is ignored. Set by typing in /statusline:colors. (default: none)",
       "default": ""
-    },
-    "density": {
-      "type": "string",
-      "title": "Statusline: Density",
-      "description": "How close the tags sit: compact leaves no space between the status row's tags and one between the git row's; standard leaves one column; roomy two. A spacer is never narrower than its row's gap. compact / standard (default) / roomy",
-      "options": [
-        "compact",
-        "standard",
-        "roomy"
-      ],
-      "default": "standard"
     },
     "auto_handoff": {
       "type": "boolean",

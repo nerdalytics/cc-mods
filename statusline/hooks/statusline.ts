@@ -44,8 +44,7 @@ type Segment = (ui: Ui, s: Snapshot) => Parts;
 const SEGMENTS = {
   model: ({ Box, Text }, s) => {
     const { from, to, bold } = modelStyle(s.model);
-    // Bare text, not a chip: compact density keeps a column after it, so it doesn't run into the next tag.
-    return [Box({ paddingRight: gap > 0 ? 0 : 1, children: [run(Box, Text, formatModel(s.model), (i, n) => sweep(from, to, i, n, s.phase), bold)] })];
+    return [run(Box, Text, formatModel(s.model), (i, n) => sweep(from, to, i, n, s.phase), bold)];
   },
   limit_7d: (ui, s) => limitSegment(ui, s, "7d"),
   // ponytail: probe, whether Claude Code reports a window beyond 7d and 5h (a Fable one?): drawn after the 5h bar as its
@@ -74,10 +73,16 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
 // in one place stack in line_order. Each row's tags are toggles too, drawn in git_order and segment_order.
 // /statusline:order writes all of them by dragging. Applied in register.
 // A spacer in a row takes a share of the room the tags leave, so what stands before it is pushed left and what stands
-// after it right; spacers side by side take a share each. Among the lines a spacer is a blank line.
+// after it right; spacers side by side take a share each. Among the lines a spacer is a blank line. A gap in a row is
+// that many columns, fixed; tags with neither between them touch.
 const SPACER = "spacer";
 type Spacer = typeof SPACER;
 const isSpacer = (name: string): name is Spacer => name === SPACER;
+const GAPS = ["gap-1", "gap-2", "gap-3"] as const;
+type Gap = (typeof GAPS)[number];
+const isGap = (name: string): name is Gap => GAPS.some((gap) => gap === name);
+type Filler = Spacer | Gap;
+const isFiller = (name: string): name is Filler => isSpacer(name) || isGap(name);
 const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "cache"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
@@ -93,12 +98,12 @@ const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
 };
 let aboveLines: (Line | Spacer)[] = ["git"];
 let belowLines: (Line | Spacer)[] = ["status", "fresh", "compact", "forecast"];
-let statusTags: (StatusTag | Spacer)[] = [...STATUS_ROW];
-let gitTags: (GitTag | Spacer)[] = [...GIT_ROW];
+let statusTags: (StatusTag | Filler)[] = [...STATUS_ROW];
+let gitTags: (GitTag | Filler)[] = [...GIT_ROW];
 
 // The /statusline:order pane: the lines around a prompt marker, then each row's tags, each a list to drag. What stands
 // after a list's "hidden" marker is switched off; the markers themselves do not drag. Each list keeps one spacer
-// after its hidden marker, to drag out: a spacer dropped there is gone.
+// after its hidden marker, to drag out, and a row's list each gap too: one dropped there is gone.
 const ORDER_PANE = "statusline-order";
 const COLORS_PANE = "statusline-colors";
 const LABELS: Record<string, string> = {
@@ -127,6 +132,9 @@ const LABELS: Record<string, string> = {
   prompt: "━━ your prompt ━━",
   hidden: "╌╌ hidden: switched off ╌╌",
   spacer: "↔ spacer",
+  "gap-1": "␣ gap: 1 column",
+  "gap-2": "␣ gap: 2 columns",
+  "gap-3": "␣ gap: 3 columns",
 };
 const LISTS = {
   rows: { markers: ["prompt", "hidden"], labels: { ...LABELS, spacer: "↕ spacer: a blank line" } },
@@ -137,8 +145,8 @@ type ListKey = keyof typeof LISTS;
 const isList = (key: string): key is ListKey => Object.hasOwn(LISTS, key);
 let lists: Record<ListKey, string[]> = {
   rows: ["git", "prompt", "status", "fresh", "compact", "forecast", "hidden", SPACER],
-  git: [...GIT_ROW, "hidden", SPACER],
-  segments: [...STATUS_ROW, "hidden", SPACER],
+  git: [...GIT_ROW, "hidden", SPACER, ...GAPS],
+  segments: [...STATUS_ROW, "hidden", SPACER, ...GAPS],
 };
 const listProps = (key: ListKey, items: string[], rev: number) => ({ items, labels: LISTS[key].labels, fixed: LISTS[key].markers, rev });
 
@@ -147,21 +155,21 @@ const RENAMED: Record<string, string[]> = { limits: ["limit_7d", "limit_5h"], pa
 
 // A comma list from /config in the order it names: unknown and repeated names dropped, each missing one after the name
 // before it in the default order (the PR's review and comments after the PR, where they were part of it), a missing
-// first one first. Spacers stay where they are named, as many as are named.
-function ordered<T extends string>(option: unknown, defaults: readonly T[]): (T | Spacer)[] {
+// first one first. Spacers and gaps stay where they are named, as many as are named.
+function ordered<T extends string>(option: unknown, defaults: readonly T[]): (T | Filler)[] {
   const named = typeof option === "string" ? option.split(",").flatMap((name) => RENAMED[name.trim()] ?? [name.trim()]) : [];
   const seen = new Set<string>();
-  const kept = named.filter((name): name is T | Spacer => isSpacer(name) || (defaults.some((known) => known === name) && !seen.has(name) && Boolean(seen.add(name))));
+  const kept = named.filter((name): name is T | Filler => isFiller(name) || (defaults.some((known) => known === name) && !seen.has(name) && Boolean(seen.add(name))));
   defaults.forEach((name, i) => {
     if (!seen.has(name)) kept.splice(i === 0 ? 0 : kept.indexOf(defaults[i - 1] as T) + 1, 0, name);
   });
   return kept;
 }
 
-// A list as the pane draws it: its shown names, the hidden marker, the one spacer to drag out, the hidden names.
-function withSpare(list: string[]): string[] {
+// A list as the pane draws it: its shown names, the hidden marker, the fillers to drag out, the hidden names.
+function withSpare(list: string[], spares: readonly Filler[] = [SPACER, ...GAPS]): string[] {
   const at = list.indexOf("hidden");
-  return [...list.slice(0, at + 1), SPACER, ...list.slice(at + 1).filter((name) => !isSpacer(name))];
+  return [...list.slice(0, at + 1), ...spares, ...list.slice(at + 1).filter((name) => !isFiller(name))];
 }
 
 // A list's names by zone: before the first marker, between the markers, after the last.
@@ -196,7 +204,7 @@ function rowOptions(list: string[]): Record<string, string | boolean> {
 // The same for a row's tags: each tag's toggle, and every tag in order, the spacers where they stand, the hidden tags last.
 function tagOptions(list: string[], tags: readonly string[], prefix: string, order: string): Record<string, string | boolean> {
   const [shown = [], hidden = []] = zonesOf(list, ["hidden"]);
-  const saved: Record<string, string | boolean> = { [order]: [...shown, ...hidden.filter((name) => !isSpacer(name))].join(",") };
+  const saved: Record<string, string | boolean> = { [order]: [...shown, ...hidden.filter((name) => !isFiller(name))].join(",") };
   for (const name of tags) saved[`${prefix}${name}`] = shown.includes(name);
   return saved;
 }
@@ -417,9 +425,6 @@ let keepWarm = 0;
 let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
-// The columns between a row's tags, by the density option: none compact, one standard, two roomy.
-const DENSITY_GAPS: Record<string, number> = { compact: 0, standard: 1, roomy: 2 };
-let gap = 1;
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
 // smart_zone option off.
 let smartZone = 200_000;
@@ -460,14 +465,13 @@ export const register: Register = (on, options) => {
   autoCompact = options.auto_compact === true;
   keepWarm = typeof options.keep_warm_pings === "number" ? Math.max(0, Math.floor(options.keep_warm_pings)) : 0;
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
-  gap = DENSITY_GAPS[String(options.density)] ?? 1;
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
-  // A row's tags in their order, those switched off left out; the spacers stand where they are named.
+  // A row's tags in their order, those switched off left out; the spacers and gaps stand where they are named.
   const tagsOf = <T extends string>(order: unknown, tags: readonly T[], prefix: string) => {
     const all = ordered(order, tags);
-    const shown = all.filter((name) => isSpacer(name) || options[`${prefix}${name}`] === true);
+    const shown = all.filter((name) => isFiller(name) || options[`${prefix}${name}`] === true);
     return { shown, list: withSpare([...shown, "hidden", ...all.filter((name) => !shown.includes(name))]) };
   };
   const status = tagsOf(options.segment_order, STATUS_ROW, "segment_");
@@ -475,7 +479,8 @@ export const register: Register = (on, options) => {
   statusTags = status.shown;
   gitTags = git.shown;
   // A line takes its side from its position option; a spacer from where it stands against the prompt in line_order.
-  const lines = ordered(options.line_order, [...LINES, "prompt"]);
+  // A gap is a row's; among the lines it is dropped.
+  const lines = ordered(options.line_order, [...LINES, "prompt"]).filter((name): name is Line | "prompt" | Spacer => !isGap(name));
   const shownLine = (name: string): name is Line => !isSpacer(name) && name !== "prompt" && options[LINE_OPTIONS[name as Line].on] === true;
   aboveLines = [];
   belowLines = [];
@@ -486,7 +491,7 @@ export const register: Register = (on, options) => {
     else if (shownLine(name)) (options[LINE_OPTIONS[name].at] === "above" ? aboveLines : belowLines).push(name);
   }
   lists = {
-    rows: withSpare([...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !isSpacer(name) && name !== "prompt" && !shownLine(name))]),
+    rows: withSpare([...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !isSpacer(name) && name !== "prompt" && !shownLine(name))], [SPACER]),
     git: git.list,
     segments: status.list,
   };
@@ -539,12 +544,13 @@ export const register: Register = (on, options) => {
     // As wide as the pane, so a label wraps inside it rather than past its edge.
     const list = (key: ListKey) => ui.Client({ key, module: "./order-list.ts", width: "100%", props: listProps(key, lists[key], 0) });
     const spacers = "Drag the spacer out of hidden to add one, and drop one under hidden to take it away.";
+    const gaps = "A gap is that many columns, fixed: tags with neither a gap nor a spacer between them touch. Gaps drag out of hidden as the spacer does.";
     return pane(ui, "Statusline order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
       ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
       list("rows"),
-      ...section(ui, "Git row", `The parts draw left to right in this order. A spacer takes a share of the room the parts leave, pushing what stands before it left and what stands after it right. Spacers side by side take a share each, so they push harder. ${spacers}`),
+      ...section(ui, "Git row", `The parts draw left to right in this order. A spacer takes a share of the room the parts leave, pushing what stands before it left and what stands after it right. Spacers side by side take a share each, so they push harder. ${gaps} ${spacers}`),
       list("git"),
-      ...section(ui, "Status row", `The tags draw left to right in this order, with spacers as in the git row: one spacer first draws the row against the right edge. ${spacers}`),
+      ...section(ui, "Status row", `The tags draw left to right in this order, with spacers and gaps as in the git row: one spacer first draws the row against the right edge. ${spacers}`),
       list("segments"),
     ]);
   });
@@ -568,7 +574,7 @@ export const register: Register = (on, options) => {
         return { props: listProps(key, current, Date.now()) };
       }
     }
-    lists = { ...lists, [key]: withSpare(data) };
+    lists = { ...lists, [key]: withSpare(data, key === "rows" ? [SPACER] : undefined) };
     return { props: listProps(key, lists[key], Date.now()) };
   });
 
@@ -771,34 +777,48 @@ async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status"): Promi
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
   const s: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
-  // The git row is bare text, no chips to tell its tags apart: compact density leaves its gaps.
-  if (row === "git") return s.git ? rowOf(ui, gitParts(ui, s.git, s.pr, gitTags), Math.max(gap, 1)) : undefined;
-  return rowOf(ui, statusTags.map((name) => (isSpacer(name) ? name : SEGMENTS[name](ui, s))), gap);
+  if (row === "git") return s.git ? rowOf(ui, gitParts(ui, s.git, s.pr, gitTags)) : undefined;
+  return rowOf(ui, statusTags.map((name) => (isFiller(name) ? name : SEGMENTS[name](ui, s))));
 }
 
-// A row of tags, each a list of parts, and spacers; nothing when no tag has a part. A run of spacers between two tags
-// is one Box that grows by as many shares as it has spacers, and is never narrower than one gap of the density per
-// spacer, so a full row still reads a spacer: none under compact, one column a spacer under standard, two under roomy.
+// A row of tags, each a list of parts, with spacers and gaps; nothing when no tag has a part. A run of spacers is one
+// Box that grows by as many shares as it has spacers, down to no column. A gap is padding on the right of what stands
+// before it, or a Box of its own at the row's start, so a wrapped line starts flush. A tag's parts stand a column
+// apart; tags with neither between them touch. A tag with nothing to show takes the gaps after it along.
 // Too narrow for a row, it wraps between parts, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
-// The gap, not a leading space, parts them, so a wrapped line starts flush.
 // ponytail: no shrink steps; a single part wider than the line still gets squeezed.
-function rowOf(ui: Ui, tags: (Parts | Spacer)[], columnGap: number) {
-  const children: Parts = [];
-  let shares = 0;
-  const spacer = () => ui.Box({ flexGrow: shares, minWidth: shares * columnGap });
+function rowOf(ui: Ui, tags: (Parts | Filler)[]) {
+  const items: { part?: Parts[number]; shares: number; pad: number }[] = [];
+  let lead = 0;
+  let skip = false;
   for (const tag of tags) {
-    if (tag === SPACER) {
-      shares++;
-      continue;
+    const last = items.at(-1);
+    if (typeof tag === "string") {
+      if (isSpacer(tag)) {
+        if (last && !last.part) last.shares++;
+        else items.push({ shares: 1, pad: 0 });
+        skip = false;
+      } else if (!skip) {
+        const columns = GAPS.indexOf(tag) + 1;
+        if (last) last.pad += columns;
+        else lead += columns;
+      }
+    } else if (tag.length > 0) {
+      tag.forEach((part, i) => items.push({ part, shares: 0, pad: i < tag.length - 1 ? 1 : 0 }));
+      skip = false;
+    } else {
+      skip = true;
     }
-    if (tag.length === 0) continue;
-    if (shares > 0) children.push(spacer());
-    shares = 0;
-    children.push(...tag.map((part) => ui.Box({ flexShrink: 0, children: [part] })));
   }
-  if (children.length === 0) return undefined;
-  if (shares > 0) children.push(spacer());
-  return ui.Box({ flexDirection: "row", flexWrap: "wrap", columnGap, children });
+  if (!items.some((item) => item.part)) return undefined;
+  // Gaps after the last of the row part nothing, and would wrap a tag that fits.
+  const tail = items.at(-1);
+  if (tail) tail.pad = 0;
+  const children = items.map(({ part, shares, pad }) =>
+    part ? ui.Box({ flexShrink: 0, paddingRight: pad, children: [part] }) : ui.Box({ flexGrow: shares, paddingRight: pad }),
+  );
+  if (lead > 0) children.unshift(ui.Box({ flexShrink: 0, width: lead }));
+  return ui.Box({ flexDirection: "row", flexWrap: "wrap", columnGap: 0, children });
 }
 
 function poll($: EngineInterface): void {
@@ -1567,17 +1587,16 @@ function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
 // checks after the conflict; git_order moves them, and spacers stand where it names them.
 // Links: the folders open the folder on disk (the project's, the shell's), the branch and the worktree the checkout's,
 // the PR its page; a click opens them as the terminal opens a link, in the default app.
-function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | undefined, tags: (GitTag | Spacer)[]): (Parts | Spacer)[] {
+function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | undefined, tags: (GitTag | Filler)[]): (Parts | Filler)[] {
   const mark = g.vsDefault ? "?" : "";
   const c = pr?.checks;
   // A merged or closed pull request keeps only its number: its review, comments, conflict and checks no longer matter.
   const live = pr?.state === "open" || pr?.state === "draft";
   const folder = (path: string) => (path ? `file://${encodeURI(path)}` : undefined);
   const name = (path: string) => path.split("/").pop() || "~";
-  const sp = gap ? " " : "";
   const segments: Record<GitTag, (string | Piece[])[]> = {
     // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
-    folders: [[{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])]],
+    folders: [[{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: " › " }, { text: name(g.cwd), href: folder(g.cwd) }])]],
     branch: [
       [
         {
@@ -1586,14 +1605,14 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
             : g.branch === g.defaultBranch
               ? g.branch
               : g.basedOff && g.basedOff !== g.defaultBranch && g.basedOff !== g.branch
-                ? `⎇${sp}${g.basedOff}${sp}⎇${sp}${g.branch}`
-                : `⎇${sp}${g.branch}`,
+                ? `⎇ ${g.basedOff} ⎇ ${g.branch}`
+                : `⎇ ${g.branch}`,
           href: folder(g.top),
         },
       ],
     ],
     // Hidden when the branch already names it.
-    worktree: [[{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }]],
+    worktree: [[{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇ ${g.worktree}` : "", href: folder(g.top) }]],
     // The number, and the draft mark beside it while the PR is one.
     pr: [[{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }], pr?.state === "draft" ? ` ${DRAFT_MARK}` : ""],
     review: [live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : ""],
@@ -1625,7 +1644,7 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
   };
   let drawn = 0;
   return tags.map((tag) =>
-    isSpacer(tag)
+    isFiller(tag)
       ? tag
       : segments[tag]
           .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))

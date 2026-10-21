@@ -157,7 +157,7 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 - **Git row.** The parts are listed in the order they draw. A drop writes `git_order`.
 - **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
 - **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. Dropping a line, part or tag under it switches it off, which sets its `row_git`, `row_status`, `git_<name>`, `segment_<name>`, `fresh_start`, `compact_hint` or `limit_forecast` option to false, and the pane draws it dim and struck through. Dragging it back above the marker switches it on again. The markers do not drag.
-- **Spacers.** Under each hidden marker waits a spacer, dim. Drag it out to add a spacer where you drop it, and another one waits in its place, so you can add as many as you want. Drop a spacer under the marker to take it away. In the git and status rows a spacer pushes tags apart, as described under [Spacing and alignment](#spacing-and-alignment). Among the lines a spacer is a blank line on its side of the prompt. It has nothing of its own to show, so it always draws, even while the offer lines beside it are not showing: a spacer next to the fresh-start line leaves its blank line when the offer is gone.
+- **Spacers and gaps.** Under each hidden marker waits a spacer, dim, and in the git and status rows also `gap-1`, `gap-2` and `gap-3`. Drag one out to add it where you drop it, and another one waits in its place, so you can add as many as you want. Drop one under the marker to take it away. In the git and status rows a spacer pushes tags apart and a gap sets a fixed distance between them, as described under [Spacing and alignment](#spacing-and-alignment). Among the lines a spacer is a blank line on its side of the prompt. It has nothing of its own to show, so it always draws, even while the offer lines beside it are not showing: a spacer next to the fresh-start line leaves its blank line when the offer is gone.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -174,26 +174,23 @@ Each save writes the `colors` option, a comma list of `name=#rrggbb` with only t
 
 ## Spacing and alignment
 
-The `density` option sets how close the tags sit, in three steps:
+Two things stand between the tags of a row: gaps and spacers. Tags with neither between them touch.
 
-| `density` | Between the tags | Inside the git row's folders and branch |
-|---|---|---|
-| `compact` | No space in the status row. The git row keeps one, because its parts have no chips to tell them apart. | No spaces: `spike›cc-mods`, `⎇develop` |
-| `standard`, the default | One column | One space: `spike › cc-mods`, `⎇ develop` |
-| `roomy` | Two columns, in both rows | One space, as `standard` |
+- A gap is a fixed distance: `gap-1` is one column, `gap-2` two, `gap-3` three. Gaps side by side add up. The default orders put `gap-1` between each pair of tags.
+- A spacer takes a share of the columns the row's tags leave free, so the tags before it are pushed left and the tags after it right. Spacers next to each other take a share each, so two side by side push twice as hard as one. With no columns free a spacer has no width, so put a gap beside it to keep a distance: `gap-1,spacer` never gets narrower than one column.
 
-Under `compact` the model name keeps one column after it, because it has no tag of its own to stop it running into the next one.
-
-A row starts at the left edge unless it has spacers. A spacer takes a share of the columns the row's tags leave free, so the tags before it are pushed left and the tags after it right. Spacers next to each other take a share each, so two side by side push twice as hard as one. A spacer is never narrower than the row's gap under `density`, so with no columns free it still shows: no column under `compact` in the status row, one under `standard`, and two under `roomy`. The git row's gap is at least one column, so its spacers are too. Some `segment_order` values:
+A row starts at the left edge unless it has spacers. Inside a tag the spacing stays as it is: one space in the folders and branch, `spike › cc-mods` and `⎇ develop`, and one column between the parts of one tag, such as a pull request's number and its draft mark. Some `segment_order` values:
 
 | Order | Draws |
 |---|---|
+| `model,gap-1,limit_7d,gap-1,limit_5h,…` | The default: every tag one column from the next, the row at the left. |
+| `model,limit_7d,gap-2,limit_5h,…` | The model touching the 7d limit, two columns before the 5h limit. |
 | `spacer,model,…` | The whole row against the right edge. |
 | `model,limit_7d,limit_5h,context,spacer,turns,tokens,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
 | `model,tokens,spacer,spacer,limit_7d,limit_5h,spacer,turns,spacer,spacer,cache,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
 | `model,limit_7d,spacer,limit_5h,context,turns,tokens,cache` | Model and the 7d limit at the left, the rest from the 5h limit on at the right. |
 
-A tag that has nothing to show, such as the costs before the first token count, leaves its spacers meeting. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
+A tag that has nothing to show, such as the costs before the first token count, takes the gaps after it along and leaves its spacers meeting. Gaps after the last tag of a row are dropped. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
 
 Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/statusline:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
 
@@ -201,7 +198,7 @@ Spacers replace the `row_git_align` and `row_status_align` options of 0.16.x. Cl
 
 The `limits` tag of 0.17.0 and earlier is now `limit_7d` and `limit_5h`, and the git row's `path` is now `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
 
-`density` replaces the `compact` option of 0.15.0 and earlier, which Claude Code no longer passes to the mod once it is gone from the manifest. If you had `compact` on, set `density` to `compact` in `/config`.
+Gaps replace the `density` option of 0.18.x, and with it the `compact` option of 0.15.0 and earlier. An order saved before has no gaps, so its tags touch until you drag gaps in with `/statusline:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
 
 ## Options
 
@@ -214,17 +211,16 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
 | Git row › folders, branch, worktree, pull request, review, comments, ahead and behind, conflict, checks, changes | `git_folders`, `git_branch`, `git_worktree`, `git_pr`, `git_review`, `git_comments`, `git_sync`, `git_conflict`, `git_checks`, `git_changes` | true | One toggle per part of the git row. |
-| Git row › order | `git_order` | folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes | The git row's parts, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
+| Git row › order | `git_order` | folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes | The git row's parts, left to right, as a comma list, with `spacer` where a spacer stands and `gap-1`, `gap-2` or `gap-3` where a gap does. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
 | Status row › model, 7d limit, 5h limit, context, turns, costs, cache | `segment_model`, `segment_limit_7d`, `segment_limit_5h`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
 | Lines › order | `line_order` | git,prompt,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` for the cold cache, `compact` for the smart zone and `forecast` for the limit forecast, with `spacer` for a blank line and `prompt` between the two sides. A line's side comes from its position option, a spacer's from where it stands against `prompt`. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. |
 | Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
-| Status row › order | `segment_order` | model,limit_7d,limit_5h,context,turns,tokens,cache | The status row's tags, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
+| Status row › order | `segment_order` | model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache | The status row's tags, left to right, as a comma list, with `spacer` where a spacer stands and `gap-1`, `gap-2` or `gap-3` where a gap does. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
 | Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default, and the mod ignores an unknown name or a colour that does not read. `/statusline:colors` writes it. |
-| Density | `density` | standard | How close the tags sit: `compact`, `standard` or `roomy`, as described under [Spacing and alignment](#spacing-and-alignment). Replaces the `compact` option of 0.15.0 and earlier. |
 | Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
 | Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the line with the `Start fresh` button once a handoff exists, with the cache cold, or until your next message while the cache is warm. |
