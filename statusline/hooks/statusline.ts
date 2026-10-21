@@ -748,23 +748,36 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
 }
 
 // The named lines, in order, each as the elements it draws now (none for an offer that does not hold); a spacer is a
-// blank line.
+// blank line, and blank lines that meet, around an offer that does not hold, draw as one. While the order pane shows,
+// every blank line draws, each row every tag, and an offer that does not hold a dim line naming it in its place: a
+// made-up offer would carry buttons that act.
 async function drawLines($: EngineInterface, ui: Ui, names: (Line | Spacer)[], isWorking: boolean) {
+  // The panes not reading leaves the lines as they are.
+  const ordering = (await $.ui.panes().catch(() => [])).some((pane) => pane.id === ORDER_PANE && pane.isShown);
   const drawn: ReturnType<Ui["Box"]>[] = [];
+  let blank = false;
   for (const name of names) {
+    if (name === SPACER && blank && !ordering) continue;
     const found =
       name === SPACER ? [ui.Box({ height: 1 })]
-      : name === "git" || name === "status" ? [await drawRow($, ui, name)]
+      : name === "git" || name === "status" ? [await drawRow($, ui, name, ordering)]
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
       : await forecastLines($, ui);
-    for (const line of found) if (line !== undefined) drawn.push(line);
+    if (ordering && name !== SPACER && name !== "git" && name !== "status" && !found.some((line) => line !== undefined)) {
+      found.push(ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${LABELS[name]}: shows when it applies ╌╌` })] }));
+    }
+    for (const line of found) {
+      if (line === undefined) continue;
+      drawn.push(line);
+      blank = name === SPACER;
+    }
   }
   return drawn;
 }
 
 // A row from the state, none until the first usage reading; read every frame (the tick), so it moves live.
-async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status"): Promise<ReturnType<Ui["Box"]> | undefined> {
+async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status", ordering: boolean): Promise<ReturnType<Ui["Box"]> | undefined> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return undefined;
@@ -776,44 +789,87 @@ async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status"): Promi
   const { value: git } = await $.state.get(GIT);
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
-  const s: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
+  const s = ordering ? withSamples(live) : live;
   if (row === "git") return s.git ? rowOf(ui, gitParts(ui, s.git, s.pr, gitTags)) : undefined;
   return rowOf(ui, statusTags.map((name) => (isFiller(name) ? name : SEGMENTS[name](ui, s))));
+}
+
+// While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
+// turns up during work: the limits, context, turns, costs and cache; a branch, worktree, commits ahead and behind, conflict and
+// changes; a pull request with its review, comments and checks.
+function withSamples(s: Snapshot): Snapshot {
+  const kinds = s.usage.rateLimits.map((r) => r.kind);
+  const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
+  const rateLimits = [...s.usage.rateLimits, ...[limit("seven_day", 40, 259_200), limit("five_hour", 20, 9_000)].filter((r) => !kinds.includes(r.kind))];
+  const spend = (tokens: number, usd: number, requests: number) => ({ tokens, usd, requests, unpriced: 0 });
+  const tokens = s.tokens ?? { main: spend(1_200_000, 4.2, 30), agents: { ...spend(300_000, 0.9, 8), count: 2 } };
+  const g = s.git;
+  const moved = g && (g.ahead > 0 || g.behind > 0);
+  const edited = g && (g.added > 0 || g.deleted > 0 || g.changed > 0);
+  const pr: StatusPr = s.pr ?? { number: 42, url: "", failedUrls: [], state: "open", conflicting: false, review: "", comments: 0, checks: { pending: 0, failure: 0, success: 0 } };
+  const checked = pr.checks.pending + pr.checks.failure + pr.checks.success > 0;
+  return {
+    ...s,
+    usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
+    turns: s.turns ?? 6,
+    tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 } },
+    git: g && {
+      ...g,
+      branch: g.branch || "feature",
+      worktree: g.worktree || "spike",
+      conflict: true,
+      ...(moved ? {} : { ahead: 2, behind: 1 }),
+      ...(edited ? {} : { added: 12, deleted: 3, changed: 2 }),
+    },
+    pr: {
+      ...pr,
+      review: pr.review || "APPROVED",
+      comments: pr.comments || 3,
+      ...(checked ? {} : { failedUrls: [""], checks: { pending: 1, failure: 1, success: 4 } }),
+    },
+  };
 }
 
 // A row of tags, each a list of parts, with spacers and gaps; nothing when no tag has a part. A run of spacers is one
 // Box that grows by as many shares as it has spacers, down to no column. A gap is padding on the right of what stands
 // before it, or a Box of its own at the row's start, so a wrapped line starts flush. A tag's parts stand a column
-// apart; tags with neither between them touch. A tag with nothing to show takes the gaps after it along.
+// apart; tags with neither between them touch. The gaps after the last tag are dropped: they part nothing, and would
+// wrap a tag that fits.
+// A tag with nothing to show folds with the gaps around it: between two drawn tags the widest of the gaps it split
+// stays, so one column of each side's gap-1 is one column; against a spacer or the row's edge none stays.
 // Too narrow for a row, it wraps between parts, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
 // ponytail: no shrink steps; a single part wider than the line still gets squeezed.
 function rowOf(ui: Ui, tags: (Parts | Filler)[]) {
   const items: { part?: Parts[number]; shares: number; pad: number }[] = [];
   let lead = 0;
-  let skip = false;
-  for (const tag of tags) {
+  // The gap columns since the last tag or spacer drawn, split where a tag with nothing to show stood.
+  let runs = [0];
+  const place = (next: "tag" | "spacer") => {
     const last = items.at(-1);
+    const columns = runs.length === 1 ? runs[0] ?? 0 : last?.part && next === "tag" ? Math.max(...runs) : 0;
+    if (last) last.pad += columns;
+    else lead += columns;
+    runs = [0];
+  };
+  for (const tag of tags) {
     if (typeof tag === "string") {
       if (isSpacer(tag)) {
+        place("spacer");
+        const last = items.at(-1);
         if (last && !last.part) last.shares++;
         else items.push({ shares: 1, pad: 0 });
-        skip = false;
-      } else if (!skip) {
-        const columns = GAPS.indexOf(tag) + 1;
-        if (last) last.pad += columns;
-        else lead += columns;
+      } else {
+        runs[runs.length - 1] = (runs.at(-1) ?? 0) + GAPS.indexOf(tag) + 1;
       }
     } else if (tag.length > 0) {
+      place("tag");
       tag.forEach((part, i) => items.push({ part, shares: 0, pad: i < tag.length - 1 ? 1 : 0 }));
-      skip = false;
     } else {
-      skip = true;
+      runs.push(0);
     }
   }
   if (!items.some((item) => item.part)) return undefined;
-  // Gaps after the last of the row part nothing, and would wrap a tag that fits.
-  const tail = items.at(-1);
-  if (tail) tail.pad = 0;
   const children = items.map(({ part, shares, pad }) =>
     part ? ui.Box({ flexShrink: 0, paddingRight: pad, children: [part] }) : ui.Box({ flexGrow: shares, paddingRight: pad }),
   );

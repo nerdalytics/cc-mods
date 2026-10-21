@@ -261,9 +261,9 @@ describe("statusline", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const rows = await tagRows(ui);
-    // No limit reading yet: its tag draws nothing and takes the gap after it along.
-    expect(rowSpelled(rows[0]).slice(0, 3)).toEqual(["<1", "Opus 5.5", "_2"]);
-    expect(rowSpelled(rows[0])).not.toContain("_3");
+    // No limit reading yet: the limits draw nothing and fold with the gaps around them, the widest staying.
+    expect(rowSpelled(rows[0]).slice(0, 3)).toEqual(["<1", "Opus 5.5", "_3"]);
+    expect(rowSpelled(rows[0])).not.toContain("_2");
     await ui.unmount();
   });
 
@@ -1208,6 +1208,79 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
+  // While the order pane shows, a part with nothing to show draws a made-up value, so it can be placed.
+  test("draws every git part while the order pane shows, and only what there is once it closes", async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    const out: Record<string, string> = {
+      "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
+        "/r/cc-mods/.git\n/r/cc-mods/.git\n/r/cc-mods\ntrunk\n",
+      "config init.defaultBranch": "trunk\n",
+    };
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r/cc-mods" }));
+    on("session.cwd", () => ({ value: "/r/cc-mods" }));
+    on("fs.exists", () => ({ value: false }));
+    on("process.run", (_$, e) => {
+      const stdout = out[e.argv.slice(1).filter((a) => a !== "--no-optional-locks").join(" ")];
+      return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+    // The engine's record of the mod's open panes.
+    let isOpen = false;
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] : [] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
+    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
+    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
+    expect(await glyphs()).not.toContain("PR #");
+
+    isOpen = true;
+    await clock.advance(100);
+    for (let i = 0; i < 50 && !(await glyphs()).includes("PR #42"); i++) await settle();
+    // The real folder and branch, and made-up values for the rest.
+    const spelled = rowSpelled((await tagRows(ui))[0]);
+    for (const text of ["cc-mods", "trunk", "⎇ spike", "PR #42", "↑2? ↓1?", "+12 -3 ~2"]) expect(spelled).toContain(text);
+
+    isOpen = false;
+    await clock.advance(100);
+    for (let i = 0; i < 50 && (await glyphs()).includes("PR #42"); i++) await settle();
+    expect(rowSpelled((await tagRows(ui))[0])).toEqual(["cc-mods", "_1", "trunk"]);
+    await ui.unmount();
+  });
+
+  test("draws every status tag while the order pane shows, and an offer that does not hold as a dim line naming it", async ($, on) => {
+    stubHint(on);
+    const clock = mock.clock(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    let isOpen = false;
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] : [] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: "O" })); i++) await settle();
+    const chips = async () => {
+      const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "tokens", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
+      return keys.flat();
+    };
+    expect(await chips()).toEqual([]);
+
+    isOpen = true;
+    await clock.advance(100);
+    for (let i = 0; i < 50 && (await chips()).length < 6; i++) await settle();
+    expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "cache"]);
+    expect(await ui.find({ type: "Text", text: /smart zone: compaction: shows when it applies/ })).toBeDefined();
+
+    isOpen = false;
+    await clock.advance(100);
+    for (let i = 0; i < 50 && (await chips()).length > 0; i++) await settle();
+    expect(await chips()).toEqual([]);
+    expect(await ui.find({ type: "Text", text: /shows when it applies/ })).toBeUndefined();
+    await ui.unmount();
+  });
+
   test("draws the branch's pull request from gh: number, draft, review, comments, conflict and checks", async ($, on) => {
     stubHint(on);
     const clock = mock.clock(on);
@@ -1708,7 +1781,7 @@ describe("statusline", () => {
   });
 
   // A gap is a row's: among the lines it is dropped.
-  test("draws a spacer among the lines as a blank line on its side of the prompt", { options: { line_order: "spacer,git,gap-1,spacer,prompt,spacer,spacer,status,fresh,compact,forecast" } }, async ($, on) => {
+  test("draws a spacer among the lines as a blank line on its side of the prompt, spacers that meet as one", { options: { line_order: "spacer,git,gap-1,spacer,prompt,spacer,spacer,status,fresh,compact,forecast" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -1727,13 +1800,19 @@ describe("statusline", () => {
     };
     for (let i = 0; i < 50 && !(await lines(above)).includes("row"); i++) await settle();
     expect(await lines(above)).toEqual(["_", "row", "_"]);
-    // Under the engine's hint line.
-    expect((await lines(below)).slice(-3)).toEqual(["_", "_", "row"]);
+    // Under the engine's hint line, the two spacers as one blank line.
+    expect((await lines(below)).slice(-3)).not.toEqual(["_", "_", "row"]);
+    expect((await lines(below)).slice(-2)).toEqual(["_", "row"]);
     await above.unmount();
     await below.unmount();
   });
 
-  test("draws the git row's parts in git_order with its spacers, a part switched off left out", { options: { git_order: "changes,spacer,folders,spacer,branch,sync", git_sync: false } }, async ($, on) => {
+  // A part with nothing to show (no worktree here) folds with the gaps beside it against a spacer.
+  for (const [order, spelled] of [
+    ["changes,spacer,folders,spacer,branch,sync", ["+3 -1 ~1", "<1", "r", "<1", "main"]],
+    ["folders,gap-1,branch,gap-1,worktree,spacer,changes", ["r", "_1", "main", "<1", "+3 -1 ~1"]],
+  ] as const)
+  test(`draws the git row's parts in git_order ${order} with its spacers and gaps, a part switched off left out`, { options: { git_order: order, git_sync: false } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -1754,8 +1833,8 @@ describe("statusline", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     for (let i = 0; i < 50 && !(await ui.find({ type: "Box", text: "+3 -1 ~1" })); i++) await settle();
-    // The changes first, then a spacer, the folder, another spacer, the branch; the commits ahead (↑2) are switched off.
-    expect(rowSpelled((await tagRows(ui))[0])).toEqual(["+3 -1 ~1", "<1", "r", "<1", "main"]);
+    // The commits ahead (↑2) are switched off.
+    expect(rowSpelled((await tagRows(ui))[0])).toEqual(spelled);
     await ui.unmount();
   });
 
