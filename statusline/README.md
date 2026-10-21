@@ -34,12 +34,12 @@ The mod draws a status row and a git row, and under the prompt a line for each o
 
 ### Status row
 
-By default the status row sits under the prompt, below Claude Code's hint line. Its tags, left to right:
+By default the status row sits under the prompt, below Claude Code's hint line. Its tags, left to right, are named in `segment_order` as `model`, `limit_7d`, `limit_5h`, `context`, `turns`, `tokens` and `cache`:
 
 | Tag | Shows | On hover |
 |---|---|---|
 | Model name | The main loop's model. Its colour shows the family, and Mythos is bold. A gradient sweeps across the name, faster the higher the effort of the last request. It stops when that request carried no effort. With the `gradients` option off the name is one colour and does not sweep, so it no longer shows the effort. | |
-| `7d`, `5h` | Two bars per limit. The top half is the time left until the window resets. The bottom half is the usage left. Limits belong to your account, so once the API refuses any of your sessions on one, this session shows it used up too, until it resets. Any other window Claude Code reports shows as its name and a percentage. | The time until the reset. |
+| `7d`, `5h` | One tag per limit, each with two bars. The top half is the time left until the window resets. The bottom half is the usage left. Limits belong to your account, so once the API refuses any of your sessions on one, this session shows it used up too, until it resets. Any other window Claude Code reports shows as its name and a percentage after the 5h tag. | The time until the reset. |
 | `◇` `◆` `○` `◔` `◑` `◕` `●` `⊙` | The context window as two bars. The top half is the smart zone left, the first 200,000 tokens by default, where recall is precise. The bottom half is the context left before auto-compaction, at the threshold Claude Code reports. Past the threshold the bottom fills again in red, one full bar per 25% over. The glyph is a diamond inside the smart zone, a moon that fills up beyond it, and `⊙` past the threshold. The badge turns from green to red as the context fills. With the `smart_zone` option off, the bar shows only the context left, in full-height blocks. | The tokens left. |
 | `⏎` | The prompts you sent, then the model requests the main conversation made for them. | Once a subagent has run, the subagents that ran and the requests they made. |
 | `Σ` | What the main conversation cost. | Its tokens. |
@@ -62,11 +62,12 @@ When the 7d or 5h limit would reach 100% before it resets, a line under the hint
 
 By default the git row sits above the prompt. Its parts, left to right by default, each with its name in `git_order`:
 
-- `path`: the project folder, the branch and the worktree.
-  - The project folder. When you `cd` elsewhere, the current folder follows it.
-  - The branch. The default branch shows bare, and any other branch after `⎇`. A branch made from a branch other than the default shows that branch first.
-  - The worktree after `⎇`, unless the branch name already contains it.
-- `pr`: the pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. After an open or draft pull request come its glyphs: a pencil for a draft, a check when the review approved it, a cross when changes were requested, `⋯` when a review is required, and an envelope and a count for the comments. A merged or closed pull request shows only its number.
+- `folders`: the project folder. When you `cd` elsewhere, the current folder follows it.
+- `branch`: the default branch shows bare, and any other branch after `⎇`. A branch made from a branch other than the default shows that branch first.
+- `worktree`: the worktree after `⎇`, unless the branch name already contains it.
+- `pr`: the pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. A draft has a pencil after it.
+- `review`: for an open or draft pull request, a check when the review approved it, a cross when changes were requested, and `⋯` when a review is required.
+- `comments`: for an open or draft pull request, an envelope and a count for its comments.
 - `sync`: `↑` and `↓` with the commits ahead and behind. A `?` after them means no remote has the branch, so the mod counts against the default branch.
 - `conflict`: a warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
 - `checks`: the checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
@@ -175,25 +176,30 @@ Each save writes the `colors` option, a comma list of `name=#rrggbb` with only t
 
 The `density` option sets how close the tags sit, in three steps:
 
-| `density` | Between the tags | Inside the git row's folders, branch and worktree |
+| `density` | Between the tags | Inside the git row's folders and branch |
 |---|---|---|
-| `compact` | No space in the status row. The git row keeps one. | No spaces: `spike›cc-mods⎇develop` |
-| `standard`, the default | One column | One space: `spike › cc-mods⎇ develop` |
+| `compact` | No space in the status row. The git row keeps one, because its parts have no chips to tell them apart. | No spaces: `spike›cc-mods`, `⎇develop` |
+| `standard`, the default | One column | One space: `spike › cc-mods`, `⎇ develop` |
 | `roomy` | Two columns, in both rows | One space, as `standard` |
 
-Under `compact` the model name keeps one column after it, because it has no tag of its own to stop it running into the next one. A default branch keeps one space before it too, because it has no `⎇` to separate it from the folder.
+Under `compact` the model name keeps one column after it, because it has no tag of its own to stop it running into the next one.
 
-A row starts at the left edge unless it has spacers. A spacer takes a share of the columns the row's tags leave free, so the tags before it are pushed left and the tags after it right. Spacers next to each other take a share each, so two side by side push twice as hard as one. Some `segment_order` values:
+A row starts at the left edge unless it has spacers. A spacer takes a share of the columns the row's tags leave free, so the tags before it are pushed left and the tags after it right. Spacers next to each other take a share each, so two side by side push twice as hard as one. A spacer is never narrower than the row's gap under `density`, so with no columns free it still shows: no column under `compact` in the status row, one under `standard`, and two under `roomy`. The git row's gap is at least one column, so its spacers are too. Some `segment_order` values:
 
 | Order | Draws |
 |---|---|
 | `spacer,model,…` | The whole row against the right edge. |
-| `model,limits,context,spacer,turns,tokens,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
-| `model,tokens,spacer,spacer,limits,spacer,turns,spacer,spacer,cache,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
+| `model,limit_7d,limit_5h,context,spacer,turns,tokens,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
+| `model,tokens,spacer,spacer,limit_7d,limit_5h,spacer,turns,spacer,spacer,cache,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
+| `model,limit_7d,spacer,limit_5h,context,turns,tokens,cache` | Model and the 7d limit at the left, the rest from the 5h limit on at the right. |
 
 A tag that has nothing to show, such as the costs before the first token count, leaves its spacers meeting. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
 
+Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/statusline:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
+
 Spacers replace the `row_git_align` and `row_status_align` options of 0.16.x. Claude Code no longer passes them to the mod once they are gone from the manifest. If you had a row set to `right`, drag a spacer to the top of that row's list.
+
+The `limits` tag of 0.17.0 and earlier is now `limit_7d` and `limit_5h`, and the git row's `path` is now `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
 
 `density` replaces the `compact` option of 0.15.0 and earlier, which Claude Code no longer passes to the mod once it is gone from the manifest. If you had `compact` on, set `density` to `compact` in `/config`.
 
@@ -207,15 +213,15 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 |---|---|---|---|
 | Git row | `row_git` | true | Shows the git row. |
 | Git row › position | `row_git_position` | above | Places the git row `above` or `below` the prompt. Below means under Claude Code's hint line. |
-| Git row › path, pull request, ahead and behind, conflict, checks, changes | `git_path`, `git_pr`, `git_sync`, `git_conflict`, `git_checks`, `git_changes` | true | One toggle per part of the git row. |
-| Git row › order | `git_order` | path,pr,sync,conflict,checks,changes | The git row's parts, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes last, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
+| Git row › folders, branch, worktree, pull request, review, comments, ahead and behind, conflict, checks, changes | `git_folders`, `git_branch`, `git_worktree`, `git_pr`, `git_review`, `git_comments`, `git_sync`, `git_conflict`, `git_checks`, `git_changes` | true | One toggle per part of the git row. |
+| Git row › order | `git_order` | folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes | The git row's parts, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Status row | `row_status` | true | Shows the status row. |
 | Status row › position | `row_status_position` | below | Places the status row `above` or `below` the prompt. |
-| Status row › model, limits, context, turns, costs, cache | `segment_model`, `segment_limits`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
-| Lines › order | `line_order` | git,prompt,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` for the cold cache, `compact` for the smart zone and `forecast` for the limit forecast, with `spacer` for a blank line and `prompt` between the two sides. A line's side comes from its position option, a spacer's from where it stands against `prompt`. A name left out goes last, and the mod ignores an unknown one. |
+| Status row › model, 7d limit, 5h limit, context, turns, costs, cache | `segment_model`, `segment_limit_7d`, `segment_limit_5h`, `segment_context`, `segment_turns`, `segment_tokens`, `segment_cache` | true | One toggle per tag of the status row. |
+| Lines › order | `line_order` | git,prompt,status,fresh,compact,forecast | The order of the lines on each side of the prompt, as a comma list of `git`, `status`, `fresh` for the cold cache, `compact` for the smart zone and `forecast` for the limit forecast, with `spacer` for a blank line and `prompt` between the two sides. A line's side comes from its position option, a spacer's from where it stands against `prompt`. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. |
 | Offer a fresh start, Offer a compaction, Limit forecast › position | `fresh_start_position`, `compact_hint_position`, `limit_forecast_position` | below | Places each of these lines `above` or `below` the prompt. |
 | Status row › costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
-| Status row › order | `segment_order` | model,limits,context,turns,tokens,cache | The status row's tags, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes last, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
+| Status row › order | `segment_order` | model,limit_7d,limit_5h,context,turns,tokens,cache | The status row's tags, left to right, as a comma list, with `spacer` where a spacer stands. A name left out goes after the one before it in the default order, and the mod ignores an unknown one. See [Spacing and alignment](#spacing-and-alignment). |
 | Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
 | Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default, and the mod ignores an unknown name or a colour that does not read. `/statusline:colors` writes it. |
 | Density | `density` | standard | How close the tags sit: `compact`, `standard` or `roomy`, as described under [Spacing and alignment](#spacing-and-alignment). Replaces the `compact` option of 0.15.0 and earlier. |

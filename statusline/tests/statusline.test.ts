@@ -50,6 +50,8 @@ const tagRows = async (ui: { findAll: Mounted["findAll"] }) => (await ui.findAll
 const leaves = (nodes: readonly unknown[]) => nodes.filter((node): node is { props: Record<string, unknown> } => typeof node === "object" && node !== null && "props" in node);
 // What a row draws, a spacer run as "<n" for the shares it grows by, any other part as its text.
 const rowSpelled = (row: FoundElement | undefined) => leaves(row?.children ?? []).map((part) => (typeof part.props.flexGrow === "number" ? `<${part.props.flexGrow}` : flat(part).trim()));
+// The narrowest each spacer run of a row may get, in columns.
+const spacerWidths = (row: FoundElement | undefined) => leaves(row?.children ?? []).filter((part) => typeof part.props.flexGrow === "number").map((part) => part.props.minWidth);
 // A query the test counts on finding.
 function must<T>(found: T | undefined, what: string): T {
   if (found === undefined) throw new Error(`${what} did not draw`);
@@ -231,7 +233,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("leaves out what /config turns off, and the gaps with compact density", { options: { segment_limits: false, density: "compact" } }, async ($, on) => {
+  test("leaves out what /config turns off, and the gaps with compact density", { options: { segment_limit_7d: false, density: "compact" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
@@ -250,7 +252,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("parts the status row's tags by two columns under roomy density, and a spacer first draws it against the right edge", { options: { density: "roomy", segment_order: "spacer,model,limits,context,turns,tokens,cache" } }, async ($, on) => {
+  test("parts the status row's tags by two columns under roomy density, and a spacer first draws it against the right edge", { options: { density: "roomy", segment_order: "spacer,model,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -260,6 +262,8 @@ describe("statusline", () => {
     const rows = await tagRows(ui);
     expect(rows.map((b) => b.props.columnGap)).toEqual([2]);
     expect(rowSpelled(rows[0]).slice(0, 2)).toEqual(["<1", "Opus 5.5"]);
+    // Never narrower than the density's gap.
+    expect(spacerWidths(rows[0])).toEqual([2]);
     // The gap parts the model name from the next tag: no padding of its own.
     expect((await ui.findAll({ type: "Box" })).some((b) => b.props.paddingRight === 1)).toBe(false);
     await ui.unmount();
@@ -281,22 +285,28 @@ describe("statusline", () => {
   // The spacers share the room the tags leave: a run of two takes two shares, so it pushes twice as hard as one. A tag
   // that draws nothing (the costs and cache, before a token scan) leaves the spacers around it to meet.
   for (const [order, spelled] of [
-    // model costs || limit | turns || cache context
-    ["model,tokens,spacer,spacer,limits,spacer,turns,spacer,spacer,cache,context", ["Opus 5.5", "<2", "7d", "<1", "⏎", "<2", "◇"]],
-    // model limit context | turns costs cache
-    ["model,limits,context,spacer,turns,tokens,cache", ["Opus 5.5", "7d", "◇", "<1", "⏎"]],
+    // model costs || limits | turns || cache context
+    ["model,tokens,spacer,spacer,limit_7d,limit_5h,spacer,turns,spacer,spacer,cache,context", ["Opus 5.5", "<2", "7d", "5h", "<1", "⏎", "<2", "◇"]],
+    // model limits context | turns costs cache
+    ["model,limit_7d,limit_5h,context,spacer,turns,tokens,cache", ["Opus 5.5", "7d", "5h", "◇", "<1", "⏎"]],
+    // model 7d | 5h, the tags left out each after the one before it in the default order: context, turns, costs, cache.
+    ["model,limit_7d,spacer,limit_5h", ["Opus 5.5", "7d", "<1", "5h", "◇", "⏎"]],
   ] as const) {
     test(`draws ${order.replaceAll(",spacer", " |").replaceAll(",", " ")} with its spacers as shares of the room`, { options: { segment_order: order } }, async ($, on) => {
       stubHint(on);
       on("session.start", ($, e) => ({ cwd: e.cwd }));
-      on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt: new Date(Date.now() + 90_030_000).toISOString() }] } }));
+      const resetsAt = new Date(Date.now() + 90_030_000).toISOString();
+      on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
       on("session.model", () => ({ value: "claude-opus-5-5" }));
       on("session.turns", () => ({ value: 3 }));
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
       const ui = await mountHint($);
-      // A tag spelled by its first glyphs: the limit by its badge, the context by its icon, the turns by mark and count.
-      const short = (part: string) => (part.startsWith("<") || part === "Opus 5.5" ? part : part.startsWith("7d") ? "7d" : part.startsWith("◇") ? "◇" : part.split(/\s+/)[0] ?? part);
-      expect(rowSpelled((await tagRows(ui))[0]).map(short)).toEqual(spelled);
+      // A tag spelled by its first glyphs: a limit by its badge, the context by its icon, the turns by mark and count.
+      const short = (part: string) => (part.startsWith("<") || part === "Opus 5.5" ? part : /^(7d|5h)/.exec(part)?.[0] ?? (part.startsWith("◇") ? "◇" : part.split(/\s+/)[0] ?? part));
+      const row = (await tagRows(ui))[0];
+      expect(rowSpelled(row).map(short)).toEqual(spelled);
+      // Under standard density a run is never narrower than a column per spacer in it.
+      expect(spacerWidths(row)).toEqual(spelled.filter((part) => part.startsWith("<")).map((part) => Number(part.slice(1))));
       await ui.unmount();
     });
   }
@@ -1064,11 +1074,11 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  // The row's gap, then the gap inside the path of folders, branch and worktree, by density.
+  // The row's gap by density: the folders, branch and worktree are parts of their own, parted by it.
   for (const [options, path, rowGaps] of [
-    [{}, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [1, 1]],
-    [{ density: "compact" }, "spike›cc-mods⎇develop⎇feat/gitline⎇spike", [1, 0]],
-    [{ density: "roomy" }, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [2, 1]],
+    [{}, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [1]],
+    [{ density: "compact" }, "spike›cc-mods⎇develop⎇feat/gitline⎇spike", [1]],
+    [{ density: "roomy" }, "spike › cc-mods⎇ develop ⎇ feat/gitline⎇ spike", [2]],
   ] as const)
   test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${"density" in options ? `, under ${options.density} density` : ""}`, { options }, async ($, on) => {
     stubHint(on);
@@ -1171,7 +1181,7 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  test("keeps a space before the default branch under compact spacing: no ⎇ parts it from the folder", { options: { density: "compact" } }, async ($, on) => {
+  test("parts the default branch from the folder under compact spacing, where no ⎇ does: the git row keeps a gap", { options: { density: "compact" } }, async ($, on) => {
     stubHint(on);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -1199,7 +1209,9 @@ describe("statusline", () => {
 
     const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
-    expect(await glyphs()).toContain("cc-mods trunk");
+    const rows = await tagRows(ui);
+    expect(rowSpelled(rows[0])).toEqual(["cc-mods", "trunk"]);
+    expect(rows[0]?.props.columnGap).toBe(1);
     await ui.unmount();
   });
 
@@ -1583,10 +1595,10 @@ describe("statusline", () => {
     configRow("row_status", true),
     configRow("row_status_position", "below"),
     configRow("line_order", "git,prompt,status,fresh,compact,forecast"),
-    configRow("segment_order", "model,limits,context,turns,tokens,cache"),
-    ...["model", "limits", "context", "turns", "tokens", "cache"].map((name) => configRow(`segment_${name}`, true)),
-    configRow("git_order", "path,pr,sync,conflict,checks,changes"),
-    ...["path", "pr", "sync", "conflict", "checks", "changes"].map((name) => configRow(`git_${name}`, true)),
+    configRow("segment_order", "model,limit_7d,limit_5h,context,turns,tokens,cache"),
+    ...["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "cache"].map((name) => configRow(`segment_${name}`, true)),
+    configRow("git_order", "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes"),
+    ...["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"].map((name) => configRow(`git_${name}`, true)),
     ...["fresh_start", "compact_hint", "limit_forecast"].flatMap((field) => [configRow(field, true), configRow(`${field}_position`, "below")]),
   ];
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
@@ -1613,15 +1625,15 @@ describe("statusline", () => {
   });
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
-    // model, limits, context, turns, tokens, cache, ── hidden ──, spacer: the model tag dropped on the marker's row.
-    const written = await dragIn(on, $, PINNED, "segments", 0, 6);
-    expect(written).toEqual([["segment_model", false], ["segment_order", "limits,context,turns,tokens,cache,model"]]);
+    // model, 7d, 5h, context, turns, tokens, cache, ── hidden ──, spacer: the model tag dropped on the marker's row.
+    const written = await dragIn(on, $, PINNED, "segments", 0, 7);
+    expect(written).toEqual([["segment_model", false], ["segment_order", "limit_7d,limit_5h,context,turns,tokens,cache,model"]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { ...PINNED, segment_model: false, segment_order: "limits,context,turns,tokens,cache,model" } }, async ($, on) => {
-    // limits..cache are shown (rows 0-4), ── hidden ── is row 5, the spare spacer row 6, model row 7: model dropped to the top.
-    const written = await dragIn(on, $, PINNED, "segments", 7, 0);
-    expect(written).toEqual([["segment_model", true], ["segment_order", "model,limits,context,turns,tokens,cache"]]);
+  test("dragging a hidden tag out turns it back on", { options: { ...PINNED, segment_model: false, segment_order: "limit_7d,limit_5h,context,turns,tokens,cache,model" } }, async ($, on) => {
+    // 7d..cache are shown (rows 0-5), ── hidden ── is row 6, the spare spacer row 7, model row 8: model dropped to the top.
+    const written = await dragIn(on, $, PINNED, "segments", 8, 0);
+    expect(written).toEqual([["segment_model", true], ["segment_order", "model,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
 
   test("dragging a row into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
@@ -1635,19 +1647,18 @@ describe("statusline", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone. A spacer has no toggle: only the order is written.
   test("dragging the spare spacer out of hidden adds a spacer to the order", { options: PINNED }, async ($, on) => {
-    // model .. cache (rows 0-5), ── hidden ── row 6, the spacer row 7: dropped on limits' row, after the model.
-    expect(await dragIn(on, $, PINNED, "segments", 7, 1)).toEqual([["segment_order", "model,spacer,limits,context,turns,tokens,cache"]]);
+    // model .. cache (rows 0-6), ── hidden ── row 7, the spacer row 8: dropped on the 7d limit's row, after the model.
+    expect(await dragIn(on, $, PINNED, "segments", 8, 1)).toEqual([["segment_order", "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
 
-  test("a second spacer is there to drag out once one is", { options: { ...PINNED, segment_order: "model,spacer,limits,context,turns,tokens,cache" } }, async ($, on) => {
-    // model, spacer, limits .. cache (rows 0-6), ── hidden ── row 7, the spare row 8: dropped beside the first.
-    expect(await dragIn(on, $, PINNED, "segments", 8, 1)).toEqual([["segment_order", "model,spacer,spacer,limits,context,turns,tokens,cache"]]);
+  test("a second spacer is there to drag out once one is", { options: { ...PINNED, segment_order: "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
+    // model, spacer, 7d .. cache (rows 0-7), ── hidden ── row 8, the spare row 9: dropped beside the first.
+    expect(await dragIn(on, $, PINNED, "segments", 9, 1)).toEqual([["segment_order", "model,spacer,spacer,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
 
-  test("dragging a spacer into hidden takes it away", { options: { ...PINNED, segment_order: "model,spacer,limits,context,turns,tokens,cache" } }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "segments", 1, 7)).toEqual([["segment_order", "model,limits,context,turns,tokens,cache"]]);
+  test("dragging a spacer into hidden takes it away", { options: { ...PINNED, segment_order: "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "segments", 1, 8)).toEqual([["segment_order", "model,limit_7d,limit_5h,context,turns,tokens,cache"]]);
   });
-
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
     // git, ── prompt ──, status .. forecast, ── hidden ── row 6, the spacer row 7: dropped on the prompt marker's row,
     // above it, under the git row.
@@ -1655,10 +1666,10 @@ describe("statusline", () => {
   });
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
-    // path, pr, sync, conflict, checks, changes, ── hidden ──, spacer: the PR dropped on the marker's row.
-    expect(await dragIn(on, $, PINNED, "git", 1, 6)).toEqual([["git_pr", false], ["git_order", "path,sync,conflict,checks,changes,pr"]]);
+    // folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, ── hidden ── (row 10), spacer:
+    // the review dropped on the marker's row.
+    expect(await dragIn(on, $, PINNED, "git", 4, 10)).toEqual([["git_review", false], ["git_order", "folders,branch,worktree,pr,comments,sync,conflict,checks,changes,review"]]);
   });
-
   test("dragging the forecast line into the hidden zone switches off its toggle", { options: PINNED }, async ($, on) => {
     expect(await dragIn(on, $, PINNED, "rows", 5, 6)).toEqual([["limit_forecast", false]]);
   });
@@ -1668,13 +1679,15 @@ describe("statusline", () => {
   });
 
   // A line_order saved before spacers had no prompt in it: each line takes its side from its position option, as then.
-  test("the order pane lists the lines around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", line_order: "status,git,fresh,compact,forecast", segment_order: "cache,model,limits,context,turns,tokens", segment_limits: false, git_order: "changes,spacer,path", git_checks: false } }, async ($, on) => {
+  // Orders saved by 0.17.0, before the limits and the path were split, keep the parts where the tag stood, and the PR's
+  // review and comments after it.
+  test("the order pane lists the lines around the prompt marker and the tags, hidden ones after their marker", { options: { ...PINNED, row_status_position: "above", line_order: "status,git,fresh,compact,forecast", segment_order: "cache,model,limits,context,turns,tokens", segment_limit_7d: false, git_order: "changes,spacer,path,pr,checks", git_conflict: false } }, async ($, on) => {
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
     expect(await clientProps("rows")).toMatchObject({ items: ["status", "git", "prompt", "fresh", "compact", "forecast", "hidden", "spacer"] });
-    expect(await clientProps("git")).toMatchObject({ items: ["changes", "spacer", "path", "pr", "sync", "conflict", "hidden", "spacer", "checks"] });
-    expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "context", "turns", "tokens", "hidden", "spacer", "limits"] });
+    expect(await clientProps("git")).toMatchObject({ items: ["changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "conflict"] });
+    expect(await clientProps("segments")).toMatchObject({ items: ["cache", "model", "limit_5h", "context", "turns", "tokens", "hidden", "spacer", "limit_7d"] });
     // Each list as wide as the pane, so its labels wrap inside it.
     expect((await ui.findAll({ type: "Client" })).map((c) => c.props.width)).toEqual(["100%", "100%", "100%"]);
     await ui.unmount();
@@ -1705,7 +1718,7 @@ describe("statusline", () => {
     await below.unmount();
   });
 
-  test("draws the git row's parts in git_order with its spacers, a part switched off left out", { options: { git_order: "changes,spacer,path,sync", git_sync: false } }, async ($, on) => {
+  test("draws the git row's parts in git_order with its spacers, a part switched off left out", { options: { git_order: "changes,spacer,folders,spacer,branch,sync", git_sync: false } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -1726,8 +1739,8 @@ describe("statusline", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     for (let i = 0; i < 50 && !(await ui.find({ type: "Box", text: "+3 -1 ~1" })); i++) await settle();
-    // The changes first, then the spacer, then the path; the commits ahead (↑2) are switched off.
-    expect(rowSpelled((await tagRows(ui))[0])).toEqual(["+3 -1 ~1", "<1", "rmain"]);
+    // The changes first, then a spacer, the folder, another spacer, the branch; the commits ahead (↑2) are switched off.
+    expect(rowSpelled((await tagRows(ui))[0])).toEqual(["+3 -1 ~1", "<1", "r", "<1", "main"]);
     await ui.unmount();
   });
 
@@ -1741,17 +1754,17 @@ describe("statusline", () => {
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 16, placement: "dock", ...SITE } });
     await ui.resize({ columns: 16, rows: 14, in: "git" });
     const lines = (await ui.findAll({ type: "Text", in: "git" })).map((t) => flat(t));
-    // "folders, branch and worktree" in 14 columns after its handle: three lines, each cut at the edge, never wrapped again.
-    expect(lines.slice(0, 3)).toEqual(["≡ folders,", "  branch and", "  worktree"]);
+    // "commits ahead and behind" in 14 columns after its handle: two lines, each cut at the edge, never wrapped again.
+    expect(lines.slice(6, 8)).toEqual(["≡ commits ahead", "  and behind"]);
     expect((await ui.findAll({ type: "Text", in: "git" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
-    // Its second line pressed and dropped on the hidden marker's first line (the path takes rows 0-2, the pull request
-    // 3-5, ahead and behind 6-7, conflict, checks and changes one each to row 10; the marker wraps from row 11): the path
-    // is switched off.
-    await ui.pointer({ type: "down", x: 3, y: 1, button: "left", in: "git" });
+    // Its second line pressed and dropped on the hidden marker's first line (folders to comments take a row each, 0-5,
+    // ahead and behind 6-7, conflict, checks and changes one each to row 10; the marker wraps from row 11): ahead and
+    // behind is switched off.
+    await ui.pointer({ type: "down", x: 3, y: 7, button: "left", in: "git" });
     await ui.pointer({ type: "move", x: 3, y: 11, button: "left", in: "git" });
     await ui.pointer({ type: "up", x: 3, y: 11, button: "left", in: "git" });
     await ui.unmount();
-    expect(written).toEqual([["git_path", false], ["git_order", "pr,sync,conflict,checks,changes,path"]]);
+    expect(written).toEqual([["git_sync", false], ["git_order", "folders,branch,worktree,pr,review,comments,conflict,checks,changes,sync"]]);
   });
 
   // The colours: the colors option's overrides, and with the gradients option off one colour per gradient.

@@ -38,19 +38,43 @@
     "git_order": {
       "type": "string",
       "title": "Statusline: Git row › order",
-      "description": "The git row's parts, left to right, as a comma list of path, pr, sync, conflict, checks, changes, with spacer where a spacer stands. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: path,pr,sync,conflict,checks,changes)",
-      "default": "path,pr,sync,conflict,checks,changes"
+      "description": "The git row's parts, left to right, as a comma list of folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, with spacer where a spacer stands. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes)",
+      "default": "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes"
     },
-    "git_path": {
+    "git_folders": {
       "type": "boolean",
-      "title": "Statusline: Git row › path",
-      "description": "The project folder, the shell's folder when it is elsewhere, the branch and the worktree. true (default) / false",
+      "title": "Statusline: Git row › folders",
+      "description": "The project folder, and the shell's folder when it is elsewhere. true (default) / false",
+      "default": true
+    },
+    "git_branch": {
+      "type": "boolean",
+      "title": "Statusline: Git row › branch",
+      "description": "The branch, and the branch it is based off when that is not the default one. true (default) / false",
+      "default": true
+    },
+    "git_worktree": {
+      "type": "boolean",
+      "title": "Statusline: Git row › worktree",
+      "description": "The worktree, when the branch does not already name it. true (default) / false",
       "default": true
     },
     "git_pr": {
       "type": "boolean",
       "title": "Statusline: Git row › pull request",
-      "description": "The branch's pull request: its number, draft mark, review and comments. true (default) / false",
+      "description": "The branch's pull request: its number, and the draft mark while it is one. true (default) / false",
+      "default": true
+    },
+    "git_review": {
+      "type": "boolean",
+      "title": "Statusline: Git row › review",
+      "description": "The open pull request's review: approved, changes requested or review required. true (default) / false",
+      "default": true
+    },
+    "git_comments": {
+      "type": "boolean",
+      "title": "Statusline: Git row › comments",
+      "description": "How many comments the open pull request has. true (default) / false",
       "default": true
     },
     "git_sync": {
@@ -96,7 +120,7 @@
     "line_order": {
       "type": "string",
       "title": "Statusline: Lines › order",
-      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast, with spacer for a blank line and prompt between the two sides. A line's side is its position option's; a spacer's is where it stands against prompt. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,prompt,status,fresh,compact,forecast)",
+      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast, with spacer for a blank line and prompt between the two sides. A line's side is its position option's; a spacer's is where it stands against prompt. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,prompt,status,fresh,compact,forecast)",
       "default": "git,prompt,status,fresh,compact,forecast"
     },
     "segment_model": {
@@ -105,10 +129,16 @@
       "description": "The main loop's model. true (default) / false",
       "default": true
     },
-    "segment_limits": {
+    "segment_limit_7d": {
       "type": "boolean",
-      "title": "Statusline: Status row › limits",
-      "description": "The 7d and 5h limit bars. true (default) / false",
+      "title": "Statusline: Status row › 7d limit",
+      "description": "The 7d limit bar. true (default) / false",
+      "default": true
+    },
+    "segment_limit_5h": {
+      "type": "boolean",
+      "title": "Statusline: Status row › 5h limit",
+      "description": "The 5h limit bar. true (default) / false",
       "default": true
     },
     "segment_context": {
@@ -144,8 +174,8 @@
     "segment_order": {
       "type": "string",
       "title": "Statusline: Status row › order",
-      "description": "The status row's tags, left to right, as a comma list of model, limits, context, turns, tokens, cache, with spacer where a spacer stands, as in the git row's order: one spacer first draws the row against the right edge. A name left out goes last, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limits,context,turns,tokens,cache)",
-      "default": "model,limits,context,turns,tokens,cache"
+      "description": "The status row's tags, left to right, as a comma list of model, limit_7d, limit_5h, context, turns, tokens, cache, with spacer where a spacer stands, as in the git row's order: one spacer first draws the row against the right edge. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,limit_7d,limit_5h,context,turns,tokens,cache)",
+      "default": "model,limit_7d,limit_5h,context,turns,tokens,cache"
     },
     "gradients": {
       "type": "boolean",
@@ -162,7 +192,7 @@
     "density": {
       "type": "string",
       "title": "Statusline: Density",
-      "description": "How close the tags sit: compact leaves no space between the status row's tags and closes up the git row's folders, branch and worktree; standard leaves one column; roomy two. compact / standard (default) / roomy",
+      "description": "How close the tags sit: compact leaves no space between the status row's tags and one between the git row's; standard leaves one column; roomy two. A spacer is never narrower than its row's gap. compact / standard (default) / roomy",
       "options": [
         "compact",
         "standard",

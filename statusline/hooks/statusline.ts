@@ -47,23 +47,27 @@ const SEGMENTS = {
     // Bare text, not a chip: compact density keeps a column after it, so it doesn't run into the next tag.
     return [Box({ paddingRight: gap > 0 ? 0 : 1, children: [run(Box, Text, formatModel(s.model), (i, n) => sweep(from, to, i, n, s.phase), bold)] })];
   },
-  limits: ({ Box, Text }, s) => {
-    const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
-    return [
-      ...LIMITS.flatMap((limit) => {
-        const found = limits.find((r) => r.kind === limit.kind);
-        return found ? [limitParts(Box, Text, limit, found, s.now)] : [];
-      }),
-      // ponytail: probe, whether Claude Code reports a window beyond 7d and 5h (a Fable one?): drawn as its name and
-      // percentage. Give it a bar of its own, or delete this, once a screenshot says.
-      ...limits.filter((r) => !LIMITS.some((l) => l.kind === r.kind)).map((r) => Text({ children: `${r.kind} ${r.percentUsed}%` })),
-    ];
-  },
+  limit_7d: (ui, s) => limitSegment(ui, s, "7d"),
+  // ponytail: probe, whether Claude Code reports a window beyond 7d and 5h (a Fable one?): drawn after the 5h bar as its
+  // name and percentage. Give it a bar of its own, or delete this, once a screenshot says.
+  limit_5h: (ui, s) => [
+    ...limitSegment(ui, s, "5h"),
+    ...limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000)
+      .filter((r) => !LIMITS.some((l) => l.kind === r.kind))
+      .map((r) => ui.Text({ children: `${r.kind} ${r.percentUsed}%` })),
+  ],
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
   tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
+
+// One limit's bar, none until a reading has it.
+function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
+  const limit = LIMITS.find((l) => l.badge === badge);
+  const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
+  return limit && found ? [limitParts(Box, Text, limit, found, s.now)] : [];
+}
 
 // The lines around the prompt: the git row, the status row, and a line of the mod's own for each offer. Each is a
 // /config toggle and each has a place, above the prompt or under it below the engine's hint line (the pickers); lines
@@ -74,9 +78,9 @@ const SEGMENTS = {
 const SPACER = "spacer";
 type Spacer = typeof SPACER;
 const isSpacer = (name: string): name is Spacer => name === SPACER;
-const STATUS_ROW = ["model", "limits", "context", "turns", "tokens", "cache"] as const;
+const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "cache"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
-const GIT_ROW = ["path", "pr", "sync", "conflict", "checks", "changes"] as const;
+const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
 const LINES = ["git", "status", "fresh", "compact", "forecast"] as const;
 type Line = (typeof LINES)[number];
@@ -101,13 +105,18 @@ const LABELS: Record<string, string> = {
   git: "git + pull request",
   status: "status",
   model: "model",
-  limits: "limits",
+  limit_7d: "7d limit",
+  limit_5h: "5h limit",
   context: "context",
   turns: "turns",
   tokens: "costs",
   cache: "cache",
-  path: "folders, branch and worktree",
-  pr: "pull request, its review and comments",
+  folders: "folders",
+  branch: "branch",
+  worktree: "worktree",
+  pr: "pull request",
+  review: "review",
+  comments: "comments",
   sync: "commits ahead and behind",
   conflict: "conflict",
   checks: "checks",
@@ -133,13 +142,20 @@ let lists: Record<ListKey, string[]> = {
 };
 const listProps = (key: ListKey, items: string[], rev: number) => ({ items, labels: LISTS[key].labels, fixed: LISTS[key].markers, rev });
 
-// A comma list from /config in the order it names: unknown and repeated names dropped, the missing ones last in their
-// default order. Spacers stay where they are named, as many as are named.
+// Tags of 0.17.0 and earlier, since split, as their parts: an order saved then keeps the parts where the tag stood.
+const RENAMED: Record<string, string[]> = { limits: ["limit_7d", "limit_5h"], path: ["folders", "branch", "worktree"] };
+
+// A comma list from /config in the order it names: unknown and repeated names dropped, each missing one after the name
+// before it in the default order (the PR's review and comments after the PR, where they were part of it), a missing
+// first one first. Spacers stay where they are named, as many as are named.
 function ordered<T extends string>(option: unknown, defaults: readonly T[]): (T | Spacer)[] {
-  const named = typeof option === "string" ? option.split(",").map((name) => name.trim()) : [];
+  const named = typeof option === "string" ? option.split(",").flatMap((name) => RENAMED[name.trim()] ?? [name.trim()]) : [];
   const seen = new Set<string>();
   const kept = named.filter((name): name is T | Spacer => isSpacer(name) || (defaults.some((known) => known === name) && !seen.has(name) && Boolean(seen.add(name))));
-  return [...kept, ...defaults.filter((name) => !seen.has(name))];
+  defaults.forEach((name, i) => {
+    if (!seen.has(name)) kept.splice(i === 0 ? 0 : kept.indexOf(defaults[i - 1] as T) + 1, 0, name);
+  });
+  return kept;
 }
 
 // A list as the pane draws it: its shown names, the hidden marker, the one spacer to drag out, the hidden names.
@@ -761,26 +777,27 @@ async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status"): Promi
 }
 
 // A row of tags, each a list of parts, and spacers; nothing when no tag has a part. A run of spacers between two tags
-// is one Box that grows by as many shares as it has spacers.
+// is one Box that grows by as many shares as it has spacers, and is never narrower than one gap of the density per
+// spacer, so a full row still reads a spacer: none under compact, one column a spacer under standard, two under roomy.
 // Too narrow for a row, it wraps between parts, as statusline.zsh's wrap_at did, rather than squeeze their glyphs.
 // The gap, not a leading space, parts them, so a wrapped line starts flush.
-// ponytail: no shrink steps; a single part wider than the line still gets squeezed. A spacer adds a gap of its own
-// beside each neighbour, so a full row reads one gap wider at a spacer.
+// ponytail: no shrink steps; a single part wider than the line still gets squeezed.
 function rowOf(ui: Ui, tags: (Parts | Spacer)[], columnGap: number) {
   const children: Parts = [];
   let shares = 0;
+  const spacer = () => ui.Box({ flexGrow: shares, minWidth: shares * columnGap });
   for (const tag of tags) {
     if (tag === SPACER) {
       shares++;
       continue;
     }
     if (tag.length === 0) continue;
-    if (shares > 0) children.push(ui.Box({ flexGrow: shares }));
+    if (shares > 0) children.push(spacer());
     shares = 0;
     children.push(...tag.map((part) => ui.Box({ flexShrink: 0, children: [part] })));
   }
   if (children.length === 0) return undefined;
-  if (shares > 0) children.push(ui.Box({ flexGrow: shares }));
+  if (shares > 0) children.push(spacer());
   return ui.Box({ flexDirection: "row", flexWrap: "wrap", columnGap, children });
 }
 
@@ -1558,12 +1575,10 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
   const name = (path: string) => path.split("/").pop() || "~";
   const sp = gap ? " " : "";
   const segments: Record<GitTag, (string | Piece[])[]> = {
-    path: [
-      // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
-      [{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])],
+    // The project root (where the session started, unless /cd moved it), then the shell's folder when it is elsewhere.
+    folders: [[{ text: name(g.root), href: folder(g.root) }, ...(g.cwd === g.root ? [] : [{ text: `${sp}›${sp}` }, { text: name(g.cwd), href: folder(g.cwd) }])]],
+    branch: [
       [
-        // A bare branch name would run into the folder under compact density; a ⎇ before it parts them already.
-        { text: !gap && g.branch && g.branch === g.defaultBranch ? " " : "" },
         {
           text: !g.branch
             ? ""
@@ -1575,15 +1590,13 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
           href: folder(g.top),
         },
       ],
-      // Hidden when the branch already names it.
-      [{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }],
     ],
-    pr: [
-      [{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }],
-      pr?.state === "draft" ? ` ${DRAFT_MARK}` : "",
-      live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : "",
-      pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : "",
-    ],
+    // Hidden when the branch already names it.
+    worktree: [[{ text: g.worktree && !g.branch.includes(g.worktree) ? `⎇${sp}${g.worktree}` : "", href: folder(g.top) }]],
+    // The number, and the draft mark beside it while the PR is one.
+    pr: [[{ text: pr ? `PR #${pr.number}` : "", href: pr?.url || undefined, color: pr ? color(`pr.${pr.state}`) : undefined }], pr?.state === "draft" ? ` ${DRAFT_MARK}` : ""],
+    review: [live ? (REVIEW_MARKS[pr?.review ?? ""] ?? "") : ""],
+    comments: [pr && live && pr.comments > 0 ? ` ${COMMENT_MARK} ${pr.comments}` : ""],
     // Behind links the remote branch's history, newest first, where the commits not pulled yet sit on top. Ahead
     // links nothing: those commits exist only here.
     sync: [
@@ -1610,19 +1623,17 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
     changes: [(g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : "")],
   };
   let drawn = 0;
-  return tags.map((tag) => {
-    if (isSpacer(tag)) return tag;
-    const runs = segments[tag]
-      .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))
-      .filter((pieces) => pieces.some((p) => p.text !== ""))
-      .map((pieces) => {
-        const i = drawn++;
-        return linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1)));
-      });
-    // The folders, branch and worktree are one path: compact density closes it up, roomy keeps one column inside it;
-    // the row's gap parts what follows.
-    return tag === "path" && runs.length > 0 ? [Box({ flexDirection: "row", columnGap: Math.min(gap, 1), children: runs })] : runs;
-  });
+  return tags.map((tag) =>
+    isSpacer(tag)
+      ? tag
+      : segments[tag]
+          .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))
+          .filter((pieces) => pieces.some((p) => p.text !== ""))
+          .map((pieces) => {
+            const i = drawn++;
+            return linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1)));
+          }),
+  );
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.
