@@ -12,7 +12,7 @@ In Claude Code:
 /plugin install statusline --marketplace nerdalytics/cc-mods
 ```
 
-Claude Code asks to add the marketplace, installs the mod, and asks for its options. [Options](#options) explains each one, and `/config` changes them later.
+If the `cc-mods` marketplace is not added yet, the command adds it first. [Options](#options) explains each option, and `/config` changes them.
 
 Then install what the mod needs, listed under [Needs](#needs). That is a Nerd Font in your terminal and `git`. For pull request details, also run `gh auth login`.
 
@@ -26,11 +26,11 @@ In Claude Code:
 /plugin uninstall statusline@cc-mods
 ```
 
-The first command fetches the marketplace and installs the versions it bumps, and `/reload-plugins` loads them into the running session, so you don't need a new one. The last command removes the mod.
+The first command fetches the marketplace and says which plugins it bumped, and `/reload-plugins` loads them into the running session, so you don't need a new one. The last command removes the mod. [Upgrading](#upgrading) lists what changed in the options between versions.
 
 ## What it shows
 
-The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side and of each row's tags. Spacers push a row's tags towards the left and right edges, and the `density` option sets how close the tags sit. See [Spacing and alignment](#spacing-and-alignment).
+The mod draws a status row and a git row, and under the prompt a line for each of the cold cache, the smart zone and the limit forecast when it applies. An option places each one above or below the prompt, and [`/statusline:order`](#order-and-hide) sets the order of the ones on a side and of each row's tags. Gaps set a fixed distance between a row's tags, and spacers push them towards the left and right edges. See [Spacing and alignment](#spacing-and-alignment).
 
 ### Status row
 
@@ -44,9 +44,9 @@ By default the status row sits under the prompt, below Claude Code's hint line. 
 | `⏎` | The prompts you sent, then the model requests the main conversation made for them. | Once a subagent has run, the subagents that ran and the requests they made. |
 | `Σ` | What the main conversation cost. | Its tokens. |
 | Bolt | What its subagents cost. It appears once a subagent has run, unless `merge_costs` adds it to `Σ`. | Their tokens. |
-| `●` `◕` `◑` `◔` `○` | Green while the prompt cache is warm, with the time left before it expires and what the next prompt's cached prefix costs to read. The glyph starts full and loses a quarter of its fill for each quarter of the cache's lifetime that passes. Once the cache is cold, the chip turns red and shows an empty `○`, `cold` and what writing the cache again costs. | While green, what the next prompt will cost once the cache is cold. |
+| `●` `◕` `◑` `◔` `○` | Green while the prompt cache is warm, with the time left before it expires and what the next prompt's cached prefix costs to read. The glyph starts full and loses a quarter of its fill for each quarter of the cache's lifetime that passes. Once the cache is cold, the chip turns red and shows an empty `○`, `cold` and what writing the cache again costs. | While green, what writing the cache again will cost once it is cold. |
 
-Once this session has written a handoff, a line appears under Claude Code's hint line. With the cache cold it shows what the next message costs in this session and an estimate of what a fresh start from the handoff costs. With the cache still warm, as when the mod ran a handoff while you were away, it shows the fresh start's estimate alone, and hides when you send your next message. Neither line appears once the session has moved past the handoff, which happens when the main conversation makes a request more than five minutes after the handoff file was written. The `Start fresh` button next to it clears the session and starts a new one from the handoff file. It hides while Claude is working and while a subagent is still running, and stays while you type, as a reminder. A cross after the button hides it for the rest of the session, or for the minutes the `dismiss_minutes` option sets.
+Once a handoff file exists, a line appears under Claude Code's hint line. The mod takes the newest `HANDOFF-*.md` at the project root written since this session started, whichever session wrote it. With the cache cold it shows what the next message costs in this session and an estimate of what a fresh start from the handoff costs. With the cache still warm, as when the mod ran a handoff while you were away, it shows the fresh start's estimate alone, and hides when you send your next message. Neither line appears once the session has moved past the handoff, which happens when the main conversation makes a request more than five minutes after the handoff file was written. The `Start fresh` button next to it clears the session and starts a new one from the handoff file. It hides while Claude is working and while a subagent is still running, and stays while you type, as a reminder. A cross after the button hides it for the rest of the session, or for the minutes the `dismiss_minutes` option sets.
 
 Once the context has used 90% of the smart zone, another line appears there, `You're nearly out of the Smart zone.`, with `Smart zone` linking to its [definition](https://www.aihero.dev/ai-coding-dictionary/smart-zone) and a `Compact` button that runs `/compact`. Past the smart zone it reads `You're out of the Smart zone. Same model, just into the dumb zone now.`
 
@@ -68,22 +68,24 @@ By default the git row sits above the prompt. Its parts, left to right by defaul
 - `pr`: the pull request, as `PR` and its number in one colour for its state: yellow when open, white as a draft, purple once merged and grey once closed. A draft has a pencil after it.
 - `review`: for an open or draft pull request, a check when the review approved it, a cross when changes were requested, and `⋯` when a review is required.
 - `comments`: for an open or draft pull request, an envelope and a count for its comments.
-- `sync`: `↑` and `↓` with the commits ahead and behind. A `?` after them means no remote has the branch, so the mod counts against the default branch.
-- `conflict`: a warning sign when a merge or rebase is in progress, files are unmerged, merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
-- `checks`: the checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each failed check gets a cross, and a check and a count show the passed ones.
-- `changes`: `+`, `-` and `~` with the lines added, the lines deleted and the files changed.
+- `sync`: `↑` and `↓` with the commits ahead and behind the branch's copy on its remote. A `?` after them means no remote has the branch, so the mod counts against the default branch: origin's, else the first of `develop`, `main` and `master` that exists.
+- `conflict`: a warning sign when a merge or rebase is in progress, files are unmerged, the branch is behind and merging the default branch would conflict, or GitHub reports an open or draft pull request as conflicting.
+- `checks`: the checks of an open or draft pull request as GitHub draws them. A dot and a count show the running checks, each check that failed or errored gets a cross, and a check and a count show the passed ones.
+- `changes`: `+`, `-` and `~` with the lines added, the lines deleted and the files changed, as `git diff HEAD` counts them: untracked and binary files are left out.
+
+The pull request parts need `gh`. The mod asks it only for a branch that a remote has and that is not the default branch, and only while the git row shows `pr`, `review`, `comments`, `conflict` or `checks`. It asks again when the branch changes, about once a minute, and every 10 seconds while checks are running.
 
 Outside a repository the row shows only the folders. Each part's gradient follows the order it draws in, whatever that order is.
 
 ### Clicking and hovering
 
-A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on indigo, between two half blocks, is a button. These are the default colours, and [`/statusline:colors`](#colours) changes them.
+A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on indigo between two half blocks, such as `Compact`, is a button, and so is the cross on slate after it. These are the default colours, and [`/statusline:colors`](#colours) changes them.
 
 The git row is made of links, and a click opens them the way your terminal opens any link:
 
 - The folders, the branch and the worktree open their folder on disk in your default app.
 - The pull request's `PR` and number open the pull request.
-- `↓` opens the branch's commit history on its remote's website. A count with `?` has no link.
+- `↓` opens the branch's commit history on its remote's website, at `<remote>/commits/<branch>` as GitHub lays it out. A count with `?` has no link.
 - A failed check's cross opens that check.
 - The running and passed counts open the pull request's checks.
 
@@ -93,7 +95,7 @@ The line that closes a turn, `✻ Cooked for 7s · done 11:22 PM`, gets the toke
 
 ### Costs
 
-Costs are estimates. The mod prices each request in the session's transcripts with Anthropic's published rates. It fetches the rates from the pricing page at the session's first token count, and again at each later count until a fetch succeeds. Fast mode on Opus 5.5, Opus 5 and Opus 4.8 costs twice the rate. A `~` before a cost means some requests had no price, and `$?` means none had.
+Costs are estimates. The mod prices each request in the session's transcripts with Anthropic's published rates. It fetches the rates from the pricing page at the session's first token count, and again at each later count until a fetch succeeds. Fast mode costs twice the rate on the Opus 5 models and Opus 4.8. A `~` before a cost means some requests had no price, and `$?` means none had.
 
 ## Handoff
 
@@ -101,24 +103,26 @@ Costs are estimates. The mod prices each request in the session's transcripts wi
 
 With the `auto_handoff` option on, the mod runs the handoff itself. It waits until the session is idle and the prompt cache is five minutes from expiring, so the handoff still reads the cache at the cheap rate. Unless `"idleCompaction": false` is in `settings.json`, it runs ten minutes before instead. See [Idle compaction](#idle-compaction).
 
-It does this only on a cache that lives an hour. Claude Code gives the main conversation one on a subscription. The mod also counts a cache written for five minutes as an hour's when a later request read it back whole after more than five idle minutes, with no other request in between. A cache that really lasts five minutes goes cold at every short pause, and writing it again costs little.
+It does this only on a cache that lives an hour. Claude Code gives the main conversation one on a subscription. The mod also counts a cache written for five minutes as an hour's once a request in the session read at least 80% of the request before it back from the cache after more than five idle minutes, with no other request in between. From then on every five-minute cache in the session counts as an hour's. A cache that really lasts five minutes goes cold at every short pause, and writing it again costs little.
 
-It runs once between two of your prompts. It does not run in these cases:
+It runs once between two of your prompts, counting only prompts you type: a ping or the handoff itself does not start a new stretch. A handoff that fails to start still counts. The automatic handoff passes no focus argument. It does not run in these cases:
 
 - A subagent is pending or running. One that only waits, on a plan's approval or on work listed on its own, does not stop it.
 - A turn is running, or you have not sent a prompt in this session. A reload of the mod keeps the time of your last prompt.
+- The cache is already cold.
+- `keep_warm_pings` is on and has pings left to send.
 - A usage limit is used up.
 - The 5h limit has reached 98%, or 90% on Fable and Mythos. The rest is left for your own prompts.
 
-The debug mod's `/debug:handoff-trace` pane shows, with the time, why the handoff ran or did not in the minutes before the cache expires.
+The debug mod's `/debug:handoff-trace` pane shows, with the time, why the handoff ran or did not in the minutes before the cache expires. It needs the debug mod's `handoff_trace` option, on by default, and traces nothing while `auto_handoff` is off.
 
-Claude Code can switch the main conversation to five-minute caches on its own, and 2.1.300 does so behind a server flag. Setting `"promptCacheTtl": "1h"` in `settings.json` keeps the hour-long cache, at the higher hour-long write rate.
+Claude Code can switch the main conversation to five-minute caches on its own. Setting `"promptCacheTtl": "1h"` in `settings.json` keeps the hour-long cache, at the higher hour-long write rate.
 
 After `/compact` the old cache has no use. The cache countdown and the handoff wait for the next request.
 
 ### Idle compaction
 
-Claude Code compacts a long conversation on its own while the session is idle. The changelog in the Claude Code 2.1.302 binary says Claude Code compacts a conversation of 200K tokens or more that has been idle for about 54 minutes, before its one-hour cache expires, so the next message does not reprocess it all. It applies in the terminal from v2.1.290, and `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` changes the 200K minimum. `"idleCompaction": false` in `settings.json` turns it off. Setting it to `true` changes nothing, because it is on by default.
+Claude Code compacts a conversation of 200K tokens or more on its own once the session has been idle for about 54 minutes, before its one-hour cache expires, so the next message does not reprocess it all. `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` changes the 200K minimum. It is on by default, and `"idleCompaction": false` in `settings.json` turns it off.
 
 A handoff after that compaction would summarise the compacted conversation, not the whole one. So the mod reads `idleCompaction` when the session starts and sets the lead by it, on an hour's cache:
 
@@ -127,7 +131,7 @@ A handoff after that compaction would summarise the compacted conversation, not 
 | unset or `true` | 10 minutes before expiry | 50 |
 | `false` | 5 minutes before expiry | 55 |
 
-The mod makes this choice without checking the conversation's size. Claude Code leaves a conversation under the 200K minimum alone, and the handoff still runs five minutes earlier. A change to the setting takes effect at the next session start or after `/reload-plugins`. A five-minute cache keeps its one-minute lead.
+The mod makes this choice without checking the conversation's size. Claude Code leaves a conversation under the 200K minimum alone, and the handoff still runs five minutes earlier. The mod reads the setting when the session starts, so a change takes effect in the next session. A five-minute cache keeps its one-minute lead.
 
 Idle compaction does not replace the pings. It makes the next message cheaper by shrinking the conversation, and it empties the cache, as `/compact` does. A ping keeps the cache and the conversation as they are.
 
@@ -135,19 +139,19 @@ Idle compaction does not replace the pings. It makes the next message cheaper by
 
 Claude Code's documentation says it requests the one-hour cache only on a Claude subscription within the plan's included usage. Past the plan's limit, on an API key or on a cloud provider, the main conversation gets five minutes, and subagents get five minutes everywhere. See [which TTL each request gets](https://code.claude.com/docs/en/prompt-caching#which-ttl-each-request-gets). On a five-minute cache the handoff above does not run on its own.
 
-The `keep_warm_pings` option, 0 by default, sends minimal prompts of its own to keep the cache warm. It sends one just before the cache expires, up to the number you set between two of your prompts, and runs the handoff after the last one. On a one-hour cache a ping goes out five minutes ahead, or ten with idle compaction on, and on a five-minute cache a minute ahead. The handoff then also runs on a five-minute cache. A read restarts the cache's timer at the read price, and the clock runs from the start of the request. See [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+The `keep_warm_pings` option, 0 by default, sends minimal prompts of its own to keep the cache warm. It sends one just before the cache expires, up to the number you set between two of your prompts. With `auto_handoff` on, the handoff runs after the last one, on a five-minute cache too. On a one-hour cache a ping goes out five minutes ahead, or ten with idle compaction on, and on a five-minute cache a minute ahead. A read restarts the cache's timer at the read price. The mod times the cache from the later of when the last request was sent and when its answer arrived. See [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 
-The pings are turns in your conversation. Each adds a short message and a one-word answer to it, and they show in the transcript. They do not run before your first prompt after the mod loads, nor while a subagent is at work or the 5h window is near its limit, the same cases as the handoff. A `/compact` ends them, because it empties the cache.
+The pings are turns in your conversation. Each adds a short message and a one-word answer to it, and they show in the transcript. They do not run before your first prompt in the session, nor while a turn runs, a subagent is at work or the 5h window is near its limit, the same cases as the handoff. A reload of the mod keeps the time of your last prompt but starts the ping count again. A `/compact` ends them, because it empties the cache.
 
 **Avoid pings where you can.** A fresh session from the handoff starts with a small context, so each message in it costs less and answers sooner than in a long conversation, which the pings only keep warm. The `Start fresh` button does this. A ping is a cache read, so a count of pings costs as much as writing the cache again once at the write price divided by the read price:
 
 | Model | Read price | 5-minute cache, writes at 1.25 times | 1-hour cache, writes at 2 times |
 |---|---|---|---|
-| Opus 5.5, Sonnet 5.5 | 0.05 times | 25 pings, about 1h40 | 40 pings, about 37 hours |
-| Other models | 0.1 times | 12 pings, about 50 minutes | 20 pings, about 18 hours |
-| Fable 5.1, Mythos 5.1 | 0.025 times | 50 pings, about 3h20 | 80 pings, about 73 hours |
+| Opus 5.5, Sonnet 5.5 | 0.05 times | 25 pings, about 1h40 | 40 pings, about 33 hours |
+| Other models | 0.1 times | 12.5 pings, about 50 minutes | 20 pings, about 17 hours |
+| Fable 5.1, Mythos 5.1 | 0.025 times | 50 pings, about 3h20 | 80 pings, about 67 hours |
 
-The prices are the API's multipliers from the prompt caching page. The count leaves out the pings' own output tokens and the messages they add, and the times assume a ping every 4 minutes on a five-minute cache and every 55 on a one-hour one. On a subscription the limit is usage rather than dollars, and the documentation does not say how cache reads count toward it.
+The prices are the API's multipliers from the [pricing page](https://platform.claude.com/docs/en/about-claude/pricing). The count leaves out the pings' own output tokens and the messages they add. The times assume a ping every 4 minutes on a five-minute cache, and every 50 minutes on a one-hour one with idle compaction on, or every 55 with it off. On a subscription the limit is usage rather than dollars, and the documentation does not say how cache reads count toward it.
 
 ## Order and hide
 
@@ -157,7 +161,9 @@ The prices are the API's multipliers from the prompt caching page. The count lea
 - **Git row.** The parts are listed in the order they draw. A drop writes `git_order`.
 - **Status row.** The tags are listed in the order they draw. A drop writes `segment_order`.
 - **Hidden.** Each list has a dim `╌╌ hidden: switched off ╌╌` marker. Dropping a line, part or tag under it switches it off, which sets its `row_git`, `row_status`, `git_<name>`, `segment_<name>`, `fresh_start`, `compact_hint` or `limit_forecast` option to false, and the pane draws it dim and struck through. Dragging it back above the marker switches it on again. The markers do not drag.
-- **Spacers and gaps.** Under each hidden marker waits a spacer, dim, and in the git and status rows also `gap-1`, `gap-2` and `gap-3`. Drag one out to add it where you drop it, and another one waits in its place, so you can add as many as you want. Drop one under the marker to take it away. In the git and status rows a spacer pushes tags apart and a gap sets a fixed distance between them, as described under [Spacing and alignment](#spacing-and-alignment). Among the lines a spacer is a blank line on its side of the prompt. It has nothing of its own to show, so it always draws, even while the offer lines beside it are not showing: a spacer next to the fresh-start line leaves its blank line when the offer is gone.
+- **Spacers and gaps.** Under each hidden marker waits a spacer, dim, and in the git and status rows also `gap-1`, `gap-2` and `gap-3`. Drag one out to add it where you drop it, and another one waits in its place, so you can add as many as you want. Drop one under the marker to take it away. In the git and status rows a spacer pushes tags apart and a gap sets a fixed distance between them, as described under [Spacing and alignment](#spacing-and-alignment). Among the lines a spacer is a blank line on its side of the prompt. It has nothing of its own to show, so it draws even while the offer lines beside it are not showing, but blank lines that meet draw as one: with the fresh-start offer gone, the spacers before and after it leave a single blank line.
+
+While the pane is open, the rows draw every tag you have switched on, and a tag with nothing to show yet draws made-up values: the limits, context, turns, costs and cache, a branch, worktree, commits ahead and behind, a conflict warning and changes, and a pull request `#42` with a review, comments and checks. That way you can place each tag before it turns up during work. Every blank line draws while the pane is open too, and an offer line that does not apply draws as a dim line naming it, such as `╌╌ smart zone: compaction: shows when it applies ╌╌`, rather than a made-up offer whose buttons would act. The samples need something to draw on: no row draws before Claude Code's first usage reading, and the git parts draw only inside a repository. Closing the pane brings back what there really is.
 
 Each drop writes only the options it changed, one `/config` write at a time. The same options are in `/config`.
 
@@ -168,7 +174,7 @@ Each drop writes only the options it changed, one `/config` write at a time. The
 - Type a colour as six hex digits, such as `#22d3d8`, with or without the `#`, and press Enter to save it. An empty field, or the default typed out, goes back to the default. A colour that does not read writes nothing and says so.
 - A gradient has two fields, its light end and its dark end. The badge of a limit and the mark of a chip sit on the dark end.
 - Some colours do more than one job, and the field's label says which. The palette colours the git row's parts in turn and the model's name by family. The cold cache's light end also colours the fresh-start line's `$`. The warnings colour sets the compaction line's diamond and link and the limit forecast's sign.
-- The button at the top turns gradients off and on. With them off each gradient draws in its first colour, the model's name does not sweep, and the pane asks for that first colour only. The context bar keeps its three colours, as bands rather than a blend, because each one means something: plenty left, half used, nearly full. A dark end you saved stays saved, and comes back when you turn gradients on again.
+- The button at the top turns gradients off and on. With them off each gradient draws in its first colour, the model's name does not sweep, and the pane asks for that first colour only. The context bar keeps its colours as bands rather than a blend, because each one means something: plenty left, half used, nearly full, and past auto-compaction. A dark end you saved stays saved, and comes back when you turn gradients on again.
 
 Each save writes the `colors` option, a comma list of `name=#rrggbb` with only the colours you changed, and the button writes `gradients`. Both are in `/config` too.
 
@@ -185,20 +191,21 @@ A row starts at the left edge unless it has spacers. Inside a tag the spacing st
 |---|---|
 | `model,gap-1,limit_7d,gap-1,limit_5h,…` | The default: every tag one column from the next, the row at the left. |
 | `model,limit_7d,gap-2,limit_5h,…` | The model touching the 7d limit, two columns before the 5h limit. |
-| `spacer,model,…` | The whole row against the right edge. |
-| `model,limit_7d,limit_5h,context,spacer,turns,tokens,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
-| `model,tokens,spacer,spacer,limit_7d,limit_5h,spacer,turns,spacer,spacer,cache,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
-| `model,limit_7d,spacer,limit_5h,context,turns,tokens,cache` | Model and the 7d limit at the left, the rest from the 5h limit on at the right. |
+| `spacer,model,gap-1,limit_7d,…` | The whole row against the right edge. |
+| `model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,spacer,turns,gap-1,tokens,gap-1,cache` | Model, limits and context at the left; turns, costs and cache at the right. |
+| `model,gap-1,tokens,spacer,spacer,limit_7d,gap-1,limit_5h,spacer,turns,spacer,spacer,cache,gap-1,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
 
-A tag that has nothing to show, such as the costs before the first token count, takes the gaps after it along and leaves its spacers meeting. Gaps after the last tag of a row are dropped. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
+A tag that has nothing to show, such as the costs before the first token count, folds away with the gaps around it, and its spacers meet. Between two tags that draw, the widest of the gaps it stood between stays, so `turns,gap-1,tokens,gap-1,cache` with no costs yet leaves one column between turns and cache. Next to a spacer or the edge of the row, none stays. Gaps after the last tag of a row are dropped. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
 
 Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/statusline:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
 
-Spacers replace the `row_git_align` and `row_status_align` options of 0.16.x. Claude Code no longer passes them to the mod once they are gone from the manifest. If you had a row set to `right`, drag a spacer to the top of that row's list.
+## Upgrading
 
-The `limits` tag of 0.17.0 and earlier is now `limit_7d` and `limit_5h`, and the git row's `path` is now `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
+The mod no longer reads a removed option, so its value is not carried over to what replaced it.
 
-Gaps replace the `density` option of 0.18.x, and with it the `compact` option of 0.15.0 and earlier. An order saved before has no gaps, so its tags touch until you drag gaps in with `/statusline:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
+- **0.19.0** replaces the `density` option with gaps. An order saved before 0.19.0 has no gaps, so its tags touch until you drag gaps in with `/statusline:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
+- **0.18.0** splits the `limits` tag into `limit_7d` and `limit_5h`, and the git row's `path` into `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
+- **0.17.0** replaces the `row_git_align` and `row_status_align` options with spacers. If you had a row set to `right`, drag a spacer to the top of that row's list.
 
 ## Options
 
@@ -234,13 +241,13 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 ## Needs
 
-- Claude Code 2.1.287 or later, the version that added mods. The mod was built against 2.1.296, and its tests pass on 2.1.304.
-- A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the conflict warning, and the `Start fresh` button's icon.
+- Claude Code 2.1.287 or later.
+- A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the warning sign of the conflict and the limit forecast, and the icons of the `Start fresh` and `Compact` buttons.
 - `git` for the git row, and `gh`, signed in, for the pull request details. Only GitHub knows whether the pull request still merges into its base branch after others push to it, so `conflict` needs `gh` too.
 
 ## Where an organization manages Claude Code
 
-Claude Code 2.1.302 passes these events over the plugins you install yourself when it reports that an organization manages it: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
+Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
 
 The statusline mod hooks one of them, `session.compact`. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
 
@@ -249,15 +256,23 @@ statusline @ cc-mods (user)
 Its hooks on session.compact do not run here: where an organization manages Claude Code, these events pass over the plugins you install
 ```
 
-The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one. I read the rule from the code and have not seen it on a managed machine. I saw the message once on a machine with no managed settings file, and it was gone after a restart. I do not know why it appeared there.
+The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one.
 
 To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `statusline@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
 
 ## What it reads and sends
 
-The mod reads the session's transcripts under `~/.claude/projects/` to count tokens and requests. When `$CLAUDE_CONFIG_DIR` is set, it reads `$CLAUDE_CONFIG_DIR/projects/` instead. It also reads the end of every transcript written in the last five hours, to find a limit any of your sessions was refused on. It reads Claude Code's merged settings once, when the session starts, for the `idleCompaction` key. It runs `git` in the project folder.
+On disk, the mod reads:
 
-Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request. That happens when the branch changes and about once a minute after that, or every 10 seconds while its checks are running or queued. It happens only while the branch is on a remote and is not the default branch, and while the git row shows at least one of `pr`, `review`, `comments`, `conflict` and `checks`. Nothing else leaves the machine.
+- The session's transcripts under `~/.claude/projects/`, or `$CLAUDE_CONFIG_DIR/projects/` when that is set, to count tokens and requests. It searches them with `find` and `grep`.
+- The last 256 KB of every transcript written in the last five hours, with `find`, `tail` and `grep`, to find a limit any of your sessions was refused on.
+- The list of files at the project root, for `HANDOFF-*.md`.
+- Claude Code's merged settings, once when the session starts, for the `idleCompaction` key.
+- The repository, with `git` run in the current folder, and whether a merge or rebase is in progress in its git folder.
+
+Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request, as described under [Git row](#git-row).
+
+Some features send prompts and commands through Claude Code, which sends them to the model as it does yours: the pings, the automatic handoff, `/compact` from `auto_compact` or the `Compact` button, and `/clear` with a prompt from the `Start fresh` button. Nothing else leaves the machine.
 
 ## License
 
