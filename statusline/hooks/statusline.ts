@@ -1244,7 +1244,7 @@ function traceHandoff($: EngineInterface, msg: string): void {
 }
 
 // One run of a job at a time, in the background; a request during one runs it again once it ends.
-function serial(name: string, job: () => Promise<void>, onSkip?: () => void): void {
+function serial(name: string, job: () => Promise<void>, onSkip?: () => void, onError?: (err: unknown) => void): void {
   const current = running.get(name);
   if (current) {
     current.again = true;
@@ -1259,8 +1259,9 @@ function serial(name: string, job: () => Promise<void>, onSkip?: () => void): vo
         state.again = false;
         await job();
       } while (state.again);
-    } catch {
-      // ponytail: a failed run keeps the last figures; nothing reports why.
+    } catch (err) {
+      // ponytail: a failed run keeps the last figures; only a job that passes onError reports why.
+      onError?.(err);
     } finally {
       running.delete(name);
     }
@@ -1291,7 +1292,7 @@ function refreshGit($: EngineInterface): void {
     prBusy = (pr?.checks.pending ?? 0) > 0;
     trace($, `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
     await $.state.set(PR, pr);
-  }, () => trace($, "git job still running; poll folded into again"));
+  }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | undefined> {
