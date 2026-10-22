@@ -59,7 +59,7 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // The layout option's rows as by default, and a layout with one row in place of its default. The git row draws above
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
-const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache";
+const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache";
 const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
 const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
@@ -467,9 +467,12 @@ describe("statusline", () => {
     await ui.unmount();
   });
 
-  for (const [title, options, chips] of [
-    ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]]],
-    ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.25", "1.46M"]]],
+  // The marks of the turns, costs and subagents' costs chips, in the order the row draws them.
+  const SPLIT = [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]] as const;
+  for (const [title, options, chips, marks] of [
+    ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, SPLIT, ["⏎", "Σ", "\uf0e7"]],
+    ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.25", "1.46M"]], ["⏎", "Σ"]],
+    ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;forecast;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "Σ"]],
   ] as const) {
     test(title, { options }, async ($, on) => {
       stubHint(on);
@@ -529,6 +532,8 @@ describe("statusline", () => {
       }
       // Merged, the agents' chip is gone.
       expect(await ui.findAll({ type: "Box", key: "agents" })).toHaveLength(chips.some(([key]) => key === "agents") ? 1 : 0);
+      const drawn = rowSpelled((await tagRows(ui))[0]).map((part) => part.trim().charAt(0));
+      expect(drawn.filter((mark) => ["⏎", "Σ", "\uf0e7"].includes(mark))).toEqual(marks);
       await ui.unmount();
     });
   }
@@ -1284,15 +1289,15 @@ describe("statusline", () => {
     const ui = await mountHint($);
     for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: "O" })); i++) await settle();
     const chips = async () => {
-      const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "tokens", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
+      const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
       return keys.flat();
     };
     expect(await chips()).toEqual([]);
 
     isOpen = true;
     await clock.advance(100);
-    for (let i = 0; i < 50 && (await chips()).length < 6; i++) await settle();
-    expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "cache"]);
+    for (let i = 0; i < 50 && (await chips()).length < 7; i++) await settle();
+    expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"]);
     expect(await ui.find({ type: "Text", text: /smart zone: compaction: shows when it applies/ })).toBeDefined();
 
     isOpen = false;
@@ -1717,9 +1722,9 @@ describe("statusline", () => {
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
   // (status), fresh, compact, forecast, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
-  // (1-10), ── row 2 ── (11), model .. cache (12-18), ── hidden ── (19), spacer, gap-1, gap-2, gap-3 (20-23).
+  // (1-10), ── row 2 ── (11), model .. cache (12-19), ── hidden ── (20), spacer, gap-1, gap-2, gap-3 (21-24).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
-  const STATUS_TAGS = "model,limit_7d,limit_5h,context,turns,tokens,cache";
+  const STATUS_TAGS = "model,limit_7d,limit_5h,context,turns,tokens,agents,cache";
   const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
@@ -1730,17 +1735,17 @@ describe("statusline", () => {
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
     // The model tag dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 19)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,cache", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 20)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,agents,cache", "model")]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,cache", "model") } }, async ($, on) => {
-    // 7d .. cache 12-17, ── hidden ── 18, the spacer and gaps 19-22, model 23: dropped on the 7d limit's line.
-    expect(await dragIn(on, $, PINNED, "tags", 23, 12)).toEqual([["layout", pinned()]]);
+  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,agents,cache", "model") } }, async ($, on) => {
+    // 7d .. cache 12-18, ── hidden ── 19, the spacer and gaps 20-23, model 24: dropped on the 7d limit's line.
+    expect(await dragIn(on, $, PINNED, "tags", 24, 12)).toEqual([["layout", pinned()]]);
   });
 
   test("dragging a tag under another row's marker moves it into that row", { options: PINNED }, async ($, on) => {
     // The folders dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", "model,folders,limit_7d,limit_5h,context,turns,tokens,cache")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,context,turns,tokens,agents,cache`)]]);
   });
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
@@ -1750,7 +1755,7 @@ describe("statusline", () => {
 
   test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;forecast` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,context,turns,tokens,cache;fresh;compact;forecast`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,context,turns,tokens,agents,cache;fresh;compact;forecast`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
@@ -1764,23 +1769,23 @@ describe("statusline", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone.
   test("dragging the spare spacer out of hidden adds a spacer to the row", { options: PINNED }, async ($, on) => {
-    // The spacer (20) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 20, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache")]]);
+    // The spacer (21) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 21, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
   });
 
   test("dragging a gap out of hidden adds it to the row", { options: PINNED }, async ($, on) => {
-    // gap-2 (22) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 22, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,context,turns,tokens,cache")]]);
+    // gap-2 (23) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
   });
 
-  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,cache") };
+  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache") };
   test("a second spacer is there to drag out once one is", { options: SPACED }, async ($, on) => {
-    // model, spacer, 7d .. cache (12-19), ── hidden ── 20, the spare spacer 21: dropped beside the first.
-    expect(await dragIn(on, $, SPACED, "tags", 21, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,context,turns,tokens,cache")]]);
+    // model, spacer, 7d .. cache (12-20), ── hidden ── 21, the spare spacer 22: dropped beside the first.
+    expect(await dragIn(on, $, SPACED, "tags", 22, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
   });
 
   test("dragging a spacer into hidden takes it away", { options: SPACED }, async ($, on) => {
-    expect(await dragIn(on, $, SPACED, "tags", 13, 20)).toEqual([["layout", pinned()]]);
+    expect(await dragIn(on, $, SPACED, "tags", 13, 21)).toEqual([["layout", pinned()]]);
   });
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
@@ -1790,7 +1795,7 @@ describe("statusline", () => {
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
     // The review dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 5, 19)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 5, 20)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
@@ -1806,15 +1811,36 @@ describe("statusline", () => {
     const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "forecast", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 3 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "forecast", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 4 more" } });
     expect(await clientProps("tags")).toMatchObject({
-      items: ["row-1", "cache", "model", "limit_5h", "context", "turns", "tokens", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
+      items: ["row-1", "cache", "model", "limit_5h", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
       labels: { "row-2": "━━ row 2 ━━" },
     });
     // Each list as wide as the pane, so its labels wrap inside it.
     expect((await ui.findAll({ type: "Client" })).map((c) => c.props.width)).toEqual(["100%", "100%"]);
     await ui.unmount();
+  });
+
+  // The costs as the row draws them: unmerged, the main session's and the subagents' tag; merged, one tag for the total.
+  for (const [merged, items, labels] of [
+    [false, ["tokens", "agents"], { tokens: "main session costs", agents: "subagent costs" }],
+    [true, ["tokens"], { tokens: "total costs" }],
+  ] as const) {
+    test(`the order pane lists ${items.length} cost tags with merge_costs ${merged}`, { options: { ...PINNED, merge_costs: merged } }, async ($, on) => {
+      const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+      const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
+      expect(tags).toMatchObject({ labels });
+      const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
+      expect(listed.filter((name) => name === "tokens" || name === "agents")).toEqual(items);
+      await ui.unmount();
+    });
+  }
+
+  // Merged, the subagents' tag is not in the list, so a drop leaves it out of the layout, which puts it back after the costs.
+  test("a drop with the costs merged writes the layout without the subagents' tag", { options: { ...PINNED, merge_costs: true } }, async ($, on) => {
+    // model .. cache without agents (12-18), ── hidden ── 19: the model dropped there.
+    expect(await dragIn(on, $, PINNED, "tags", 12, 19)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,cache", "model")]]);
   });
 
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
@@ -1904,11 +1930,11 @@ describe("statusline", () => {
     expect(lines.slice(7, 9)).toEqual(["≡ commits ahead", "  and behind"]);
     expect((await ui.findAll({ type: "Text", in: "tags" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
     // Its second line pressed and dropped on the hidden marker's first line (row 1's marker 0, folders to comments a
-    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache 13-19, the
-    // hidden marker from 20): ahead and behind is switched off.
+    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache 13-21 with the
+    // main session's costs on two lines, the hidden marker from 22): ahead and behind is switched off.
     await ui.pointer({ type: "down", x: 3, y: 8, button: "left", in: "tags" });
-    await ui.pointer({ type: "move", x: 3, y: 20, button: "left", in: "tags" });
-    await ui.pointer({ type: "up", x: 3, y: 20, button: "left", in: "tags" });
+    await ui.pointer({ type: "move", x: 3, y: 22, button: "left", in: "tags" });
+    await ui.pointer({ type: "up", x: 3, y: 22, button: "left", in: "tags" });
     await ui.unmount();
     expect(written).toEqual([["layout", pinned("folders,branch,worktree,pr,review,comments,conflict,checks,changes", STATUS_TAGS, "sync")]]);
   });

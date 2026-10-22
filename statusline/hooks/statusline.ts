@@ -57,7 +57,9 @@ const SEGMENTS = {
   ],
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
-  tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts) : []),
+  // The main conversation's costs, and its subagents' as a tag of their own; merged, both in the first.
+  tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(0, 1) : []),
+  agents: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(1) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
@@ -83,7 +85,7 @@ type Gap = (typeof GAPS)[number];
 const isGap = (name: string): name is Gap => GAPS.some((gap) => gap === name);
 type Filler = Spacer | Gap;
 const isFiller = (name: string): name is Filler => isSpacer(name) || isGap(name);
-const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "cache"] as const;
+const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "agents", "cache"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
@@ -155,7 +157,8 @@ const LABELS: Record<string, string> = {
   limit_5h: "5h limit",
   context: "context",
   turns: "turns",
-  tokens: "costs",
+  tokens: "main session costs",
+  agents: "subagent costs",
   cache: "cache",
   folders: "folders",
   branch: "branch",
@@ -188,24 +191,28 @@ const listProps = (key: ListKey) => ({ ...lists[key], rev });
 
 // The pane's two lists from a layout. The lines: each row as row-N, the prompt marker, the offers switched on and the
 // spacers, then the hidden marker, the spacer and the new row to drag out, and the offers switched off. The tags: each
-// row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags.
-function listsOf(l: Layout, on: (line: Line) => boolean): Record<ListKey, List> {
-  const rows = l.lines.filter(isRow);
+// row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags. Merged, the
+// costs are one tag, the total, and the subagents' tag is left out of the lists; a drop then leaves it out of the
+// layout, which puts it back after the costs.
+function listsOf(l: Layout, on: (line: Line) => boolean, merged = false): Record<ListKey, List> {
+  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents"));
+  const labels: Record<string, string> = { ...LABELS, tokens: merged ? "total costs" : "main session costs" };
+  const rows = l.lines.filter(isRow).map(listed);
   const id = (i: number) => `row-${i + 1}`;
-  const named = (row: Row) => row.filter(isTag).map((tag) => LABELS[tag] ?? tag);
+  const named = (row: Row) => row.filter(isTag).map((tag) => labels[tag] ?? tag);
   const summary = (row: Row) => {
     const names = named(row);
     return names.length === 0 ? "empty" : names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
   };
   return {
     lines: {
-      items: [...l.lines.flatMap((line) => (isRow(line) ? [id(rows.indexOf(line))] : isLine(line) && !on(line) ? [] : [line])), "hidden", SPACER, NEW_ROW, ...LINES.filter((line) => !on(line))],
-      labels: { ...LABELS, spacer: "↕ spacer: a blank line", ...Object.fromEntries(rows.map((row, i) => [id(i), `▤ row ${i + 1}: ${summary(row)}`])) },
+      items: [...l.lines.flatMap((line) => (isRow(line) ? [id(l.lines.filter(isRow).indexOf(line))] : isLine(line) && !on(line) ? [] : [line])), "hidden", SPACER, NEW_ROW, ...LINES.filter((line) => !on(line))],
+      labels: { ...labels, spacer: "↕ spacer: a blank line", ...Object.fromEntries(rows.map((row, i) => [id(i), `▤ row ${i + 1}: ${summary(row)}`])) },
       fixed: ["prompt", "hidden"],
     },
     tags: {
-      items: [...rows.flatMap((row, i) => [id(i), ...row]), "hidden", SPACER, ...GAPS, ...l.hidden],
-      labels: { ...LABELS, ...Object.fromEntries(rows.map((_, i) => [id(i), `━━ row ${i + 1} ━━`])) },
+      items: [...rows.flatMap((row, i) => [id(i), ...row]), "hidden", SPACER, ...GAPS, ...listed(l.hidden)],
+      labels: { ...labels, ...Object.fromEntries(rows.map((_, i) => [id(i), `━━ row ${i + 1} ━━`])) },
       fixed: [...rows.map((_, i) => id(i)), "hidden"],
     },
   };
@@ -519,7 +526,7 @@ export const register: Register = (on, options) => {
     if (line === "prompt") side = belowLines;
     else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
-  lists = listsOf(layout, shown);
+  lists = listsOf(layout, shown, mergeCosts);
   rev = Date.now();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   overrides = overridesOf(options.colors);
@@ -583,7 +590,7 @@ export const register: Register = (on, options) => {
     // A drop in one list can change the other (a new row's marker), so the pane draws both again.
     const now = { ...options, ...saved };
     layout = drop.layout;
-    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true);
+    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts);
     rev = Date.now();
     $.ui.invalidate("ui.render");
     return { props: listProps(key) };
@@ -816,7 +823,9 @@ function withSamples(s: Snapshot): Snapshot {
   const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
   const rateLimits = [...s.usage.rateLimits, ...[limit("seven_day", 40, 259_200), limit("five_hour", 20, 9_000)].filter((r) => !kinds.includes(r.kind))];
   const spend = (tokens: number, usd: number, requests: number) => ({ tokens, usd, requests, unpriced: 0 });
-  const tokens = s.tokens ?? { main: spend(1_200_000, 4.2, 30), agents: { ...spend(300_000, 0.9, 8), count: 2 } };
+  const sampleAgents = { ...spend(300_000, 0.9, 8), count: 2 };
+  // Unmerged, the subagents' tag shows made-up costs too until a subagent has run.
+  const tokens = s.tokens ? { ...s.tokens, agents: s.tokens.agents.count > 0 || mergeCosts ? s.tokens.agents : sampleAgents } : { main: spend(1_200_000, 4.2, 30), agents: sampleAgents };
   const g = s.git;
   const moved = g && (g.ahead > 0 || g.behind > 0);
   const edited = g && (g.added > 0 || g.deleted > 0 || g.changed > 0);
