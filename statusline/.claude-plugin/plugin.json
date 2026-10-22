@@ -19,163 +19,17 @@
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
-    "row_git": {
-      "type": "boolean",
-      "title": "Statusline: Git row",
-      "description": "The project folder, branch, worktree, pull request and changes, above the prompt. true (default) / false",
-      "default": true
-    },
-    "row_git_position": {
+    "layout": {
       "type": "string",
-      "title": "Statusline: Git row › position",
-      "description": "Where the git row draws: above the prompt, or under it below Claude Code's hint line. above (default) / below",
-      "options": [
-        "above",
-        "below"
-      ],
-      "default": "above"
-    },
-    "git_order": {
-      "type": "string",
-      "title": "Statusline: Git row › order",
-      "description": "The git row's parts, left to right, as a comma list of folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, with spacer where a spacer stands and gap-1, gap-2 or gap-3 where a gap of that many columns does. A spacer takes a share of the room the parts leave, so what stands before it is pushed left and what stands after it right; spacers side by side take a share each. Parts with neither between them touch. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes)",
-      "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes"
-    },
-    "git_folders": {
-      "type": "boolean",
-      "title": "Statusline: Git row › folders",
-      "description": "The project folder, and the shell's folder when it is elsewhere. true (default) / false",
-      "default": true
-    },
-    "git_branch": {
-      "type": "boolean",
-      "title": "Statusline: Git row › branch",
-      "description": "The branch, and the branch it is based off when that is not the default one. true (default) / false",
-      "default": true
-    },
-    "git_worktree": {
-      "type": "boolean",
-      "title": "Statusline: Git row › worktree",
-      "description": "The worktree, when the branch does not already name it. true (default) / false",
-      "default": true
-    },
-    "git_pr": {
-      "type": "boolean",
-      "title": "Statusline: Git row › pull request",
-      "description": "The branch's pull request: its number, and the draft mark while it is one. true (default) / false",
-      "default": true
-    },
-    "git_review": {
-      "type": "boolean",
-      "title": "Statusline: Git row › review",
-      "description": "The open pull request's review: approved, changes requested or review required. true (default) / false",
-      "default": true
-    },
-    "git_comments": {
-      "type": "boolean",
-      "title": "Statusline: Git row › comments",
-      "description": "How many comments the open pull request has. true (default) / false",
-      "default": true
-    },
-    "git_sync": {
-      "type": "boolean",
-      "title": "Statusline: Git row › ahead and behind",
-      "description": "The commits ahead of the remote branch and behind it. true (default) / false",
-      "default": true
-    },
-    "git_conflict": {
-      "type": "boolean",
-      "title": "Statusline: Git row › conflict",
-      "description": "A mark when a merge or rebase is midway, or the branch or its pull request conflicts. true (default) / false",
-      "default": true
-    },
-    "git_checks": {
-      "type": "boolean",
-      "title": "Statusline: Git row › checks",
-      "description": "The pull request's checks: running, failed and passed. true (default) / false",
-      "default": true
-    },
-    "git_changes": {
-      "type": "boolean",
-      "title": "Statusline: Git row › changes",
-      "description": "The lines added and deleted, and the files changed, since the last commit. true (default) / false",
-      "default": true
-    },
-    "row_status": {
-      "type": "boolean",
-      "title": "Statusline: Status row",
-      "description": "The model, limits, context, turns, costs and cache, under the prompt. true (default) / false",
-      "default": true
-    },
-    "row_status_position": {
-      "type": "string",
-      "title": "Statusline: Status row › position",
-      "description": "Where the status row draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
-      "options": [
-        "above",
-        "below"
-      ],
-      "default": "below"
-    },
-    "line_order": {
-      "type": "string",
-      "title": "Statusline: Lines › order",
-      "description": "The order of the lines on each side of the prompt, as a comma list of git, status, fresh, compact, forecast, with spacer for a blank line and prompt between the two sides. A line's side is its position option's; a spacer's is where it stands against prompt. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: git,prompt,status,fresh,compact,forecast)",
-      "default": "git,prompt,status,fresh,compact,forecast"
-    },
-    "segment_model": {
-      "type": "boolean",
-      "title": "Statusline: Status row › model",
-      "description": "The main loop's model. true (default) / false",
-      "default": true
-    },
-    "segment_limit_7d": {
-      "type": "boolean",
-      "title": "Statusline: Status row › 7d limit",
-      "description": "The 7d limit bar. true (default) / false",
-      "default": true
-    },
-    "segment_limit_5h": {
-      "type": "boolean",
-      "title": "Statusline: Status row › 5h limit",
-      "description": "The 5h limit bar. true (default) / false",
-      "default": true
-    },
-    "segment_context": {
-      "type": "boolean",
-      "title": "Statusline: Status row › context",
-      "description": "The context window bar. true (default) / false",
-      "default": true
-    },
-    "segment_turns": {
-      "type": "boolean",
-      "title": "Statusline: Status row › turns",
-      "description": "Prompts sent and the model requests made for them. true (default) / false",
-      "default": true
-    },
-    "segment_tokens": {
-      "type": "boolean",
-      "title": "Statusline: Status row › costs",
-      "description": "What the main conversation and its subagents cost. true (default) / false",
-      "default": true
+      "title": "Statusline: Layout",
+      "description": "The lines around the prompt, top to bottom, split by ;. A line is prompt, spacer for a blank line, fresh, compact or forecast for an offer line while its own option is on, or a row. Lines before prompt draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, from folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, model, limit_7d, limit_5h, context, turns, tokens, cache, with spacer and gap-1, gap-2 or gap-3 between them. Any tag can go in any row. The tags after a hidden line are switched off. A tag left out goes after the one before it in the default order, an unknown name is ignored. Set by dragging in /statusline:order. (default: the git row above the prompt, the status row and the offers under it)",
+      "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache;fresh;compact;forecast"
     },
     "merge_costs": {
       "type": "boolean",
-      "title": "Statusline: Status row › costs › merge",
+      "title": "Statusline: Costs › merge",
       "description": "One Σ tag for the main conversation and its subagents together, instead of a tag each. Hovered, it shows their tokens added up. true / false (default)",
       "default": false
-    },
-    "segment_cache": {
-      "type": "boolean",
-      "title": "Statusline: Status row › cache",
-      "description": "The prompt cache's time left and what it costs. true (default) / false",
-      "default": true
-    },
-    "segment_order": {
-      "type": "string",
-      "title": "Statusline: Status row › order",
-      "description": "The status row's tags, left to right, as a comma list of model, limit_7d, limit_5h, context, turns, tokens, cache, with spacers and gaps as in the git row's order: one spacer first draws the row against the right edge. A name left out goes after the one before it in the default order, an unknown one is ignored. Set by dragging in /statusline:order. (default: model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache)",
-      "default": "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,cache"
     },
     "gradients": {
       "type": "boolean",
@@ -208,16 +62,6 @@
       "description": "Once this session wrote a handoff, a line under the prompt offers a fresh session from it, with a button that starts it. With the cache cold it also shows what the next message costs here; with it warm, the line hides on your next message. true (default) / false",
       "default": true
     },
-    "fresh_start_position": {
-      "type": "string",
-      "title": "Statusline: Offer a fresh start › position",
-      "description": "Where the fresh-start line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
-      "options": [
-        "above",
-        "below"
-      ],
-      "default": "below"
-    },
     "auto_compact": {
       "type": "boolean",
       "title": "Statusline: Compact when the smart zone is nearly used",
@@ -229,16 +73,6 @@
       "title": "Statusline: Offer a compaction when the smart zone is nearly used",
       "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does. true (default) / false",
       "default": true
-    },
-    "compact_hint_position": {
-      "type": "string",
-      "title": "Statusline: Offer a compaction › position",
-      "description": "Where the compaction line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
-      "options": [
-        "above",
-        "below"
-      ],
-      "default": "below"
     },
     "dismiss_minutes": {
       "type": "number",
@@ -265,16 +99,6 @@
       "title": "Statusline: Warn when a limit will run out before its reset",
       "description": "A line under the prompt when, at the pace this window has run at so far, the 7d or 5h limit reaches 100% before it resets. It needs a response of this session from the last 10 minutes, since a session hears the account's figure only in its own responses. true (default) / false",
       "default": true
-    },
-    "limit_forecast_position": {
-      "type": "string",
-      "title": "Statusline: Limit forecast › position",
-      "description": "Where the limit forecast line draws: above the prompt, or under it below Claude Code's hint line. above / below (default)",
-      "options": [
-        "above",
-        "below"
-      ],
-      "default": "below"
     },
     "turn_rate": {
       "type": "boolean",

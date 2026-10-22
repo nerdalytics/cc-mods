@@ -68,8 +68,9 @@ const OrderList: ClientModule<Props, State> = (props, surface) => {
   const { drag } = cur();
   const shown = drawn(cur());
   // A marker is one of two kinds: `hidden` ends the list's shown part (what follows is off: dim, struck through), any other
-  // names a line in the draw (the prompt), in colour and bold, so the two never look alike. The spacer and gaps under
-  // hidden are there to drag out, not switched off: dim, not struck through. Each line is cut at the edge, never wrapped again.
+  // names a place in the draw (the prompt, a row), in colour and bold, so the two never look alike. The spacer, gaps and
+  // new row under hidden are there to drag out, not switched off: dim, not struck through. Each line is cut at the edge,
+  // never wrapped again.
   const hiddenAt = shown.indexOf("hidden");
   return Box({
     flexDirection: "column",
@@ -78,7 +79,7 @@ const OrderList: ClientModule<Props, State> = (props, surface) => {
       const look =
         name === "hidden" ? { dimColor: true }
         : props.fixed.includes(name) ? { color: "cyan", bold: true }
-        : { inverse: drag?.to === i, dimColor: isOff, strikethrough: isOff && name !== "spacer" && !name.startsWith("gap-") };
+        : { inverse: drag?.to === i, dimColor: isOff, strikethrough: isOff && name !== "spacer" && name !== "row" && !name.startsWith("gap-") };
       return linesOf(name).map((line) => Text({ ...look, wrap: "truncate-end", children: line }));
     }),
   });

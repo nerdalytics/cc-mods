@@ -68,10 +68,10 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   return limit && found ? [limitParts(Box, Text, limit, found, s.now)] : [];
 }
 
-// The lines around the prompt: the git row, the status row, and a line of the mod's own for each offer. Each is a
-// /config toggle and each has a place, above the prompt or under it below the engine's hint line (the pickers); lines
-// in one place stack in line_order. Each row's tags are toggles too, drawn in git_order and segment_order.
-// /statusline:order writes all of them by dragging. Applied in register.
+// The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer, which
+// its /config toggle switches on. Lines before `prompt` draw above the prompt, the rest under it below the engine's
+// hint line. A row holds any tags, the git ones and the status ones alike; the tags after a `hidden` line are off.
+// /statusline:order writes it by dragging. Applied in register.
 // A spacer in a row takes a share of the room the tags leave, so what stands before it is pushed left and what stands
 // after it right; spacers side by side take a share each. Among the lines a spacer is a blank line. A gap in a row is
 // that many columns, fixed; tags with neither between them touch.
@@ -87,28 +87,69 @@ const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
-const LINES = ["git", "status", "fresh", "compact", "forecast"] as const;
+const TAGS = [...GIT_ROW, ...STATUS_ROW];
+type Tag = GitTag | StatusTag;
+const isTag = (name: string): name is Tag => TAGS.some((tag) => tag === name);
+const isGitTag = (name: Tag): name is GitTag => GIT_ROW.some((tag) => tag === name);
+// The tags that need the pull request, which gh fetches.
+const PR_TAGS: readonly Tag[] = ["pr", "review", "comments", "conflict", "checks"];
+const LINES = ["fresh", "compact", "forecast"] as const;
 type Line = (typeof LINES)[number];
-const LINE_OPTIONS: Record<Line, { on: string; at: string }> = {
-  git: { on: "row_git", at: "row_git_position" },
-  status: { on: "row_status", at: "row_status_position" },
-  fresh: { on: "fresh_start", at: "fresh_start_position" },
-  compact: { on: "compact_hint", at: "compact_hint_position" },
-  forecast: { on: "limit_forecast", at: "limit_forecast_position" },
-};
-let aboveLines: (Line | Spacer)[] = ["git"];
-let belowLines: (Line | Spacer)[] = ["status", "fresh", "compact", "forecast"];
-let statusTags: (StatusTag | Filler)[] = [...STATUS_ROW];
-let gitTags: (GitTag | Filler)[] = [...GIT_ROW];
+const isLine = (name: string): name is Line => LINES.some((line) => line === name);
+const LINE_TOGGLES: Record<Line, string> = { fresh: "fresh_start", compact: "compact_hint", forecast: "limit_forecast" };
+type Row = (Tag | Filler)[];
+const isRow = (line: unknown): line is Row => Array.isArray(line);
+type Layout = { lines: (Row | Line | Spacer | "prompt")[]; hidden: Tag[] };
+// Today's two rows: the git row above the prompt, the status row under it, each tag a column from the next.
+const DEFAULT_LAYOUT = [GIT_ROW.join(",gap-1,"), "prompt", STATUS_ROW.join(",gap-1,"), ...LINES].join(";");
+let layout: Layout = layoutOf(DEFAULT_LAYOUT);
+let aboveLines: (Row | Line | Spacer)[] = [];
+let belowLines: (Row | Line | Spacer)[] = [];
 
-// The /statusline:order pane: the lines around a prompt marker, then each row's tags, each a list to drag. What stands
-// after a list's "hidden" marker is switched off; the markers themselves do not drag. Each list keeps one spacer
-// after its hidden marker, to drag out, and a row's list each gap too: one dropped there is gone.
+// The layout option: lines split by ";", tags and lines by ",". Unknown and repeated names are dropped; a tag left out
+// goes after the one before it in the default order (the first one first in the first row), a prompt left out after the
+// first row, an offer left out last. An empty option is the default.
+function layoutOf(option: unknown): Layout {
+  const text = typeof option === "string" && option.trim() !== "" ? option : DEFAULT_LAYOUT;
+  const seen = new Set<string>();
+  const once = (name: string) => !seen.has(name) && Boolean(seen.add(name));
+  const lines: Layout["lines"] = [];
+  const hidden: Tag[] = [];
+  let off = false;
+  for (const line of text.split(";")) {
+    const names = line.split(",").map((name) => name.trim()).filter(Boolean);
+    const [one] = names.length === 1 ? names : [];
+    if (one === "hidden") off = true;
+    else if (off) hidden.push(...names.filter((name): name is Tag => isTag(name) && once(name)));
+    else if (one && isSpacer(one)) lines.push(one);
+    else if (one && (one === "prompt" || isLine(one))) {
+      if (once(one)) lines.push(one);
+    } else lines.push(names.filter((name): name is Tag | Filler => isFiller(name) || (isTag(name) && once(name))));
+  }
+  const rows = lines.filter(isRow);
+  TAGS.forEach((tag, i) => {
+    if (seen.has(tag)) return;
+    const before = TAGS[i - 1];
+    const list: (Tag | Filler)[] = [...rows, hidden].find((l) => before !== undefined && l.includes(before)) ?? rows[0] ?? hidden;
+    list.splice(before === undefined ? 0 : list.indexOf(before) + 1, 0, tag);
+  });
+  if (!seen.has("prompt")) lines.splice(rows[0] ? lines.indexOf(rows[0]) + 1 : 0, 0, "prompt");
+  lines.push(...LINES.filter((line) => !seen.has(line)));
+  return { lines, hidden };
+}
+
+// The layout as the option spells it, the hidden tags after a hidden line.
+function layoutText({ lines, hidden }: Layout): string {
+  return [...lines.map((line) => (isRow(line) ? line.join(",") : line)), ...(hidden.length > 0 ? ["hidden", hidden.join(",")] : [])].join(";");
+}
+
+// The /statusline:order pane: the lines around a prompt marker, then every row's tags under its marker, each a list to
+// drag. What stands after a list's "hidden" marker is switched off; the markers themselves do not drag. The lines keep a
+// spacer and a new row after their hidden marker, to drag out, the tags a spacer and each gap: one dropped there is gone.
 const ORDER_PANE = "statusline-order";
 const COLORS_PANE = "statusline-colors";
+const NEW_ROW = "row";
 const LABELS: Record<string, string> = {
-  git: "git + pull request",
-  status: "status",
   model: "model",
   limit_7d: "7d limit",
   limit_5h: "5h limit",
@@ -135,41 +176,39 @@ const LABELS: Record<string, string> = {
   "gap-1": "␣ gap: 1 column",
   "gap-2": "␣ gap: 2 columns",
   "gap-3": "␣ gap: 3 columns",
+  [NEW_ROW]: "▤ new row: drag it out, then drop tags under its marker",
 };
-const LISTS = {
-  rows: { markers: ["prompt", "hidden"], labels: { ...LABELS, spacer: "↕ spacer: a blank line" } },
-  git: { markers: ["hidden"], labels: LABELS },
-  segments: { markers: ["hidden"], labels: LABELS },
-};
-type ListKey = keyof typeof LISTS;
-const isList = (key: string): key is ListKey => Object.hasOwn(LISTS, key);
-let lists: Record<ListKey, string[]> = {
-  rows: ["git", "prompt", "status", "fresh", "compact", "forecast", "hidden", SPACER],
-  git: [...GIT_ROW, "hidden", SPACER, ...GAPS],
-  segments: [...STATUS_ROW, "hidden", SPACER, ...GAPS],
-};
-const listProps = (key: ListKey, items: string[], rev: number) => ({ items, labels: LISTS[key].labels, fixed: LISTS[key].markers, rev });
+type ListKey = "lines" | "tags";
+const isList = (key: string): key is ListKey => key === "lines" || key === "tags";
+type List = { items: string[]; labels: Record<string, string>; fixed: string[] };
+let lists: Record<ListKey, List> = listsOf(layout, () => true);
+// Changes whenever the lists do, so each list's Client drops a drag it kept from before.
+let rev = 0;
+const listProps = (key: ListKey) => ({ ...lists[key], rev });
 
-// Tags of 0.17.0 and earlier, since split, as their parts: an order saved then keeps the parts where the tag stood.
-const RENAMED: Record<string, string[]> = { limits: ["limit_7d", "limit_5h"], path: ["folders", "branch", "worktree"] };
-
-// A comma list from /config in the order it names: unknown and repeated names dropped, each missing one after the name
-// before it in the default order (the PR's review and comments after the PR, where they were part of it), a missing
-// first one first. Spacers and gaps stay where they are named, as many as are named.
-function ordered<T extends string>(option: unknown, defaults: readonly T[]): (T | Filler)[] {
-  const named = typeof option === "string" ? option.split(",").flatMap((name) => RENAMED[name.trim()] ?? [name.trim()]) : [];
-  const seen = new Set<string>();
-  const kept = named.filter((name): name is T | Filler => isFiller(name) || (defaults.some((known) => known === name) && !seen.has(name) && Boolean(seen.add(name))));
-  defaults.forEach((name, i) => {
-    if (!seen.has(name)) kept.splice(i === 0 ? 0 : kept.indexOf(defaults[i - 1] as T) + 1, 0, name);
-  });
-  return kept;
-}
-
-// A list as the pane draws it: its shown names, the hidden marker, the fillers to drag out, the hidden names.
-function withSpare(list: string[], spares: readonly Filler[] = [SPACER, ...GAPS]): string[] {
-  const at = list.indexOf("hidden");
-  return [...list.slice(0, at + 1), ...spares, ...list.slice(at + 1).filter((name) => !isFiller(name))];
+// The pane's two lists from a layout. The lines: each row as row-N, the prompt marker, the offers switched on and the
+// spacers, then the hidden marker, the spacer and the new row to drag out, and the offers switched off. The tags: each
+// row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags.
+function listsOf(l: Layout, on: (line: Line) => boolean): Record<ListKey, List> {
+  const rows = l.lines.filter(isRow);
+  const id = (i: number) => `row-${i + 1}`;
+  const named = (row: Row) => row.filter(isTag).map((tag) => LABELS[tag] ?? tag);
+  const summary = (row: Row) => {
+    const names = named(row);
+    return names.length === 0 ? "empty" : names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+  };
+  return {
+    lines: {
+      items: [...l.lines.flatMap((line) => (isRow(line) ? [id(rows.indexOf(line))] : isLine(line) && !on(line) ? [] : [line])), "hidden", SPACER, NEW_ROW, ...LINES.filter((line) => !on(line))],
+      labels: { ...LABELS, spacer: "↕ spacer: a blank line", ...Object.fromEntries(rows.map((row, i) => [id(i), `▤ row ${i + 1}: ${summary(row)}`])) },
+      fixed: ["prompt", "hidden"],
+    },
+    tags: {
+      items: [...rows.flatMap((row, i) => [id(i), ...row]), "hidden", SPACER, ...GAPS, ...l.hidden],
+      labels: { ...LABELS, ...Object.fromEntries(rows.map((_, i) => [id(i), `━━ row ${i + 1} ━━`])) },
+      fixed: [...rows.map((_, i) => id(i)), "hidden"],
+    },
+  };
 }
 
 // A list's names by zone: before the first marker, between the markers, after the last.
@@ -187,30 +226,32 @@ function zonesOf(list: string[], markers: string[]): string[][] {
   return zones;
 }
 
-// What the line list says, as the /config options it is saved in: whether each line shows, a shown line's side of the
-// prompt, and every line in the list's order, the spacers where they stand, the prompt between the sides, the hidden
-// lines last.
-function rowOptions(list: string[]): Record<string, string | boolean> {
-  const [above = [], below = [], hidden = []] = zonesOf(list, LISTS.rows.markers);
-  const saved: Record<string, string | boolean> = {};
-  for (const name of LINES) saved[LINE_OPTIONS[name].on] = !hidden.includes(name);
-  for (const name of [...above, ...below]) {
-    if (!isSpacer(name)) saved[LINE_OPTIONS[name as Line].at] = above.includes(name) ? "above" : "below";
+// What a drop in a list makes of the layout, and the offers' toggles. In the lines: the rows, offers and spacers above
+// the hidden marker in their new order, the new row dragged out an empty row; a row dropped under it is gone and its
+// tags hidden, an offer dropped there switched off and placed last. In the tags: each row the tags under its marker, those dragged above
+// the first one into the first row; with no row to take them the drop is refused.
+function dropped(key: ListKey, list: string[]): { layout: Layout; toggles: Record<string, boolean> } | undefined {
+  const rows = layout.lines.filter(isRow);
+  if (key === "lines") {
+    const [shown = [], off = []] = zonesOf(list, ["hidden"]);
+    const rowOf = (name: string) => rows[Number(/^row-(\d+)$/.exec(name)?.[1] ?? 0) - 1];
+    const lines = shown.flatMap((name): Layout["lines"] => {
+      const row = name === NEW_ROW ? [] : rowOf(name);
+      return row ? [row] : name === "prompt" || isSpacer(name) || isLine(name) ? [name] : [];
+    });
+    const hidden = [...layout.hidden, ...off.flatMap((name) => rowOf(name)?.filter(isTag) ?? [])];
+    // An offer switched off keeps a place, last, for when /config switches it on again.
+    lines.push(...off.filter(isLine));
+    return { layout: { lines, hidden }, toggles: Object.fromEntries(LINES.map((line) => [LINE_TOGGLES[line], shown.includes(line)])) };
   }
-  saved.line_order = [...above, "prompt", ...below, ...hidden.filter((name) => !isSpacer(name))].join(",");
-  return saved;
+  const [lead = [], ...zones] = zonesOf(list, lists.tags.fixed);
+  const hidden = zones.pop() ?? [];
+  const [first, ...rest] = zones;
+  if (!first) return lead.length > 0 ? undefined : { layout: { ...layout, hidden: hidden.filter(isTag) }, toggles: {} };
+  const placed = [[...lead, ...first], ...rest].map((zone) => zone.filter((name): name is Tag | Filler => isTag(name) || isFiller(name)));
+  let i = 0;
+  return { layout: { lines: layout.lines.map((line) => (isRow(line) ? (placed[i++] ?? []) : line)), hidden: hidden.filter(isTag) }, toggles: {} };
 }
-
-// The same for a row's tags: each tag's toggle, and every tag in order, the spacers where they stand, the hidden tags last.
-function tagOptions(list: string[], tags: readonly string[], prefix: string, order: string): Record<string, string | boolean> {
-  const [shown = [], hidden = []] = zonesOf(list, ["hidden"]);
-  const saved: Record<string, string | boolean> = { [order]: [...shown, ...hidden.filter((name) => !isFiller(name))].join(",") };
-  for (const name of tags) saved[`${prefix}${name}`] = shown.includes(name);
-  return saved;
-}
-
-const listOptions = (key: ListKey, list: string[]) =>
-  key === "rows" ? rowOptions(list) : key === "git" ? tagOptions(list, GIT_ROW, "git_", "git_order") : tagOptions(list, STATUS_ROW, "segment_", "segment_order");
 
 const USAGE = { plugin: "statusline", key: "usage" } as const;
 const MODEL = { plugin: "statusline", key: "model" } as const;
@@ -290,10 +331,10 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number; segments: num
 // - a button: icon and label on one fill, between two half-block bars, in a colour no chip uses;
 // - a link: gradient text on no background, opened by a click.
 const COLORS = {
-  // The four stops of statusline.zsh's _sl_pal. The git row's parts each take a gradient one stop wide, starting at blue
+  // The four stops of statusline.zsh's _sl_pal. A row's git parts each take a gradient one stop wide, starting at blue
   // and stepping on per part; the model's name a window one step wide that slides towards pink as the family gets stronger.
-  "palette.1": { group: "Palette: the git row's parts in turn, and the model's name by family", label: "cyan: Haiku", rgb: [34, 211, 216] },
-  "palette.2": { group: "", label: "blue: the git row's folders, Opus", rgb: [96, 165, 250] },
+  "palette.1": { group: "Palette: the git parts in turn, and the model's name by family", label: "cyan: Haiku", rgb: [34, 211, 216] },
+  "palette.2": { group: "", label: "blue: a row's first git part, Opus", rgb: [96, 165, 250] },
   "palette.3": { group: "", label: "purple: Fable and Mythos", rgb: [168, 85, 247] },
   "palette.4": { group: "", label: "pink", rgb: [217, 70, 239] },
   "limit.7d.from": { group: "7d limit bar and badge", label: "", rgb: [192, 132, 252] },
@@ -468,33 +509,18 @@ export const register: Register = (on, options) => {
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
-  // A row's tags in their order, those switched off left out; the spacers and gaps stand where they are named.
-  const tagsOf = <T extends string>(order: unknown, tags: readonly T[], prefix: string) => {
-    const all = ordered(order, tags);
-    const shown = all.filter((name) => isFiller(name) || options[`${prefix}${name}`] === true);
-    return { shown, list: withSpare([...shown, "hidden", ...all.filter((name) => !shown.includes(name))]) };
-  };
-  const status = tagsOf(options.segment_order, STATUS_ROW, "segment_");
-  const git = tagsOf(options.git_order, GIT_ROW, "git_");
-  statusTags = status.shown;
-  gitTags = git.shown;
-  // A line takes its side from its position option; a spacer from where it stands against the prompt in line_order.
-  // A gap is a row's; among the lines it is dropped.
-  const lines = ordered(options.line_order, [...LINES, "prompt"]).filter((name): name is Line | "prompt" | Spacer => !isGap(name));
-  const shownLine = (name: string): name is Line => !isSpacer(name) && name !== "prompt" && options[LINE_OPTIONS[name as Line].on] === true;
+  // Each line on its side of the prompt, an offer only while its toggle is on.
+  layout = layoutOf(options.layout);
+  const shown = (line: Line) => options[LINE_TOGGLES[line]] === true;
   aboveLines = [];
   belowLines = [];
   let side = aboveLines;
-  for (const name of lines) {
-    if (name === "prompt") side = belowLines;
-    else if (isSpacer(name)) side.push(name);
-    else if (shownLine(name)) (options[LINE_OPTIONS[name].at] === "above" ? aboveLines : belowLines).push(name);
+  for (const line of layout.lines) {
+    if (line === "prompt") side = belowLines;
+    else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
-  lists = {
-    rows: withSpare([...aboveLines, "prompt", ...belowLines, "hidden", ...lines.filter((name) => !isSpacer(name) && name !== "prompt" && !shownLine(name))], [SPACER]),
-    git: git.list,
-    segments: status.list,
-  };
+  lists = listsOf(layout, shown);
+  rev = Date.now();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
@@ -521,40 +547,46 @@ export const register: Register = (on, options) => {
     if (e.surface !== "terminal") return next(e);
     const ui = $.ui.resolve(e);
     // As wide as the pane, so a label wraps inside it rather than past its edge.
-    const list = (key: ListKey) => ui.Client({ key, module: "./order-list.ts", width: "100%", props: listProps(key, lists[key], 0) });
+    const list = (key: ListKey) => ui.Client({ key, module: "./order-list.ts", width: "100%", props: listProps(key) });
     const spacers = "Drag the spacer out of hidden to add one, and drop one under hidden to take it away.";
     const gaps = "A gap is that many columns, fixed: tags with neither a gap nor a spacer between them touch. Gaps drag out of hidden as the spacer does.";
     return pane(ui, "Statusline order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
-      ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
-      list("rows"),
-      ...section(ui, "Git row", `The parts draw left to right in this order. A spacer takes a share of the room the parts leave, pushing what stands before it left and what stands after it right. Spacers side by side take a share each, so they push harder. ${gaps} ${spacers}`),
-      list("git"),
-      ...section(ui, "Status row", `The tags draw left to right in this order, with spacers and gaps as in the git row: one spacer first draws the row against the right edge. ${spacers}`),
-      list("segments"),
+      ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. A row draws the tags under its marker in the list below. Drag the new row out of hidden to reserve one, then drop tags under its marker. A row dropped under hidden is gone, and its tags are switched off. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
+      list("lines"),
+      ...section(ui, "Tags", `Each row draws the tags under its marker, left to right. A spacer takes a share of the room the tags leave, pushing what stands before it left and what stands after it right. One spacer first draws the row against the right edge. Spacers side by side take a share each, so they push harder. ${gaps} ${spacers}`),
+      list("tags"),
     ]);
   });
 
-  // Each drop writes the /config options it changed, switches first: one write per option, since a write loads the module again.
-  // The order is the same names moved, a spacer as many times as before, the markers in their order.
+  // Each drop writes the /config options it changed, switches first: one write per option, since a write loads the module
+  // again. The layout is one option, so a tag moved between rows is one write. The list is the same names moved, a
+  // spacer as many times as before, the markers in their order.
   on("ui.message", { requestId: ORDER_PANE }, async ($, e, next) => {
     const key = e.element;
     const data = e.data;
     if (!isList(key) || !Array.isArray(data) || !data.every((name) => typeof name === "string")) return next(e);
-    const current = lists[key];
-    const { markers } = LISTS[key];
-    const sameNames = [...data].sort().join(",") === [...current].sort().join(",");
-    if (!sameNames || !markers.every((name, i) => i === 0 || data.indexOf(markers[i - 1] ?? "") < data.indexOf(name))) return next(e);
-    const changed = Object.entries(listOptions(key, data)).filter(([field, value]) => value !== options[field]);
+    const { items, fixed } = lists[key];
+    const sameNames = [...data].sort().join(",") === [...items].sort().join(",");
+    if (!sameNames || !fixed.every((name, i) => i === 0 || data.indexOf(fixed[i - 1] ?? "") < data.indexOf(name))) return next(e);
+    const drop = dropped(key, data);
+    if (!drop) return { props: { ...listProps(key), rev: Date.now() } };
+    const saved: Record<string, string | boolean> = { ...drop.toggles, layout: layoutText(drop.layout) };
+    const changed = Object.entries(saved).filter(([field, value]) => value !== options[field]);
     changed.sort(([, a], [, b]) => Number(typeof b === "boolean") - Number(typeof a === "boolean"));
     for (const [field, value] of changed) {
       const deny = await setOption($, field, value);
       if (deny) {
         $.ui.toast(`Statusline order: ${deny}`);
-        return { props: listProps(key, current, Date.now()) };
+        return { props: { ...listProps(key), rev: Date.now() } };
       }
     }
-    lists = { ...lists, [key]: withSpare(data, key === "rows" ? [SPACER] : undefined) };
-    return { props: listProps(key, lists[key], Date.now()) };
+    // A drop in one list can change the other (a new row's marker), so the pane draws both again.
+    const now = { ...options, ...saved };
+    layout = drop.layout;
+    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true);
+    rev = Date.now();
+    $.ui.invalidate("ui.render");
+    return { props: listProps(key) };
   });
 
   on("command.run", { command: "statusline:colors" }, async ($) => {
@@ -728,9 +760,9 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
 
 // The named lines, in order, each as the elements it draws now (none for an offer that does not hold); a spacer is a
 // blank line, and blank lines that meet, around an offer that does not hold, draw as one. While the order pane shows,
-// every blank line draws, each row every tag, and an offer that does not hold a dim line naming it in its place: a
-// made-up offer would carry buttons that act.
-async function drawLines($: EngineInterface, ui: Ui, names: (Line | Spacer)[], isWorking: boolean) {
+// every blank line draws, each row every tag, and an offer that does not hold, or a row with no tags yet, a dim line
+// naming it in its place: a made-up offer would carry buttons that act.
+async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer)[], isWorking: boolean) {
   // The panes not reading leaves the lines as they are.
   const ordering = (await $.ui.panes().catch(() => [])).some((pane) => pane.id === ORDER_PANE && pane.isShown);
   const drawn: ReturnType<Ui["Box"]>[] = [];
@@ -738,13 +770,14 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Line | Spacer)[], i
   for (const name of names) {
     if (name === SPACER && blank && !ordering) continue;
     const found =
-      name === SPACER ? [ui.Box({ height: 1 })]
-      : name === "git" || name === "status" ? [await drawRow($, ui, name, ordering)]
+      isRow(name) ? [await drawRow($, ui, name, ordering)]
+      : name === SPACER ? [ui.Box({ height: 1 })]
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
       : await forecastLines($, ui);
-    if (ordering && name !== SPACER && name !== "git" && name !== "status" && !found.some((line) => line !== undefined)) {
-      found.push(ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${LABELS[name]}: shows when it applies ╌╌` })] }));
+    const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER ? undefined : `${LABELS[name]}: shows when it applies`;
+    if (ordering && empty && !found.some((line) => line !== undefined)) {
+      found.push(ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${empty} ╌╌` })] }));
     }
     for (const line of found) {
       if (line === undefined) continue;
@@ -756,7 +789,7 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Line | Spacer)[], i
 }
 
 // A row from the state, none until the first usage reading; read every frame (the tick), so it moves live.
-async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status", ordering: boolean): Promise<ReturnType<Ui["Box"]> | undefined> {
+async function drawRow($: EngineInterface, ui: Ui, row: Row, ordering: boolean): Promise<ReturnType<Ui["Box"]> | undefined> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return undefined;
@@ -770,8 +803,9 @@ async function drawRow($: EngineInterface, ui: Ui, row: "git" | "status", orderi
   const { value: rejected } = await $.state.get(REJECTED);
   const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
   const s = ordering ? withSamples(live) : live;
-  if (row === "git") return s.git ? rowOf(ui, gitParts(ui, s.git, s.pr, gitTags)) : undefined;
-  return rowOf(ui, statusTags.map((name) => (isFiller(name) ? name : SEGMENTS[name](ui, s))));
+  // A git tag draws nothing until the first git scan.
+  const gitTag = s.git && gitParts(ui, s.git, s.pr);
+  return rowOf(ui, row.map((name) => (isFiller(name) ? name : isGitTag(name) ? (gitTag ? gitTag(name) : []) : SEGMENTS[name](ui, s))));
 }
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
@@ -1282,7 +1316,7 @@ function refreshGit($: EngineInterface): void {
     // statusline.zsh asked gh only for a branch on a remote that is not the default; gh goes over the network,
     // so the git parts draw first. Nor is it asked while no shown part draws what it answers.
     const named = git.branch !== "" && git.branch !== "HEAD" && git.branch !== git.defaultBranch;
-    const shown = [...aboveLines, ...belowLines].includes("git") && gitTags.some((tag) => ["pr", "review", "comments", "conflict", "checks"].includes(tag));
+    const shown = [...aboveLines, ...belowLines].some((line) => isRow(line) && line.some((tag) => isTag(tag) && PR_TAGS.includes(tag)));
     const branch = named && !git.vsDefault && shown ? `${git.top}:${git.branch}` : "";
     const now = await $.clock.now();
     if (branch === prFor && now - prAt < (prBusy ? PR_BUSY_POLL_MS : PR_POLL_MS)) return;
@@ -1659,10 +1693,10 @@ function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
 
 // statusline.zsh's REPO row: each segment a gradient one palette stop wide, starting at blue and stepping on per segment
 // drawn. By default the PR's parts sit where zsh put them: number, draft, review and comments after the worktree,
-// checks after the conflict; git_order moves them, and spacers stand where it names them.
+// checks after the conflict; the layout moves them, into any row.
 // Links: the folders open the folder on disk (the project's, the shell's), the branch and the worktree the checkout's,
 // the PR its page; a click opens them as the terminal opens a link, in the default app.
-function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | undefined, tags: (GitTag | Filler)[]): (Parts | Filler)[] {
+function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | undefined): (tag: GitTag) => Parts {
   const mark = g.vsDefault ? "?" : "";
   const c = pr?.checks;
   // A merged or closed pull request keeps only its number: its review, comments, conflict and checks no longer matter.
@@ -1717,18 +1751,16 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
     ],
     changes: [(g.added > 0 ? ` +${g.added}` : "") + (g.deleted > 0 ? ` -${g.deleted}` : "") + (g.changed > 0 ? ` ~${g.changed}` : "")],
   };
+  // Asked tag by tag in the row's order, so the palette steps on per part the row draws.
   let drawn = 0;
-  return tags.map((tag) =>
-    isFiller(tag)
-      ? tag
-      : segments[tag]
-          .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))
-          .filter((pieces) => pieces.some((p) => p.text !== ""))
-          .map((pieces) => {
-            const i = drawn++;
-            return linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1)));
-          }),
-  );
+  return (tag) =>
+    segments[tag]
+      .map((t): Piece[] => (typeof t === "string" ? [{ text: t.trimStart() }] : t))
+      .filter((pieces) => pieces.some((p) => p.text !== ""))
+      .map((pieces) => {
+        const i = drawn++;
+        return linkRun(Box, Text, Link, pieces, (j, n) => (gradients ? lerp(stop(i + 1), stop(i + 2), j, n) : stop(i + 1)));
+      });
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.
