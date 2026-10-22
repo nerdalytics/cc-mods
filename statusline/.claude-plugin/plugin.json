@@ -1,7 +1,7 @@
 {
   "name": "statusline",
   "displayName": "Statusline",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "description": "A live status line around the prompt: model, 7d and 5h limits, prompts and requests, main and subagent costs, the prompt cache's time left, and the project's git and pull request state; plus /statusline:handoff, which writes a handoff document before the cache goes cold.",
   "author": {
     "name": "nerdalytics"
