@@ -545,6 +545,10 @@ export const register: Register = (on, options) => {
     return result;
   });
 
+  // The layout is one long text: shown in /config, it cut every row's label there short. /statusline:order edits it,
+  // and a hidden row still takes a /config key=value with its key.
+  on("config.describe", ($, e, next) => (/^statusline(@|$)/.test(e.provider.plugin) && e.key.endsWith(".layout") ? next({ ...e, isHidden: true }) : next(e)));
+
   on("command.run", { command: "statusline:order" }, async ($) => {
     await $.ui.open({ id: ORDER_PANE, title: "Statusline order" });
     return { text: "Statusline order pane opened." };
@@ -742,9 +746,10 @@ export const register: Register = (on, options) => {
 // Writes one of the mod's /config options, never another plugin's of the same name; a write loads the module again. Why
 // it was not written, when it was not.
 async function setOption($: EngineInterface, field: string, value: string | boolean): Promise<string | undefined> {
-  // An installed copy is named for its marketplace too (statusline@cc-mods, settings.json's pluginConfigs key).
-  const key = (await $.config.list()).find((row) => /^statusline(@|$)/.test(row.provider.plugin) && row.key.endsWith(`.${field}`))?.key;
-  return key ? (await $.config.set({ key, value })).deny : `no /config row ${field}`;
+  // An installed copy is named for its marketplace too (statusline@cc-mods, settings.json's pluginConfigs key). The list
+  // leaves the hidden layout row out, so the key is any row of the mod's, its field swapped for this one.
+  const own = (await $.config.list()).find((row) => /^statusline(@|$)/.test(row.provider.plugin))?.key;
+  return own ? (await $.config.set({ key: `${own.slice(0, own.lastIndexOf("."))}.${field}`, value })).deny : `no /config row ${field}`;
 }
 
 // Saves a colour typed in the colours pane into the colors option, as name=#rrggbb; an empty field, or the default typed

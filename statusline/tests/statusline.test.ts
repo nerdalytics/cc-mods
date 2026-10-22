@@ -1705,7 +1705,17 @@ describe("statusline", () => {
     provider: { plugin: "statusline", tier: "user" },
     isLocked: false,
   });
-  const ROWS = [configRow("layout", ""), ...["fresh_start", "compact_hint", "limit_forecast"].map((field) => configRow(field, true))];
+  // The layout row is hidden, so the list leaves it out.
+  const ROWS = ["fresh_start", "compact_hint", "limit_forecast"].map((field) => configRow(field, true));
+
+  test("hides the layout row in /config, and no other", async ($, on) => {
+    // The engine beneath answers each row as it is.
+    on("config.describe", (_$, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }));
+    const describe = (field: string, plugin = "statusline@cc-mods") => $.config.describe({ key: `${plugin}.${field}`, label: field, isHidden: false, provider: { plugin, tier: "user" } });
+    expect(await describe("layout")).toMatchObject({ isHidden: true });
+    expect(await describe("merge_costs")).toMatchObject({ isHidden: false });
+    expect(await describe("layout", "otherplugin")).toMatchObject({ isHidden: false });
+  });
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
