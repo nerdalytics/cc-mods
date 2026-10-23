@@ -239,9 +239,9 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 ## Where an organization manages Claude Code
 
-Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact` and `settings.read`. Only a plugin the organization lists in its managed settings runs hooks on them.
+Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact`, `settings.read` and, as of Claude Code 2.1.308, every `classic.*` event. Only a plugin the organization lists in its managed settings runs hooks on them.
 
-The statusline mod hooks one of them, `session.compact`. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
+The statusline mod hooks one of them, `session.compact`. It sees a `/clear` through `command.run`, which passes to it. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
 
 ```text
 statusline @ cc-mods (user)

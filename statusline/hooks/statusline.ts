@@ -538,10 +538,12 @@ export const register: Register = (on, options) => {
   });
 
   // A /clear fires no session.start, and the new session starts with empty state: without this the tick reads no
-  // LOAD, takes it for a newer copy's and stops, and nothing is read again until the first response.
-  on("classic.SessionStart", async ($, e, next) => {
+  // LOAD, takes it for a newer copy's and stops, and nothing is read again until the first response. Not on
+  // classic.SessionStart: where an organization manages Claude Code, the built-in sec-default plugin sends classic.*
+  // past the plugins a person installs. A failure here, after `next`, leaves the /clear's own result standing.
+  on("command.run", { command: "clear" }, async ($, e, next) => {
     const result = await next(e);
-    if (e.source === "clear") await startSession($);
+    await startSession($);
     return result;
   });
 
