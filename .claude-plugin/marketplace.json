@@ -6,9 +6,9 @@
   },
   "plugins": [
     {
-      "name": "statusline",
-      "source": "./statusline",
-      "description": "A live status line around the prompt: limits, costs, prompt cache and git, plus a handoff before the cache goes cold."
+      "name": "cockpit",
+      "source": "./cockpit",
+      "description": "Live gauges around the prompt: limits, costs, prompt cache and git, plus a handoff before the cache goes cold."
     },
     {
       "name": "debug",

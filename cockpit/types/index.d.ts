@@ -54,7 +54,7 @@ export type StatusPr = {
 
 declare module "claude-code" {
   interface PluginState {
-    statusline: {
+    cockpit: {
       usage: StatusUsage;
       model: string;
       tokens: StatusTokens;

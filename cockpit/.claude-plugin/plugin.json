@@ -1,15 +1,16 @@
 {
-  "name": "statusline",
-  "displayName": "Statusline",
+  "name": "cockpit",
+  "displayName": "Cockpit",
   "version": "0.22.3",
-  "description": "A live status line around the prompt: model, 7d and 5h limits, prompts and requests, main and subagent costs, the prompt cache's time left, and the project's git and pull request state; plus /statusline:handoff, which writes a handoff document before the cache goes cold.",
+  "description": "Live gauges around the prompt: model, 7d and 5h limits, prompts and requests, main and subagent costs, the prompt cache's time left, and the project's git and pull request state; plus /cockpit:handoff, which writes a handoff document before the cache goes cold.",
   "author": {
     "name": "nerdalytics"
   },
-  "homepage": "https://github.com/nerdalytics/cc-mods/tree/main/statusline",
+  "homepage": "https://github.com/nerdalytics/cc-mods/tree/trunk/cockpit",
   "repository": "https://github.com/nerdalytics/cc-mods",
   "license": "MIT",
   "keywords": [
+    "cockpit",
     "statusline",
     "status-line",
     "cost",
@@ -21,88 +22,88 @@
   "userConfig": {
     "layout": {
       "type": "string",
-      "title": "Statusline: Layout",
-      "description": "The lines around the prompt, top to bottom, split by ;. A line is prompt, spacer for a blank line, fresh, compact or forecast for an offer line while its own option is on, or a row. Lines before prompt draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, from folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, model, limit_7d, limit_5h, context, turns, tokens, agents, cache, with spacer and gap-1, gap-2 or gap-3 between them. Any tag can go in any row. The tags after a hidden line are switched off. A tag left out goes after the one before it in the default order, an unknown name is ignored. Set by dragging in /statusline:order. (default: the git row above the prompt, the status row and the offers under it)",
+      "title": "Cockpit: Layout",
+      "description": "The lines around the prompt, top to bottom, split by ;. A line is prompt, spacer for a blank line, fresh, compact or forecast for an offer line while its own option is on, or a row. Lines before prompt draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, from folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, model, limit_7d, limit_5h, context, turns, tokens, agents, cache, with spacer and gap-1, gap-2 or gap-3 between them. Any tag can go in any row. The tags after a hidden line are switched off. A tag left out goes after the one before it in the default order, an unknown name is ignored. Set by dragging in /cockpit:order. (default: the git row above the prompt, the status row and the offers under it)",
       "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache;fresh;compact;forecast"
     },
     "merge_costs": {
       "type": "boolean",
-      "title": "Statusline: Costs › merge",
+      "title": "Cockpit: Costs › merge",
       "description": "One Σ tag for the main conversation and its subagents together, instead of a tag each. Hovered, it shows their tokens added up. true / false (default)",
       "default": false
     },
     "gradients": {
       "type": "boolean",
-      "title": "Statusline: Colours › gradients",
-      "description": "Text and bars blend from one colour to the next, and the model's name sweeps. Off, each draws in one colour, the first of its gradient, and the context bar in its three colours as bands. Set in /statusline:colors. true (default) / false",
+      "title": "Cockpit: Colours › gradients",
+      "description": "Text and bars blend from one colour to the next, and the model's name sweeps. Off, each draws in one colour, the first of its gradient, and the context bar in its three colours as bands. Set in /cockpit:colors. true (default) / false",
       "default": true
     },
     "colors": {
       "type": "string",
-      "title": "Statusline: Colours",
-      "description": "Your colours, as a comma list of name=#rrggbb, such as turns.from=#60a5fa,pr.open=#facc15. A name left out keeps its default, an unknown one or a colour that does not read is ignored. Set by typing in /statusline:colors. (default: none)",
+      "title": "Cockpit: Colours",
+      "description": "Your colours, as a comma list of name=#rrggbb, such as turns.from=#60a5fa,pr.open=#facc15. A name left out keeps its default, an unknown one or a colour that does not read is ignored. Set by typing in /cockpit:colors. (default: none)",
       "default": ""
     },
     "auto_handoff": {
       "type": "boolean",
-      "title": "Statusline: Hand off before the cache goes cold",
-      "description": "Runs /statusline:handoff once while the session is idle, a few minutes before the prompt cache expires, and writes HANDOFF-<date-time>.md at the project's root. It runs again only after your next prompt. true (default) / false",
+      "title": "Cockpit: Hand off before the cache goes cold",
+      "description": "Runs /cockpit:handoff once while the session is idle, a few minutes before the prompt cache expires, and writes HANDOFF-<date-time>.md at the project's root. It runs again only after your next prompt. true (default) / false",
       "default": true
     },
     "keep_warm_pings": {
       "type": "number",
-      "title": "Statusline: Keep the cache warm (pings)",
+      "title": "Cockpit: Keep the cache warm (pings)",
       "description": "How many minimal prompts the mod sends while the session is idle, each just before the prompt cache expires, to keep it warm; the handoff runs after the last one, on a 5-minute cache too. About 25 pings cost as much as writing a 5-minute cache once, and a fresh session from the handoff is usually cheaper and answers faster, so keep this low. (default: 0)",
       "default": 0,
       "min": 0
     },
     "fresh_start": {
       "type": "boolean",
-      "title": "Statusline: Offer a fresh start from the handoff",
+      "title": "Cockpit: Offer a fresh start from the handoff",
       "description": "Once this session wrote a handoff, a line under the prompt offers a fresh session from it, with a button that starts it. With the cache cold it also shows what the next message costs here; with it warm, the line hides on your next message. true (default) / false",
       "default": true
     },
     "auto_compact": {
       "type": "boolean",
-      "title": "Statusline: Compact when the smart zone is nearly used",
+      "title": "Cockpit: Compact when the smart zone is nearly used",
       "description": "Runs /compact once while the session is idle, as soon as the context has used 90% of the smart zone. It runs again only after your next prompt. true / false (default)",
       "default": false
     },
     "compact_hint": {
       "type": "boolean",
-      "title": "Statusline: Offer a compaction when the smart zone is nearly used",
+      "title": "Cockpit: Offer a compaction when the smart zone is nearly used",
       "description": "Once the context has used 90% of the smart zone, a line under the prompt offers to compact the session, with a button that does. true (default) / false",
       "default": true
     },
     "dismiss_minutes": {
       "type": "number",
-      "title": "Statusline: Dismissed offers stay hidden (minutes)",
+      "title": "Cockpit: Dismissed offers stay hidden (minutes)",
       "description": "How long the cross on the fresh-start and compaction lines hides its line. 0 hides it for the rest of the session. (default: 0)",
       "default": 0,
       "min": 0
     },
     "smart_zone": {
       "type": "boolean",
-      "title": "Statusline: Smart zone on the context bar",
+      "title": "Cockpit: Smart zone on the context bar",
       "description": "The context bar's top half shows the smart zone left. Off, the bar shows only the context window left, in full-height blocks. true (default) / false",
       "default": true
     },
     "smart_zone_tokens": {
       "type": "number",
-      "title": "Statusline: Smart zone (tokens)",
+      "title": "Cockpit: Smart zone (tokens)",
       "description": "The context size up to which recall stays precise; the context bar's top half shows how much of it is left. (default: 200000)",
       "default": 200000,
       "min": 0
     },
     "limit_forecast": {
       "type": "boolean",
-      "title": "Statusline: Warn when a limit will run out before its reset",
+      "title": "Cockpit: Warn when a limit will run out before its reset",
       "description": "A line under the prompt when, at the pace this window has run at so far, the 7d or 5h limit reaches 100% before it resets. It needs a response of this session from the last 10 minutes, since a session hears the account's figure only in its own responses. true (default) / false",
       "default": true
     },
     "turn_rate": {
       "type": "boolean",
-      "title": "Statusline: Turn line › tokens per second",
+      "title": "Cockpit: Turn line › tokens per second",
       "description": "The tokens a turn generated per second, in the line that closes it (Cooked at 52 tok/s for 7s · done 11:22 PM). true (default) / false",
       "default": true
     }

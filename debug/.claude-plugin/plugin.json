@@ -26,13 +26,13 @@
     "pr_trace": {
       "type": "boolean",
       "title": "Debug: PR trace pane",
-      "description": "/debug:pr-trace, a pane that lists the statusline mod's PR fetches. true (default) / false",
+      "description": "/debug:pr-trace, a pane that lists the cockpit mod's PR fetches. true (default) / false",
       "default": true
     },
     "handoff_trace": {
       "type": "boolean",
       "title": "Debug: Handoff trace pane",
-      "description": "/debug:handoff-trace, a pane that shows why the statusline mod's handoff ran or did not. true (default) / false",
+      "description": "/debug:handoff-trace, a pane that shows why the cockpit mod's handoff ran or did not. true (default) / false",
       "default": true
     }
   }

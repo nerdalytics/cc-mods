@@ -63,7 +63,7 @@ describe("debug", () => {
   });
 
   test("wraps a long trace line to the pane's width and keeps the newest rows that fit", { options: { markers: false } }, async ($, on) => {
-    on("state.get", { plugin: "statusline" }, () => ({ value: { value: ["12:00:01 old", "12:00:02 cache window open, no handoff: a turn is running"], version: 1 } }));
+    on("state.get", { plugin: "cockpit" }, () => ({ value: { value: ["12:00:01 old", "12:00:02 cache window open, no handoff: a turn is running"], version: 1 } }));
     const ui = await $.ui.mount({ plugin: "debug", surface: "terminal", component: "Pane", requestId: "handoff-trace", props: { title: "Handoff trace", isFocused: true, bodyColumns: 20, placement: "dock", scroll: { offset: 0, bodyRows: 24 }, view: {} } });
     const rows = (await ui.findAll({ type: "Text" })).map((text) => [text.children[0] ?? text.text, text.props.wrap]);
     await ui.unmount();

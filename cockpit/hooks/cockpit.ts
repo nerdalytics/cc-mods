@@ -73,7 +73,7 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer, which
 // its /config toggle switches on. Lines before `prompt` draw above the prompt, the rest under it below the engine's
 // hint line. A row holds any tags, the git ones and the status ones alike; the tags after a `hidden` line are off.
-// /statusline:order writes it by dragging. Applied in register.
+// /cockpit:order writes it by dragging. Applied in register.
 // A spacer in a row takes a share of the room the tags leave, so what stands before it is pushed left and what stands
 // after it right; spacers side by side take a share each. Among the lines a spacer is a blank line. A gap in a row is
 // that many columns, fixed; tags with neither between them touch.
@@ -145,11 +145,11 @@ function layoutText({ lines, hidden }: Layout): string {
   return [...lines.map((line) => (isRow(line) ? line.join(",") : line)), ...(hidden.length > 0 ? ["hidden", hidden.join(",")] : [])].join(";");
 }
 
-// The /statusline:order pane: the lines around a prompt marker, then every row's tags under its marker, each a list to
+// The /cockpit:order pane: the lines around a prompt marker, then every row's tags under its marker, each a list to
 // drag. What stands after a list's "hidden" marker is switched off; the markers themselves do not drag. The lines keep a
 // spacer and a new row after their hidden marker, to drag out, the tags a spacer and each gap: one dropped there is gone.
-const ORDER_PANE = "statusline-order";
-const COLORS_PANE = "statusline-colors";
+const ORDER_PANE = "cockpit-order";
+const COLORS_PANE = "cockpit-colors";
 const NEW_ROW = "row";
 const LABELS: Record<string, string> = {
   model: "model",
@@ -260,22 +260,22 @@ function dropped(key: ListKey, list: string[]): { layout: Layout; toggles: Recor
   return { layout: { lines: layout.lines.map((line) => (isRow(line) ? (placed[i++] ?? []) : line)), hidden: hidden.filter(isTag) }, toggles: {} };
 }
 
-const USAGE = { plugin: "statusline", key: "usage" } as const;
-const MODEL = { plugin: "statusline", key: "model" } as const;
-const TOKENS = { plugin: "statusline", key: "tokens" } as const;
-const TURNS = { plugin: "statusline", key: "turns" } as const;
-const COMPACT_AT = { plugin: "statusline", key: "compactAt" } as const;
+const USAGE = { plugin: "cockpit", key: "usage" } as const;
+const MODEL = { plugin: "cockpit", key: "model" } as const;
+const TOKENS = { plugin: "cockpit", key: "tokens" } as const;
+const TURNS = { plugin: "cockpit", key: "turns" } as const;
+const COMPACT_AT = { plugin: "cockpit", key: "compactAt" } as const;
 type Offer = "fresh" | "compact";
-const DISMISSED = { plugin: "statusline", key: "dismissed" } as const;
-const SENT = { plugin: "statusline", key: "sent" } as const;
-const READ = { plugin: "statusline", key: "readAt" } as const;
-const GIT = { plugin: "statusline", key: "git" } as const;
-const PR = { plugin: "statusline", key: "pr" } as const;
-const REJECTED = { plugin: "statusline", key: "rejected" } as const;
-const HANDOFF = { plugin: "statusline", key: "handoff" } as const;
-const TICK = { plugin: "statusline", key: "tick" } as const;
-const LOAD = { plugin: "statusline", key: "load" } as const;
-const STRETCH = { plugin: "statusline", key: "stretch" } as const;
+const DISMISSED = { plugin: "cockpit", key: "dismissed" } as const;
+const SENT = { plugin: "cockpit", key: "sent" } as const;
+const READ = { plugin: "cockpit", key: "readAt" } as const;
+const GIT = { plugin: "cockpit", key: "git" } as const;
+const PR = { plugin: "cockpit", key: "pr" } as const;
+const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
+const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
+const TICK = { plugin: "cockpit", key: "tick" } as const;
+const LOAD = { plugin: "cockpit", key: "load" } as const;
+const STRETCH = { plugin: "cockpit", key: "stretch" } as const;
 // Anthropic's pricing table as markdown, USD per million tokens.
 const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md";
 // The tick also paces the animations: $.ui.invalidate caps the band at thirty redraws a second.
@@ -291,7 +291,7 @@ const REJECTED_POLL_MS = 10_000;
 // Before the cache goes cold the mod runs the plugin's own handoff skill, once per idle stretch, when the person's
 // auto_handoff option (plugin.json userConfig, a /config row) is on: while the cache is warm the handoff reads it at
 // the hit price, and the document it leaves lets the next session start without it.
-const HANDOFF_COMMAND = "statusline:handoff";
+const HANDOFF_COMMAND = "cockpit:handoff";
 // A handoff stays the session's own until a main-conversation request comes later than its file by more than this: the
 // reply that closes the handoff's turn lands a little after the file, and a later one means the work went on without it.
 const HANDOFF_GRACE_MS = 5 * 60_000;
@@ -328,7 +328,7 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number; segments: num
   { kind: "seven_day", badge: "7d", seconds: 604_800, segments: 7 },
   { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10 },
 ];
-// Every colour the mod draws, by its name in the colors option: the /statusline:colors pane's rows, under the group the
+// Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
 // its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
 // what a thing does:
@@ -547,13 +547,13 @@ export const register: Register = (on, options) => {
     return result;
   });
 
-  // The layout is one long text: shown in /config, it cut every row's label there short. /statusline:order edits it,
+  // The layout is one long text: shown in /config, it cut every row's label there short. /cockpit:order edits it,
   // and a hidden row still takes a /config key=value with its key.
-  on("config.describe", ($, e, next) => (/^statusline(@|$)/.test(e.provider.plugin) && e.key.endsWith(".layout") ? next({ ...e, isHidden: true }) : next(e)));
+  on("config.describe", ($, e, next) => (/^cockpit(@|$)/.test(e.provider.plugin) && e.key.endsWith(".layout") ? next({ ...e, isHidden: true }) : next(e)));
 
-  on("command.run", { command: "statusline:order" }, async ($) => {
-    await $.ui.open({ id: ORDER_PANE, title: "Statusline order" });
-    return { text: "Statusline order pane opened." };
+  on("command.run", { command: "cockpit:order" }, async ($) => {
+    await $.ui.open({ id: ORDER_PANE, title: "Cockpit order" });
+    return { text: "Cockpit order pane opened." };
   });
 
   on("ui.render", { component: "Pane", requestId: ORDER_PANE }, ($, e, next) => {
@@ -563,7 +563,7 @@ export const register: Register = (on, options) => {
     const list = (key: ListKey) => ui.Client({ key, module: "./order-list.ts", width: "100%", props: listProps(key) });
     const spacers = "Drag the spacer out of hidden to add one, and drop one under hidden to take it away.";
     const gaps = "A gap is that many columns, fixed: tags with neither a gap nor a spacer between them touch. Gaps drag out of hidden as the spacer does.";
-    return pane(ui, "Statusline order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
+    return pane(ui, "Cockpit order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
       ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. A row draws the tags under its marker in the list below. Drag the new row out of hidden to reserve one, then drop tags under its marker. A row dropped under hidden is gone, and its tags are switched off. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
       list("lines"),
       ...section(ui, "Tags", `Each row draws the tags under its marker, left to right. A spacer takes a share of the room the tags leave, pushing what stands before it left and what stands after it right. One spacer first draws the row against the right edge. Spacers side by side take a share each, so they push harder. ${gaps} ${spacers}`),
@@ -589,7 +589,7 @@ export const register: Register = (on, options) => {
     for (const [field, value] of changed) {
       const deny = await setOption($, field, value);
       if (deny) {
-        $.ui.toast(`Statusline order: ${deny}`);
+        $.ui.toast(`Cockpit order: ${deny}`);
         return { props: { ...listProps(key), rev: Date.now() } };
       }
     }
@@ -602,12 +602,12 @@ export const register: Register = (on, options) => {
     return { props: listProps(key) };
   });
 
-  on("command.run", { command: "statusline:colors" }, async ($) => {
-    await $.ui.open({ id: COLORS_PANE, title: "Statusline colours", focus: true });
-    return { text: "Statusline colours pane opened." };
+  on("command.run", { command: "cockpit:colors" }, async ($) => {
+    await $.ui.open({ id: COLORS_PANE, title: "Cockpit colours", focus: true });
+    return { text: "Cockpit colours pane opened." };
   });
 
-  // The /statusline:colors pane: a swatch and a field per colour, under the group it colours, and a button that turns the
+  // The /cockpit:colors pane: a swatch and a field per colour, under the group it colours, and a button that turns the
   // gradients off and on. Without gradients only a gradient's first colour is asked for; the other keeps what was saved.
   on("ui.render", { component: "Pane", requestId: COLORS_PANE }, ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
@@ -630,9 +630,9 @@ export const register: Register = (on, options) => {
     });
     const toggle = async () => {
       const deny = await setOption($, "gradients", !gradients);
-      if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+      if (deny) $.ui.toast(`Cockpit colours: ${deny}`);
     };
-    return pane(ui, "Statusline colours", "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default.", [
+    return pane(ui, "Cockpit colours", "Type a colour as six hex digits, #22d3d8, and press Enter to save it. An empty field goes back to the default.", [
       Box({ height: 1 }),
       sentence(ui, [
         Text({ dimColor: true, children: gradients ? "Gradients are on. " : "Gradients are off: one colour per gradient. " }),
@@ -748,9 +748,9 @@ export const register: Register = (on, options) => {
 // Writes one of the mod's /config options, never another plugin's of the same name; a write loads the module again. Why
 // it was not written, when it was not.
 async function setOption($: EngineInterface, field: string, value: string | boolean): Promise<string | undefined> {
-  // An installed copy is named for its marketplace too (statusline@cc-mods, settings.json's pluginConfigs key). The list
+  // An installed copy is named for its marketplace too (cockpit@cc-mods, settings.json's pluginConfigs key). The list
   // leaves the hidden layout row out, so the key is any row of the mod's, its field swapped for this one.
-  const own = (await $.config.list()).find((row) => /^statusline(@|$)/.test(row.provider.plugin))?.key;
+  const own = (await $.config.list()).find((row) => /^cockpit(@|$)/.test(row.provider.plugin))?.key;
   return own ? (await $.config.set({ key: `${own.slice(0, own.lastIndexOf("."))}.${field}`, value })).deny : `no /config row ${field}`;
 }
 
@@ -760,7 +760,7 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
   const typed = text.trim();
   const rgb = rgbOf(typed);
   if (typed && !rgb) {
-    $.ui.toast(`Statusline colours: ${typed} is not a colour. Type six hex digits, as #22d3d8.`);
+    $.ui.toast(`Cockpit colours: ${typed} is not a colour. Type six hex digits, as #22d3d8.`);
     return;
   }
   const saved = overridesOf(option);
@@ -769,7 +769,7 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
   const value = [...saved].map(([key, c]) => `${key}=${hex(c)}`).join(",");
   if (value === (typeof option === "string" ? option : "")) return;
   const deny = await setOption($, "colors", value);
-  if (deny) $.ui.toast(`Statusline colours: ${deny}`);
+  if (deny) $.ui.toast(`Cockpit colours: ${deny}`);
 }
 
 // The named lines, in order, each as the elements it draws now (none for an offer that does not hold); a spacer is a
@@ -952,7 +952,7 @@ async function maybeKeepWarm($: EngineInterface): Promise<void> {
   } catch (err) {
     // No more pings this stretch: the handoff, which has a try of its own, goes next.
     pings = keepWarm;
-    $.ui.toast(`statusline: the ping that keeps the cache warm did not start: ${err instanceof Error ? err.message : err}`);
+    $.ui.toast(`cockpit: the ping that keeps the cache warm did not start: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -980,7 +980,7 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
   } catch (err) {
-    $.ui.toast(`statusline: the handoff before the cache goes cold did not start: ${err instanceof Error ? err.message : err}`);
+    $.ui.toast(`cockpit: the handoff before the cache goes cold did not start: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -1181,7 +1181,7 @@ async function compactSession($: EngineInterface): Promise<void> {
   try {
     await $.command.run({ command: "compact" });
   } catch (err) {
-    $.ui.toast(`statusline: compacting failed: ${err instanceof Error ? err.message : err}`);
+    $.ui.toast(`cockpit: compacting failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -1192,7 +1192,7 @@ async function resumeFrom($: EngineInterface, path: string): Promise<void> {
     await $.command.run({ command: "clear" });
     await $.prompt.submit({ text: `Continue from the handoff in ${path}: read it, then pick up the work where it leaves off.`, asUser: true });
   } catch (err) {
-    $.ui.toast(`statusline: starting from the handoff failed: ${err instanceof Error ? err.message : err}`);
+    $.ui.toast(`cockpit: starting from the handoff failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -1276,7 +1276,7 @@ type Price = Rate & { over?: { above: number; rate: Rate } };
 const running = new Map<string, { again: boolean }>();
 
 // TEMPORARY: the PR fetches, read by the debug mod's /pr-trace pane; remove with the calls to trace.
-const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
+const PR_TRACE = { plugin: "cockpit", key: "prTrace" } as const;
 const traceLog: string[] = [];
 function trace($: EngineInterface, msg: string): void {
   traceLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
@@ -1285,7 +1285,7 @@ function trace($: EngineInterface, msg: string): void {
 
 // The handoff's gates while its window is open, read by the debug mod's /debug:handoff-trace pane. A line that repeats the
 // last one is dropped, as the poll asks every 2 s.
-const HANDOFF_TRACE = { plugin: "statusline", key: "handoffTrace" } as const;
+const HANDOFF_TRACE = { plugin: "cockpit", key: "handoffTrace" } as const;
 let lastHandoffTrace = "";
 function traceHandoff($: EngineInterface, msg: string): void {
   if (msg === lastHandoffTrace) return;

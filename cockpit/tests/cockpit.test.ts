@@ -110,7 +110,7 @@ function stubHint(on: On): void {
   on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
 function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "PromptHint">> {
-  return $.ui.mount({ plugin: "statusline", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
+  return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
@@ -135,7 +135,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
       : row("r1", ttl === "1h" ? ago : ttl === "5m-late" ? 4.5 : 3, usage);
   // The handoff trace as the mod last wrote it.
   let traced: string[] = [];
-  on("state.set", { plugin: "statusline", key: "handoffTrace" }, ($, e, next) => {
+  on("state.set", { plugin: "cockpit", key: "handoffTrace" }, ($, e, next) => {
     traced = Array.isArray(e.value) ? e.value.map(String) : [];
     return next(e);
   });
@@ -162,7 +162,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   });
 
   // A module loaded again after the person's prompt finds its times in the session's state.
-  if (reloaded) on("state.get", { plugin: "statusline", key: "stretch" }, () => ({ value: { value: { promptAt: Date.now() - 60_000, handoffAt: 0, compactedAt: 0 }, version: 1 } }));
+  if (reloaded) on("state.get", { plugin: "cockpit", key: "stretch" }, () => ({ value: { value: { promptAt: Date.now() - 60_000, handoffAt: 0, compactedAt: 0 }, version: 1 } }));
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
   const ui = await mountHint($);
   for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "cache" })).length === 0; i++) {
@@ -188,7 +188,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   return ran;
 }
 
-describe("statusline", () => {
+describe("cockpit", () => {
   test("draws the status row under the prompt", async ($, on) => {
     stubHint(on);
     const now = Date.now();
@@ -320,7 +320,7 @@ describe("statusline", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: "O" })).toBeDefined();
     await above.unmount();
     const below = await mountHint($);
@@ -653,9 +653,9 @@ describe("statusline", () => {
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "statusline", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 }}));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 }}));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: /at this pace/ })).toBeDefined();
     await above.unmount();
     const below = await mountHint($);
@@ -688,7 +688,7 @@ describe("statusline", () => {
       },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "statusline", key: "readAt" }, () => ({ value: { value: now - readAgoMin * 60_000 - 1_000, version: 1 } }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - readAgoMin * 60_000 - 1_000, version: 1 } }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const line = await ui.find({ type: "Text", text: /at this pace/ });
@@ -975,12 +975,12 @@ describe("statusline", () => {
   });
 
   test("runs the handoff skill once before the cache goes cold, while idle and after a prompt of the person's own", async ($, on) => {
-    expect(await handoffRuns($, on)).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on)).toEqual(["cockpit:handoff"]);
   });
 
   test("runs the handoff 10 minutes before the cache goes cold while Claude Code's idleCompaction is on", async ($, on) => {
     // 8 minutes left: outside the 5-minute lead, inside the 10-minute one.
-    expect(await handoffRuns($, on, { ago: 52 })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { ago: 52 })).toEqual(["cockpit:handoff"]);
   });
 
   test("waits for the last 5 minutes when idleCompaction is false in settings: none yet at 8 minutes left", async ($, on) => {
@@ -988,11 +988,11 @@ describe("statusline", () => {
   });
 
   test("runs the handoff at 3 minutes left when idleCompaction is false in settings", async ($, on) => {
-    expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["cockpit:handoff"]);
   });
 
   test("runs the handoff for a prompt typed before the module loaded again", async ($, on) => {
-    expect(await handoffRuns($, on, { reloaded: true })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { reloaded: true })).toEqual(["cockpit:handoff"]);
   });
 
   test("runs no handoff when the person turned auto_handoff off", { options: { auto_handoff: false } }, async ($, on) => {
@@ -1000,15 +1000,15 @@ describe("statusline", () => {
   });
 
   test("sends no ping at keep_warm_pings 0, the default: the handoff alone runs", async ($, on) => {
-    expect(await handoffRuns($, on, { after: 14 })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { after: 14 })).toEqual(["cockpit:handoff"]);
   });
 
   test("pings an hour's cache as often as keep_warm_pings allows, then runs the handoff", { options: { keep_warm_pings: 2 } }, async ($, on) => {
-    expect(await handoffRuns($, on, { after: 14 })).toEqual(["ping", "ping", "statusline:handoff"]);
+    expect(await handoffRuns($, on, { after: 14 })).toEqual(["ping", "ping", "cockpit:handoff"]);
   });
 
   test("pings a five-minute cache a minute before it expires, and runs the handoff after the last ping", { options: { keep_warm_pings: 2 } }, async ($, on) => {
-    expect(await handoffRuns($, on, { ttl: "5m-late", after: 14 })).toEqual(["ping", "ping", "statusline:handoff"]);
+    expect(await handoffRuns($, on, { ttl: "5m-late", after: 14 })).toEqual(["ping", "ping", "cockpit:handoff"]);
   });
 
   test("pings a five-minute cache no earlier than a minute before it expires", { options: { keep_warm_pings: 2 } }, async ($, on) => {
@@ -1028,7 +1028,7 @@ describe("statusline", () => {
   });
 
   test("runs the handoff on a five-minute-labelled cache that was read back after ten idle minutes", async ($, on) => {
-    expect(await handoffRuns($, on, { ttl: "5m-held" })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { ttl: "5m-held" })).toEqual(["cockpit:handoff"]);
   });
 
   test("runs no handoff at 98% of the 5h window", async ($, on) => {
@@ -1060,11 +1060,11 @@ describe("statusline", () => {
   });
 
   test("runs the handoff while a subagent only waits, held on a plan's approval or on work listed on its own", async ($, on) => {
-    expect(await handoffRuns($, on, { agents: [subagent("waiting")] })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { agents: [subagent("waiting")] })).toEqual(["cockpit:handoff"]);
   });
 
   test("runs the handoff at 90% of the 5h window on Opus", async ($, on) => {
-    expect(await handoffRuns($, on, { rateLimits: [{ kind: "five_hour", percentUsed: 90 }] })).toEqual(["statusline:handoff"]);
+    expect(await handoffRuns($, on, { rateLimits: [{ kind: "five_hour", percentUsed: 90 }] })).toEqual(["cockpit:handoff"]);
   });
 
   test("runs no handoff at 90% of the 5h window on Fable", async ($, on) => {
@@ -1137,7 +1137,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/wt/spike/cc-mods" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1185,7 +1185,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1221,7 +1221,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1256,9 +1256,9 @@ describe("statusline", () => {
     });
     // The engine's record of the mod's open panes.
     let isOpen = false;
-    on("ui.panes", () => ({ value: isOpen ? [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] : [] }));
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
     expect(await glyphs()).not.toContain("PR #");
@@ -1284,7 +1284,7 @@ describe("statusline", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     let isOpen = false;
-    on("ui.panes", () => ({ value: isOpen ? [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] : [] }));
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: "O" })); i++) await settle();
@@ -1315,7 +1315,7 @@ describe("statusline", () => {
     on("command.run", () => ({ text: "" }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("ui.panes", () => ({ value: [{ id: "statusline-order", title: "Statusline order", isShown: true, isFocused: false, isPlaced: true, plugin: "statusline" }] }));
+    on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
     await $.command.run({ command: "clear", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 80 } });
     const ui = await mountHint($);
     for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "context" })); i++) await settle();
@@ -1363,7 +1363,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1450,7 +1450,7 @@ describe("statusline", () => {
 
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
       const ui = await $.ui.mount({
-        plugin: "statusline",
+        plugin: "cockpit",
         surface: "terminal",
         component: "AbovePrompt",
         props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1525,7 +1525,7 @@ describe("statusline", () => {
     on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     if (turn) await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", ...turn });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "TurnDuration", props });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "TurnDuration", props });
     const text = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await settle();
     const drawn = await text();
@@ -1588,7 +1588,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1633,7 +1633,7 @@ describe("statusline", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work/cc-mods" });
     const ui = await $.ui.mount({
-      plugin: "statusline",
+      plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
@@ -1698,11 +1698,11 @@ describe("statusline", () => {
 
   // The order pane: a drag in a Client of the pane posts the new order; the mod writes the /config options it changed.
   const configRow = (field: string, value: ConfigValue): ConfigRow => ({
-    key: `statusline.${field}`,
+    key: `cockpit.${field}`,
     label: field,
     kind: typeof value === "boolean" ? "boolean" : "text",
     value,
-    provider: { plugin: "statusline", tier: "user" },
+    provider: { plugin: "cockpit", tier: "user" },
     isLocked: false,
   });
   // The layout row is hidden, so the list leaves it out.
@@ -1711,7 +1711,7 @@ describe("statusline", () => {
   test("hides the layout row in /config, and no other", async ($, on) => {
     // The engine beneath answers each row as it is.
     on("config.describe", (_$, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }));
-    const describe = (field: string, plugin = "statusline@cc-mods") => $.config.describe({ key: `${plugin}.${field}`, label: field, isHidden: false, provider: { plugin, tier: "user" } });
+    const describe = (field: string, plugin = "cockpit@cc-mods") => $.config.describe({ key: `${plugin}.${field}`, label: field, isHidden: false, provider: { plugin, tier: "user" } });
     expect(await describe("layout")).toMatchObject({ isHidden: true });
     expect(await describe("merge_costs")).toMatchObject({ isHidden: false });
     expect(await describe("layout", "otherplugin")).toMatchObject({ isHidden: false });
@@ -1720,10 +1720,10 @@ describe("statusline", () => {
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
-      written.push([e.key.replace("statusline.", ""), e.value]);
+      written.push([e.key.replace("cockpit.", ""), e.value]);
       return { value: e.value };
     });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     await ui.pointer({ type: "down", x: 2, y: from, button: "left", in: list });
     await ui.pointer({ type: "move", x: 2, y: to, button: "left", in: list });
     await ui.pointer({ type: "up", x: 2, y: to, button: "left", in: list });
@@ -1818,7 +1818,7 @@ describe("statusline", () => {
   });
 
   test("the order pane lists the lines around the prompt marker and each row's tags under its marker, hidden ones after theirs", { options: { layout: "cache,model,limit_5h,context,turns,tokens;changes,spacer,folders,branch,worktree,pr,review,comments,sync,checks;prompt;fresh;compact;forecast;hidden;limit_7d,conflict", compact_hint: false } }, async ($, on) => {
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
     expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "forecast", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 4 more" } });
@@ -1838,7 +1838,7 @@ describe("statusline", () => {
     [true, ["tokens"], { tokens: "total costs" }],
   ] as const) {
     test(`the order pane lists ${items.length} cost tags with merge_costs ${merged}`, { options: { ...PINNED, merge_costs: merged } }, async ($, on) => {
-      const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+      const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
       expect(tags).toMatchObject({ labels });
       const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
@@ -1860,7 +1860,7 @@ describe("statusline", () => {
     ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "forecast"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
-      const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+      const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
       expect(await clientProps("lines")).toMatchObject({ items: [...lines, "hidden", "spacer", "row"] });
       expect(await clientProps("tags")).toMatchObject({ items: [...tags, "hidden", "spacer", "gap-1", "gap-2", "gap-3"] });
@@ -1879,7 +1879,7 @@ describe("statusline", () => {
     // Outside a repository the git row holds the folder alone.
     on("process.run", () => ({ value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const above = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const below = await mountHint($);
     // A line spelled: a blank one as "_", a row as "row".
     const lines = async (ui: { drawn: () => Promise<unknown> }) => {
@@ -1919,7 +1919,7 @@ describe("statusline", () => {
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     for (let i = 0; i < 50 && !(await ui.find({ type: "Box", text: "+3 -1 ~1" })); i++) await settle();
     // The commits ahead (↑2) are hidden.
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(spelled);
@@ -1930,10 +1930,10 @@ describe("statusline", () => {
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
-      written.push([e.key.replace("statusline.", ""), e.value]);
+      written.push([e.key.replace("cockpit.", ""), e.value]);
       return { value: e.value };
     });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-order", props: { title: "Statusline order", isFocused: true, bodyColumns: 16, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 16, placement: "dock", ...SITE } });
     await ui.resize({ columns: 16, rows: 30, in: "tags" });
     const lines = (await ui.findAll({ type: "Text", in: "tags" })).map((t) => flat(t));
     // "commits ahead and behind" in 14 columns after its handle: two lines, each cut at the edge, never wrapped again.
@@ -1994,14 +1994,14 @@ describe("statusline", () => {
     const other: ConfigRow = { ...configRow("colors", ""), key: "otherplugin.colors", provider: { plugin: "otherplugin", tier: "user" } };
     on("config.list", () => ({ value: [other, configRow("colors", typeof options.colors === "string" ? options.colors : ""), configRow("gradients", options.gradients !== false)] }));
     on("config.set", (_$, e) => {
-      written.push([e.key.replace("statusline.", ""), e.value]);
+      written.push([e.key.replace("cockpit.", ""), e.value]);
       return { value: e.value };
     });
     on("ui.toast", (_$, e) => {
       toasts.push(e.text);
       return { value: undefined };
     });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     await act(ui);
     await ui.unmount();
     return { written, toasts };
@@ -2016,7 +2016,7 @@ describe("statusline", () => {
 
   test("keeps a colour's swatch and field whole in a narrow pane, its label wrapping between them", async ($, on) => {
     on("config.list", () => ({ value: [] }));
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 24, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 24, placement: "dock", ...SITE } });
     const boxes = await ui.findAll({ type: "Box" });
     // A field is a leaf with no children of its own, so the children are read by their props alone.
     const hasProps = (node: unknown): node is FoundElement => typeof node === "object" && node !== null && "props" in node;
@@ -2032,18 +2032,18 @@ describe("statusline", () => {
 
   test("writes to an installed copy's rows, named for its marketplace", async ($, on) => {
     const written: string[] = [];
-    const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `statusline@cc-mods.${field}`, provider: { plugin: "statusline@cc-mods", tier: "user" } });
+    const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `cockpit@cc-mods.${field}`, provider: { plugin: "cockpit@cc-mods", tier: "user" } });
     const other: ConfigRow = { ...configRow("gradients", true), key: "otherplugin.gradients", provider: { plugin: "otherplugin", tier: "user" } };
     on("config.list", () => ({ value: [other, installed("colors", ""), installed("gradients", true)] }));
     on("config.set", (_$, e) => {
       written.push(e.key);
       return { value: e.value };
     });
-    const ui = await $.ui.mount({ plugin: "statusline", surface: "terminal", component: "Pane", requestId: "statusline-colors", props: { title: "Statusline colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     await ui.press({ key: "gradients" });
     await ui.input({ key: "turns.from", text: "#123456" });
     await ui.unmount();
-    expect(written).toEqual(["statusline@cc-mods.gradients", "statusline@cc-mods.colors"]);
+    expect(written).toEqual(["cockpit@cc-mods.gradients", "cockpit@cc-mods.colors"]);
   });
 
   test("an empty field drops the colour from the colors option", { options: { colors: "pr.open=#000000,turns.to=#abcdef" } }, async ($, on) => {
@@ -2065,7 +2065,7 @@ describe("statusline", () => {
       await ui.input({ key: "turns.from", text: "blue" });
     });
     expect(written).toEqual([]);
-    expect(toasts).toEqual(["Statusline colours: blue is not a colour. Type six hex digits, as #22d3d8."]);
+    expect(toasts).toEqual(["Cockpit colours: blue is not a colour. Type six hex digits, as #22d3d8."]);
   });
 
   test("with gradients off the colours pane asks for a gradient's first colour only, and its button turns them on", { options: { gradients: false } }, async ($, on) => {
@@ -2081,6 +2081,6 @@ describe("statusline", () => {
     expect(written).toEqual([["gradients", true]]);
   });
 
-  console.log(`statusline tests in random order, seed ${seed}`);
+  console.log(`cockpit tests in random order, seed ${seed}`);
   for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
 });

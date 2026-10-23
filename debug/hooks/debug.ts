@@ -11,10 +11,10 @@ const PANES = [
   { option: "pr_trace", command: "debug:pr-trace", id: PR_TRACE_PANE, title: "PR trace", name: "PR trace pane" },
   { option: "handoff_trace", command: "debug:handoff-trace", id: HANDOFF_TRACE_PANE, title: "Handoff trace", name: "Handoff trace pane" },
 ] as const;
-// The statusline mod's PR fetch log; its owner writes it, any plugin may read it.
-const PR_TRACE = { plugin: "statusline", key: "prTrace" } as const;
-// Why the statusline mod's handoff did or did not run while its window was open.
-const HANDOFF_TRACE = { plugin: "statusline", key: "handoffTrace" } as const;
+// The cockpit mod's PR fetch log; its owner writes it, any plugin may read it.
+const PR_TRACE = { plugin: "cockpit", key: "prTrace" } as const;
+// Why the cockpit mod's handoff did or did not run while its window was open.
+const HANDOFF_TRACE = { plugin: "cockpit", key: "handoffTrace" } as const;
 const COLS = 32;
 const ROWS = 6;
 const PX = 64;
@@ -65,7 +65,7 @@ function wrap(text: string, width: number): string[] {
   return [...rows, row];
 }
 
-// The newest rows of a statusline trace that fit the pane, a long line wrapped to the pane's width, or what to say while
+// The newest rows of a cockpit trace that fit the pane, a long line wrapped to the pane's width, or what to say while
 // it has none. The pane wraps the lines itself, so it counts the rows they take.
 function traceLines({ Box, Text }: Elements["terminal"], e: { props: { bodyColumns: number }; viewport?: { rows: number } }, value: unknown, empty: string) {
   const rows = (Array.isArray(value) ? value.map(String) : []).flatMap((line) => wrap(line, e.props.bodyColumns));

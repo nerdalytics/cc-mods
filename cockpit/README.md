@@ -1,6 +1,6 @@
-# Statusline
+# Cockpit
 
-A status line for Claude Code that updates while you work. It draws two rows around the prompt. It also ships a handoff skill that runs before the prompt cache goes cold.
+Gauges for Claude Code that update while you work. It draws two rows around the prompt. It also ships a handoff skill that runs before the prompt cache goes cold.
 
 <img width="1041" height="45" alt="The git row with the project folder, current folder and branch, above the status row with the model, the 7d and 5h limits, the context, prompts, cost and cache" src="https://github.com/user-attachments/assets/a6a36fa3-bc46-4ebc-b493-13feb520410e" />
 
@@ -9,7 +9,7 @@ A status line for Claude Code that updates while you work. It draws two rows aro
 In Claude Code:
 
 ```text
-/plugin install statusline --marketplace nerdalytics/cc-mods
+/plugin install cockpit --marketplace nerdalytics/cc-mods
 ```
 
 If the `cc-mods` marketplace is not added yet, the command adds it first. [Options](#options) explains each option, and `/config` changes them.
@@ -23,14 +23,14 @@ In Claude Code:
 ```text
 /plugin marketplace update cc-mods
 /reload-plugins
-/plugin uninstall statusline@cc-mods
+/plugin uninstall cockpit@cc-mods
 ```
 
 The first command fetches the marketplace and says which plugins it bumped, and `/reload-plugins` loads them into the running session, so you don't need a new one. The last command removes the mod. [Upgrading](#upgrading) lists what changed in the options between versions.
 
 ## What it shows
 
-The mod draws rows of tags around the prompt, and under it a line for each of the cold cache, the smart zone and the limit forecast when it applies. By default a git row sits above the prompt and a status row under it. Any tag can go in any row, and you can add rows. The `layout` option holds the lines, their side of the prompt and each row's tags, and [`/statusline:order`](#order-and-hide) writes it by dragging. Gaps set a fixed distance between a row's tags, and spacers push them towards the left and right edges. See [Spacing and alignment](#spacing-and-alignment).
+The mod draws rows of tags around the prompt, and under it a line for each of the cold cache, the smart zone and the limit forecast when it applies. By default a git row sits above the prompt and a status row under it. Any tag can go in any row, and you can add rows. The `layout` option holds the lines, their side of the prompt and each row's tags, and [`/cockpit:order`](#order-and-hide) writes it by dragging. Gaps set a fixed distance between a row's tags, and spacers push them towards the left and right edges. See [Spacing and alignment](#spacing-and-alignment).
 
 ### Status row
 
@@ -79,7 +79,7 @@ Outside a repository the row shows only the folders. Within a row, the git parts
 
 ### Clicking and hovering
 
-A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on indigo between two half blocks, such as `Compact`, is a button, and so is the cross on slate after it. These are the default colours, and [`/statusline:colors`](#colours) changes them.
+A value on a grey background shows more when you hover over it. A value on no background has nothing more to show. A label on indigo between two half blocks, such as `Compact`, is a button, and so is the cross on slate after it. These are the default colours, and [`/cockpit:colors`](#colours) changes them.
 
 The git row is made of links, and a click opens them the way your terminal opens any link:
 
@@ -99,7 +99,7 @@ Costs are estimates. The mod prices each request in the session's transcripts wi
 
 ## Handoff
 
-`/statusline:handoff` writes `HANDOFF-<YYYY-MM-DD-HHMM>.md` at the project's root. The file summarises the conversation so the next session can start from it. If you pass an argument, it names what the next session will focus on, and the summary covers that.
+`/cockpit:handoff` writes `HANDOFF-<YYYY-MM-DD-HHMM>.md` at the project's root. The file summarises the conversation so the next session can start from it. If you pass an argument, it names what the next session will focus on, and the summary covers that.
 
 With the `auto_handoff` option on, the mod runs the handoff itself. It waits until the session is idle and the prompt cache is five minutes from expiring, so the handoff still reads the cache at the cheap rate. Unless `"idleCompaction": false` is in `settings.json`, it runs ten minutes before instead. See [Idle compaction](#idle-compaction).
 
@@ -155,7 +155,7 @@ The prices are the API's multipliers from the [pricing page](https://platform.cl
 
 ## Order and hide
 
-`/statusline:order` opens a pane with two lists. Press a row, drag it, release to drop it. In a narrow pane a long label wraps under itself, and a press anywhere on it picks it up.
+`/cockpit:order` opens a pane with two lists. Press a row, drag it, release to drop it. In a narrow pane a long label wraps under itself, and a press anywhere on it picks it up.
 
 - **Lines.** The rows, such as `▤ row 1: folders, branch, worktree and 7 more`, and the lines of the cold-cache fresh start, the smart-zone compaction and the limit forecast sit around the `━━ your prompt ━━` marker, drawn in bold cyan. A line above the marker draws above your prompt. A line below it draws under your prompt, below the hint line. Lines on one side stack in the order listed, so the offer lines can sit above, under, or between the rows.
 - **Tags.** The tags list shows every tag under the marker of the row it draws in, such as `━━ row 1 ━━`. Within a row the tags draw left to right in the order listed. Drag a tag under another row's marker to move it there, so the folders can sit beside the model. With `merge_costs` off the costs are two tags, `main session costs` and `subagent costs`. With it on they are one, `total costs`.
@@ -169,7 +169,7 @@ A drop writes `layout`. Moving an offer across the hidden marker also writes its
 
 ## Colours
 
-`/statusline:colors` opens a pane with a field for every colour the mod draws, grouped by what it colours, each after a swatch of how it draws now. That lets you pick colours by what they mean, for example a context bar whose three colours you can tell apart.
+`/cockpit:colors` opens a pane with a field for every colour the mod draws, grouped by what it colours, each after a swatch of how it draws now. That lets you pick colours by what they mean, for example a context bar whose three colours you can tell apart.
 
 - Type a colour as six hex digits, such as `#22d3d8`, with or without the `#`, and press Enter to save it. An empty field, or the default typed out, goes back to the default. A colour that does not read writes nothing and says so.
 - A gradient has two fields, its light end and its dark end. The badge of a limit and the mark of a chip sit on the dark end.
@@ -197,30 +197,31 @@ A row starts at the left edge unless it has spacers. Inside a tag the spacing st
 
 A tag that has nothing to show, such as the costs before the first token count, folds away with the gaps around it, and its spacers meet. Between two tags that draw, the widest of the gaps it stood between stays, so `turns,gap-1,tokens,gap-1,cache` with no costs yet leaves one column between turns and cache. Next to a spacer or the edge of the row, none stays. Gaps after the last tag of a row are dropped. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache, the smart zone and the limit forecast always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
 
-Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/statusline:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
+Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/cockpit:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
 
 ## Upgrading
 
 The mod no longer reads a removed option, so its value is not carried over to what replaced it.
 
-- **0.22.0** replaces the git row's and the status row's options with `layout`: `row_git`, `row_git_position`, `git_order`, the `git_<name>` toggles, `row_status`, `row_status_position`, `segment_order`, the `segment_<name>` toggles, `line_order`, and the offers' `fresh_start_position`, `compact_hint_position` and `limit_forecast_position`. `layout` starts with the arrangement earlier versions drew by default, the git row above the prompt and the status row and the offers under it. If you had changed any of those, set them again with `/statusline:order`. The offers' `fresh_start`, `compact_hint` and `limit_forecast` toggles stay.
-- **0.19.0** replaces the `density` option with gaps. An order saved before 0.19.0 has no gaps, so its tags touch until you drag gaps in with `/statusline:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
-- **0.18.0** splits the `limits` tag into `limit_7d` and `limit_5h`, and the git row's `path` into `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
-- **0.17.0** replaces the `row_git_align` and `row_status_align` options with spacers. If you had a row set to `right`, drag a spacer to the top of that row's list.
+- **1.0.0** renames the mod from statusline (last released as 0.22.3) to cockpit and starts its versions over, as it does more than draw a status line. Claude Code sees a new plugin, so install `cockpit` and run `/plugin uninstall statusline@cc-mods`, which also deletes the old options. The options start from their defaults: set them again in `/config`, `/cockpit:order` and `/cockpit:colors`. The commands are now `/cockpit:order`, `/cockpit:colors` and `/cockpit:handoff`.
+- **statusline 0.22.0** replaces the git row's and the status row's options with `layout`: `row_git`, `row_git_position`, `git_order`, the `git_<name>` toggles, `row_status`, `row_status_position`, `segment_order`, the `segment_<name>` toggles, `line_order`, and the offers' `fresh_start_position`, `compact_hint_position` and `limit_forecast_position`. `layout` starts with the arrangement earlier versions drew by default, the git row above the prompt and the status row and the offers under it. If you had changed any of those, set them again with `/cockpit:order`. The offers' `fresh_start`, `compact_hint` and `limit_forecast` toggles stay.
+- **statusline 0.19.0** replaces the `density` option with gaps. An order saved before 0.19.0 has no gaps, so its tags touch until you drag gaps in with `/cockpit:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
+- **statusline 0.18.0** splits the `limits` tag into `limit_7d` and `limit_5h`, and the git row's `path` into `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
+- **statusline 0.17.0** replaces the `row_git_align` and `row_status_align` options with spacers. If you had a row set to `right`, drag a spacer to the top of that row's list.
 
 ## Options
 
-<img width="2008" height="1050" alt="Statusline prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
+<img width="2008" height="1050" alt="Cockpit prefixed config options" src="https://github.com/user-attachments/assets/41627983-d2ff-4b84-affc-0892ac008550" />
 
-Change these in `/config`, under the plugin. Each title there starts with `Statusline:`.
+Change these in `/config`, under the plugin. Each title there starts with `Cockpit:`.
 
 | Option | Key | Default | What it does |
 |---|---|---|---|
-| Layout | `layout` | folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache;fresh;compact;forecast | The lines around the prompt, top to bottom, split by `;`. A line is `prompt`, `spacer` for a blank line, `fresh`, `compact` or `forecast` for an offer line, or a row. Lines before `prompt` draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, with `spacer` where a spacer stands and `gap-1`, `gap-2` or `gap-3` where a gap does. Any tag can go in any row, and an empty row keeps its place until you drop tags into it. The tags after a `hidden` line are switched off. A tag left out goes after the one before it in the default order, a `prompt` left out after the first row, an offer left out last, and the mod ignores an unknown name. See [Spacing and alignment](#spacing-and-alignment). The `/config` menu does not list it: `/statusline:order` writes it, and `/config statusline@cc-mods.layout=…` sets it by hand. |
+| Layout | `layout` | folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache;fresh;compact;forecast | The lines around the prompt, top to bottom, split by `;`. A line is `prompt`, `spacer` for a blank line, `fresh`, `compact` or `forecast` for an offer line, or a row. Lines before `prompt` draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, with `spacer` where a spacer stands and `gap-1`, `gap-2` or `gap-3` where a gap does. Any tag can go in any row, and an empty row keeps its place until you drop tags into it. The tags after a `hidden` line are switched off. A tag left out goes after the one before it in the default order, a `prompt` left out after the first row, an offer left out last, and the mod ignores an unknown name. See [Spacing and alignment](#spacing-and-alignment). The `/config` menu does not list it: `/cockpit:order` writes it, and `/config cockpit@cc-mods.layout=…` sets it by hand. |
 | Costs › merge | `merge_costs` | false | Draws one `Σ` tag with the cost of the main conversation and its subagents together. Hovering it shows their tokens added up. The bolt tag no longer appears. Before a subagent has run, nothing changes. |
 | Colours › gradients | `gradients` | true | Blends text and bars from one colour to the next, and sweeps the model's name. Set to false, each draws in one colour, as described under [Colours](#colours). |
-| Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default, and the mod ignores an unknown name or a colour that does not read. `/statusline:colors` writes it. |
-| Hand off before the cache goes cold | `auto_handoff` | true | Runs `/statusline:handoff` as described under [Handoff](#handoff). |
+| Colours | `colors` | | Your colours, as a comma list of `name=#rrggbb`, such as `turns.from=#60a5fa,pr.open=#facc15`. A name left out keeps its default, and the mod ignores an unknown name or a colour that does not read. `/cockpit:colors` writes it. |
+| Hand off before the cache goes cold | `auto_handoff` | true | Runs `/cockpit:handoff` as described under [Handoff](#handoff). |
 | Keep the cache warm (pings) | `keep_warm_pings` | 0 | The most pings sent between two of your prompts, 0 for none, as described under [Keeping the cache warm](#keeping-the-cache-warm). The handoff runs after the last one, on a five-minute cache too. |
 | Offer a fresh start from the handoff | `fresh_start` | true | Shows the line with the `Start fresh` button once a handoff exists and a fresh start costs less than the next message here. |
 | Compact when the smart zone is nearly used | `auto_compact` | false | Runs `/compact` as described under [Status row](#status-row). |
@@ -241,16 +242,16 @@ Change these in `/config`, under the plugin. Each title there starts with `Statu
 
 Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact`, `settings.read` and, as of Claude Code 2.1.308, every `classic.*` event. Only a plugin the organization lists in its managed settings runs hooks on them.
 
-The statusline mod hooks one of them, `session.compact`. It sees a `/clear` through `command.run`, which passes to it. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
+The cockpit mod hooks one of them, `session.compact`. It sees a `/clear` through `command.run`, which passes to it. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
 
 ```text
-statusline @ cc-mods (user)
+cockpit @ cc-mods (user)
 Its hooks on session.compact do not run here: where an organization manages Claude Code, these events pass over the plugins you install
 ```
 
 The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one.
 
-To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `statusline@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
+To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `cockpit@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
 
 ## What it reads and sends
 
