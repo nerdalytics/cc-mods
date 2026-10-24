@@ -487,7 +487,15 @@ let compactedAt = 0;
 // without them a reload leaves no prompt of the person's behind it, and the handoff waits for one.
 const remember = ($: EngineInterface) => void $.state.set(STRETCH, { promptAt, handoffAt, compactedAt });
 // The main conversation is being compacted, by whoever started it; the offer to compact is not drawn meanwhile.
+// Each sign of it is kept apart, so the spinner saying something else does not end a /compact still running.
 let compacting = false;
+const compactingBy = { command: false, spinner: false };
+function setCompacting($: EngineInterface, by: keyof typeof compactingBy, value: boolean) {
+  if (compactingBy[by] === value) return;
+  compactingBy[by] = value;
+  compacting = compactingBy.command || compactingBy.spinner;
+  $.ui.invalidate("ui.render");
+}
 // How long a dismissed offer stays hidden, in ms; 0 for the rest of the session.
 let dismissFor = 0;
 // The branch the shown PR belongs to and when it was fetched.
@@ -664,22 +672,25 @@ export const register: Register = (on, options) => {
     return next(e);
   });
 
-  // The offer to compact leaves while a compaction runs and returns if it ends without one: `next` rejects or answers a
-  // skip when the person cancels it, and its signal aborts when the interrupt cuts the dispatch. A precompute installs
-  // nothing and a subagent's compaction is not the conversation's, so neither counts.
-  on("session.compact", async ($, e, next) => {
-    if (e.agentId || e.trigger === "precompute") return next(e);
-    const set = (value: boolean) => {
-      compacting = value;
-      $.ui.invalidate("ui.render");
-    };
-    set(true);
-    next.signal.addEventListener("abort", () => set(false), { once: true });
+  // The offer to compact leaves while a compaction runs and returns if it ends without one. Not on session.compact:
+  // where an organization manages Claude Code, the built-in sec-default plugin sends it past the plugins a person
+  // installs. A /compact, the person's or the mod's own button, settles its command.run once the compaction ends or is
+  // cancelled, and the signal aborts when the interrupt cuts the dispatch. Claude Code's own auto and idle compaction
+  // run no command; the main conversation's spinner says them, as a subagent's does not.
+  on("command.run", { command: "compact" }, async ($, e, next) => {
+    setCompacting($, "command", true);
+    next.signal.addEventListener("abort", () => setCompacting($, "command", false), { once: true });
     try {
       return await next(e);
     } finally {
-      set(false);
+      setCompacting($, "command", false);
     }
+  });
+  // shortcut: matches Claude Code's own spinner text, which 2.1.310 draws in English whatever the language setting; if a
+  // release translates or rewords it, auto and idle compaction show the offer again, and this needs the new text.
+  on("ui.render", { component: "Spinner", requestId: "main" }, ($, e, next) => {
+    setCompacting($, "spinner", e.props.message?.startsWith("Compacting conversation") === true);
+    return next(e);
   });
 
   on("prompt.submit", async ($, e, next) => {

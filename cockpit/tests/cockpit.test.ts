@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, ConfigRow, ConfigValue, On, SessionCompactResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
+import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test as kitTest, type TestRest } from "claude-code/testing";
 
 // The host has a console too, which the API's globals leave out.
@@ -847,11 +847,12 @@ describe("cockpit", () => {
     await drafting.unmount();
   });
 
-  for (const [title, end] of [
-    ["answers a skip", (finish: (r: SessionCompactResult) => void) => finish({ skip: "cancelled" })],
-    ["rejects", (_finish: (r: SessionCompactResult) => void, fail: (e: Error) => void) => fail(new Error("cancelled"))],
-  ] as const)
-  test(`hides the compaction offer while one runs, and draws it again when it ends without compacting: ${title}`, async ($, on) => {
+  // A compaction runs as a /compact, the person's or the mod's own, or as Claude Code's own, said by the main spinner.
+  // Each start returns how it ends without compacting.
+  const COMPACT = { command: "compact", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 80 } } as const;
+  const SPINNER = { word: "Sauteing", message: "Compacting conversation", suffix: "\u2026", mode: "requesting" } as const;
+  // A session nearly out of its smart zone, its compaction offer drawn; `offer` finds the offer's button.
+  const offered = async ($: Engine, on: On) => {
     stubHint(on);
     const clock = mock.clock(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -864,9 +865,7 @@ describe("cockpit", () => {
     on("process.spawn", async function* () {
       return { value: { code: 0, signal: null } };
     });
-    let finish!: (r: SessionCompactResult) => void;
-    let fail!: (e: Error) => void;
-    on("session.compact", () => new Promise<SessionCompactResult>((resolve, reject) => ((finish = resolve), (fail = reject))));
+    on("ui.render", { component: "Spinner" }, ($, e) => $.ui.resolve(e).Text({ children: e.props.message ?? e.props.word }));
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
@@ -876,13 +875,60 @@ describe("cockpit", () => {
       await settle();
     }
     expect(await offer()).toBeDefined();
-    const running = $.session.compact({ trigger: "manual", messages: [{ role: "user", text: "hi", toolUses: [] }] }).catch(() => undefined);
+    return { ui, offer };
+  };
+  // The /compact beneath the mod, held until the test ends it.
+  type Held = { finish: (r: CommandRunResult) => void; fail: (e: Error) => void };
+  for (const [title, start] of [
+    ["a /compact that ends", ($: Engine, held: () => Held) => {
+      const running = $.command.run(COMPACT);
+      return () => (held().finish({ text: "" }), running);
+    }],
+    ["a /compact that rejects", ($: Engine, held: () => Held) => {
+      const running = $.command.run(COMPACT).catch(() => undefined);
+      return () => (held().fail(new Error("cancelled")), running);
+    }],
+    ["Claude Code's own, through the main spinner", async ($: Engine) => {
+      const spinner = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Spinner", requestId: "main", props: SPINNER });
+      return () => spinner.redraw({ ...SPINNER, message: null });
+    }],
+  ] as const)
+  test(`hides the compaction offer while one runs, and draws it again when it ends without compacting: ${title}`, async ($, on) => {
+    let held: Held | undefined;
+    on("command.run", () => new Promise<CommandRunResult>((finish, fail) => (held = { finish, fail })));
+    const { ui, offer } = await offered($, on);
+    const end = await start($, () => must(held, "the held /compact"));
     await settle();
     expect(await offer()).toBeUndefined();
-    end(finish, fail);
+    await end();
+    await settle();
+    expect(await offer()).toBeDefined();
+    await ui.unmount();
+  });
+
+  // The spinner says other things while a /compact runs (`Running PreCompact hooks…`): it clears only what it set.
+  test("keeps the compaction offer hidden through a /compact while the spinner says something else", async ($, on) => {
+    let held: Held | undefined;
+    on("command.run", () => new Promise<CommandRunResult>((finish, fail) => (held = { finish, fail })));
+    const { ui, offer } = await offered($, on);
+    const running = $.command.run(COMPACT);
+    const spinner = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Spinner", requestId: "main", props: { ...SPINNER, message: "Running PreCompact hooks\u2026" } });
+    await settle();
+    expect(await offer()).toBeUndefined();
+    must(held, "the held /compact").finish({ text: "" });
     await running;
     await settle();
     expect(await offer()).toBeDefined();
+    await spinner.unmount();
+    await ui.unmount();
+  });
+
+  test("keeps the compaction offer while a subagent's spinner says it compacts", async ($, on) => {
+    const { ui, offer } = await offered($, on);
+    const spinner = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Spinner", requestId: "agent-1", props: SPINNER });
+    await settle();
+    expect(await offer()).toBeDefined();
+    await spinner.unmount();
     await ui.unmount();
   });
 

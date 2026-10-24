@@ -240,18 +240,9 @@ Change these in `/config`, under the plugin. Each title there starts with `Cockp
 
 ## Where an organization manages Claude Code
 
-Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact`, `settings.read` and, as of Claude Code 2.1.308, every `classic.*` event. Only a plugin the organization lists in its managed settings runs hooks on them.
+Where an organization manages Claude Code, it passes these events over the plugins you install yourself: `prompt.section`, `prompt.context`, `prompt.attachment`, `prompt.compose`, `skill.prompt`, `attribution.text`, `session.compact`, `settings.read`, `session.append` for attachment, hook-context and compaction rows and, as of Claude Code 2.1.308, every `classic.*` event. Only a plugin the organization lists in its managed settings runs hooks on them.
 
-The cockpit mod hooks one of them, `session.compact`. It sees a `/clear` through `command.run`, which passes to it. When Claude Code reports that condition, `/plugin` shows this on its Errors tab:
-
-```text
-cockpit @ cc-mods (user)
-Its hooks on session.compact do not run here: where an organization manages Claude Code, these events pass over the plugins you install
-```
-
-The mod stays active. That hook only hides the `Compact` line while a compaction runs, so without it the line stays on screen during one.
-
-To run the hook, an administrator installs the mod through managed settings under its exact `plugin@marketplace` id, `cockpit@cc-mods`. An organization should vet the mod first. [What it reads and sends](#what-it-reads-and-sends) lists everything the mod reads, runs and fetches.
+The cockpit mod hooks none of them, so Claude Code has none of its hooks to skip there. It sees a `/clear` and a `/compact` through `command.run`. For a compaction Claude Code starts on its own, it watches the main conversation's spinner, which reads `Compacting conversation` while one runs. That text is matched as Claude Code 2.1.310 draws it: in English, whatever the `language` setting. If a release changes it, the `Compact` line stays on screen during those compactions until the mod is updated.
 
 ## What it reads and sends
 
