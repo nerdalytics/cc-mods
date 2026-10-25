@@ -125,7 +125,7 @@
     "explain_row": {
       "type": "boolean",
       "title": "Cockpit: Explanation line",
-      "description": "A line under the prompt that holds the run-out warning. It takes a line even when it shows nothing, and a long warning wraps onto further lines. Off, it draws nothing. Also switched by dragging it in /cockpit:order. true (default) / false",
+      "description": "The explanation line, under the prompt by default, that holds the run-out warning. It takes a line even when it shows nothing, and a long warning wraps onto further lines. Off, it draws nothing. Also switched by dragging it in /cockpit:order. true (default) / false",
       "default": true
     },
     "turn_rate": {

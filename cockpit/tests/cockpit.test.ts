@@ -112,6 +112,16 @@ function stubHint(on: On): void {
 function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "PromptHint">> {
   return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
+// A session started with these limits, its last response a second old. By default the 5h is at 70% with 2 hours to its
+// reset, 3 hours into its 5: at that pace it runs out in 1h17m, 43m before it resets.
+async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[]): Promise<void> {
+  const now = Date.now();
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: rateLimits ?? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
+  on("session.model", () => ({ value: "claude-opus-5-5" }));
+  on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+  await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+}
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
@@ -699,14 +709,20 @@ describe("cockpit", () => {
   // forecast is no longer a line's name: a saved layout's line of it is an empty row, and the explanation line goes last.
   test("draws the explanation line last under the prompt for a saved layout that names forecast", { options: { layout: `forecast;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
     stubHint(on);
-    const now = Date.now();
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    on("session.root", () => ({ value: "/work" }));
+    on("session.cwd", () => ({ value: "/work" }));
+    // Outside a repository the git row holds the folder alone.
+    on("process.run", () => ({ value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } }));
+    await startWithLimits($, on);
     const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
-    expect(await above.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
+    // A line spelled: a row as "row", anything else as its text.
+    const lines = async () => {
+      const drawn = await above.drawn();
+      return leaves(isDrawn(drawn) ? drawn.children : []).map((line) => (line.props.flexWrap === "wrap" ? "row" : flat(line)));
+    };
+    for (let i = 0; i < 50 && !(await lines()).includes("row"); i++) await settle();
+    // The line that named forecast is an empty row, which draws nothing: above the prompt only the git row draws.
+    expect(await lines()).toEqual(["row"]);
     await above.unmount();
     const below = await mountHint($);
     const drawn = await below.drawn();
@@ -722,14 +738,8 @@ describe("cockpit", () => {
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
-    const now = Date.now();
     // With explain_row on nothing is shown: no limit at all. Off, a 5h that runs out early has no place to warn.
-    const rateLimits = line === undefined ? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] : [];
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    await startWithLimits($, on, line === undefined ? undefined : []);
     const below = await mountHint($);
     const explain = await below.find({ type: "Box", key: "explain" });
     expect(explain?.text).toBe(line);
@@ -742,12 +752,7 @@ describe("cockpit", () => {
 
   test("wraps a run-out warning wider than the window between words, the explanation line growing for it", async ($, on) => {
     stubHint(on);
-    const now = Date.now();
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    await startWithLimits($, on);
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
     expect(explain.props.height).toBeUndefined();
@@ -762,12 +767,7 @@ describe("cockpit", () => {
 
   test("draws the explanation line above the prompt when the layout puts it there", { options: { layout: `explain;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
     stubHint(on);
-    const now = Date.now();
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 }}));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    await startWithLimits($, on);
     const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: /at this pace/ })).toBeDefined();
     await above.unmount();
@@ -819,20 +819,10 @@ describe("cockpit", () => {
   test(`warns of the limit that runs out sooner, with the 5h at ${five}% and the 7d at 99%`, async ($, on) => {
     stubHint(on);
     const now = Date.now();
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({
-      value: {
-        startedAt: 0,
-        context: { window: 1_000_000 },
-        rateLimits: [
-          { kind: "five_hour", percentUsed: five, resetsAt: new Date(now + 120 * 60_000).toISOString() },
-          { kind: "seven_day", percentUsed: 99, resetsAt: new Date(now + 86_400_000).toISOString() },
-        ],
-      },
-    }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    await startWithLimits($, on, [
+      { kind: "five_hour", percentUsed: five, resetsAt: new Date(now + 120 * 60_000).toISOString() },
+      { kind: "seven_day", percentUsed: 99, resetsAt: new Date(now + 86_400_000).toISOString() },
+    ]);
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
     expect(explain.text).toMatch(shown);

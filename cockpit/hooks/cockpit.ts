@@ -811,7 +811,7 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
       : [await explainLine($, ui, ordering)];
-    const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER || name === "explain" ? undefined : `${LABELS[name]}: shows when it applies`;
+    const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER ? undefined : `${LABELS[name]}: shows when it applies`;
     if (ordering && empty && !found.some((line) => line !== undefined)) found.push(namingLine(ui, empty));
     for (const line of found) {
       if (line === undefined) continue;
