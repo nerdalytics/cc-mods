@@ -82,6 +82,12 @@
       "default": 0,
       "min": 0
     },
+    "limit_style": {
+      "type": "string",
+      "title": "Cockpit: Limit tags › style",
+      "description": "How the 7d and 5h tags draw. classic: the time left in the top half of the bar, the usage left in the bottom. lanes: the top lane the par left, the bottom lane the usage left, the gap between them in the pace colours. gauge: the percent used in the badge, the bar the pace, filling left of a centre pipe under pace and right of it over pace. notch: the usage as one lane, a notch where the par is. A pace needs a reset time, a response of this session from the last 10 minutes, and a tenth of the window gone. Any other value draws classic. classic (default) / lanes / gauge / notch",
+      "default": "classic"
+    },
     "limit_7d_length": {
       "type": "number",
       "title": "Cockpit: 7d bar › length (cells)",

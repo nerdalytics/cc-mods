@@ -112,14 +112,14 @@ function stubHint(on: On): void {
 function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "PromptHint">> {
   return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
-// A session started with these limits, its last response a second old. By default the 5h is at 70% with 2 hours to its
-// reset, 3 hours into its 5: at that pace it runs out in 1h17m, 43m before it resets.
-async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[]): Promise<void> {
+// A session started with these limits, its last response a second old, or `readAgoMs` old. By default the 5h is at 70%
+// with 2 hours to its reset, 3 hours into its 5: at that pace it runs out in 1h17m, 43m before it resets.
+async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[], readAgoMs = 1_000): Promise<void> {
   const now = Date.now();
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: rateLimits ?? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
   on("session.model", () => ({ value: "claude-opus-5-5" }));
-  on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+  on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - readAgoMs, version: 1 } }));
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
 }
 
@@ -476,6 +476,91 @@ describe("cockpit", () => {
     }
     await ui.unmount();
   });
+
+  // A limit_style the mod does not know draws the two lanes cockpit 1.1.0 drew: the reading above, in the same colours.
+  test("draws both limit tags as classic for a limit_style it does not know", { options: { limit_style: "fancy" } }, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    await startWithLimits($, on, [
+      { kind: "seven_day", percentUsed: 15, resetsAt: new Date(now + 217_728_000).toISOString() },
+      { kind: "five_hour", percentUsed: 72, resetsAt: new Date(now + 9_900_000).toISOString() },
+    ]);
+    const ui = await mountHint($);
+    const cells = elements(await ui.findAll({ type: "Text", text: "▀" }));
+    expect(litCells(cells)).toBe("BBUUU__BBTTT_____");
+    // The 7d's lanes from #c084fc to #643296, its fifth cell four sevenths of the way, as lerp truncates.
+    expect(cells[0]?.props).toMatchObject({ color: "#c084fc", backgroundColor: "#c084fc" });
+    expect(cells[4]?.props).toMatchObject({ color: "#373a48", backgroundColor: "#844eb9" });
+    expect(flat(elements(must(await ui.find({ type: "Box", key: "seven_day" }), "the 7d tag").children)[0])).toBe(" 7d ");
+    await ui.unmount();
+  });
+
+  // A 7d reading with `passed` of its window gone, and the 5h's alike.
+  const reading = (kind: "seven_day" | "five_hour", percentUsed: number, passed: number): SessionRateLimit => {
+    const windowMs = kind === "seven_day" ? 604_800_000 : 18_000_000;
+    return { kind, percentUsed, resetsAt: new Date(Date.now() + (1 - passed) * windowMs).toISOString() };
+  };
+  // A gauge tag as drawn: its badge's text, its bar glyph by glyph (█ a full cell, ▐ or ▌ the half on the pipe's side, a
+  // space an empty cell, │ the pipe), and each glyph's colour and background.
+  const gaugeOf = async (ui: { find: Mounted["find"] }, key: string) => {
+    const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key }), `the ${key} gauge`).children);
+    return { badge: flat(badge), bar: bar.map(flat).join(""), colors: bar.map(({ props }) => props.color), backgrounds: bar.map(({ props }) => props.backgroundColor) };
+  };
+
+  test("reads the limit and its percent used, rounded, in the gauge's badge", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 50.6, 1 / 3)]);
+    const ui = await mountHint($);
+    expect((await gaugeOf(ui, "seven_day")).badge).toBe(" 7d 51% ");
+    await ui.unmount();
+  });
+
+  test("draws half the length, rounded down, on each side of the gauge's pipe: 5 at the 5h's 10, 3 at the 7d's 7", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    // Too early in either window for a pace, so each side is blank.
+    await startWithLimits($, on, [reading("seven_day", 1, 0), reading("five_hour", 1, 0)]);
+    const ui = await mountHint($);
+    expect((await gaugeOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect((await gaugeOf(ui, "seven_day")).bar).toBe("   │   ");
+    await ui.unmount();
+  });
+
+  // On a 10-cell 7d gauge each side is 10 halves. 51% with a third gone is r 1.53, over pace: it runs out with 35% of the
+  // window to go, 3 halves right of the pipe, from amber towards red. 10% with 60% gone is r 0.17, under pace: 83% of
+  // the target unused, 8 halves left of the pipe, in slate.
+  for (const [title, used, passed, bar, colors] of [
+    ["fills the gauge's right side outward from the pipe over pace, amber turning red", 51, 1 / 3, "     │█▌   ", [[5, "#e5e7eb"], [6, "#fbbf24"], [7, "#f8a12c"]]],
+    ["fills the gauge's left side outward from the pipe under pace, in slate", 10, 0.6, " ████│     ", [[1, "#94a3b8"], [4, "#94a3b8"], [5, "#e5e7eb"]]],
+  ] as const)
+    test(title, { options: { limit_style: "gauge", limit_7d_length: 10 } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [reading("seven_day", used, passed)]);
+      const ui = await mountHint($);
+      const gauge = await gaugeOf(ui, "seven_day");
+      expect(gauge.bar).toBe(bar);
+      // The pipe, at 5, in the par colour.
+      expect(colors.map(([i]) => [i, gauge.colors[i]])).toEqual(colors);
+      await ui.unmount();
+    });
+
+  // 51% with a third of the 7d gone is over pace with a usable reading; each of these takes the pace away.
+  for (const [title, limit, readAgoMs] of [
+    ["draws a gauge with no reset time without a pace", { kind: "seven_day", percentUsed: 51 }, 1_000],
+    ["draws a gauge without a pace when this session's last response is 11 minutes old", reading("seven_day", 51, 1 / 3), 11 * 60_000],
+    ["draws a gauge without a pace while less than a tenth of the window has passed", reading("seven_day", 51, 0.05), 1_000],
+  ] satisfies [string, SessionRateLimit, number][])
+    test(title, { options: { limit_style: "gauge", limit_7d_length: 10 } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [limit], readAgoMs);
+      const ui = await mountHint($);
+      const gauge = await gaugeOf(ui, "seven_day");
+      expect(gauge.badge).toBe(" 7d 51% ");
+      expect(gauge.bar).toBe("     │     ");
+      // Every cell grey, the pipe dim: no pace colour anywhere.
+      expect(gauge.backgrounds).toEqual(Array(11).fill("#373a48"));
+      expect(gauge.colors).toEqual([...Array(5).fill("#373a48"), "#6b7280", ...Array(5).fill("#373a48")]);
+      await ui.unmount();
+    });
 
   // The 7d, 5h and context bars, each with a value to show while hovered.
   const mountBars = async ($: Engine, on: On) => {
@@ -1490,6 +1575,22 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // No response has come in this session, so a real reading would be stale; the samples count as fresh.
+  test("draws the 5h sample's pace on a gauge while the order pane shows", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    mock.clock(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "five_hour" })); i++) await settle();
+    // The sample is 20% used halfway through the window: r 0.4, 60% of the target unused, 6 of 10 halves.
+    expect((await gaugeOf(ui, "five_hour")).bar).toBe("  ███│     ");
+    await ui.unmount();
+  });
+
   // A /clear fires no session.start; the mod's hook on the command starts the readings and the tick over.
   test("draws the status row in a session a /clear started", async ($, on) => {
     stubHint(on);
@@ -2235,6 +2336,30 @@ describe("cockpit", () => {
     // The label is text of its own, not the field's: it wraps where the field cannot.
     expect((await ui.find({ type: "Input", key: "pr.open" }))?.props.label).toBeUndefined();
     expect(await ui.find({ type: "Text", text: "a failed check's cross" })).toBeDefined();
+    await ui.unmount();
+  });
+
+  test("lists the five pace colours under Limit pace in the colours pane, with their defaults", async ($, on) => {
+    on("config.list", () => ({ value: [] }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const drawn = await ui.drawn();
+    // The pane's lines in order: a heading by its text, a field by its Input's key and value.
+    const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
+      const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
+      const input: unknown = props === undefined ? undefined : JSON.parse(props);
+      if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value}`];
+      return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
+    });
+    const at = lines.indexOf("Limit pace");
+    expect(lines.slice(at, at + 6)).toEqual(["Limit pace", "pace.under=#94a3b8", "pace.over.from=#fbbf24", "pace.over.to=#ef4444", "pace.par=#e5e7eb", "pace.none=#6b7280"]);
+    await ui.unmount();
+  });
+
+  test("draws under-pace cells in the colors option's pace.under", { options: { limit_style: "gauge", limit_7d_length: 10, colors: "pace.under=#112233" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
+    const ui = await mountHint($);
+    expect((await gaugeOf(ui, "seven_day")).colors.slice(1, 5)).toEqual(Array(4).fill("#112233"));
     await ui.unmount();
   });
 

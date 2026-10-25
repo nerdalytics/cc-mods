@@ -36,6 +36,8 @@ type Snapshot = {
   git?: StatusGit;
   pr?: StatusPr | null;
   rejected?: Record<string, number>;
+  // When this session's last response came, in ms: the limits' reading is as of then.
+  readAt: number;
   now: number;
   phase: number;
 };
@@ -67,7 +69,10 @@ const SEGMENTS = {
 function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
   const limit = LIMITS.find((l) => l.badge === badge);
   const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
-  return limit && found ? [limitParts(Box, Text, limit, found, s.now)] : [];
+  if (!limit || !found) return [];
+  if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, s.now)];
+  // The whole allowance is each window's target.
+  return [gaugeParts(Box, Text, limit, found, paceOf(limit, found, s.readAt, s.now * 1000, 100))];
 }
 
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
@@ -327,6 +332,9 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
   { kind: "seven_day", badge: "7d", seconds: 604_800 },
   { kind: "five_hour", badge: "5h", seconds: 18_000 },
 ];
+// How both limit tags draw, the limit_style option. lanes and notch are read but draw as classic until they are built.
+const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
+type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset, as cockpit 1.1.0 drew them.
 const BAR_CELLS = { "7d": 7, "5h": 10, context: 10 };
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
@@ -349,6 +357,12 @@ const COLORS = {
   "limit.7d.to": { group: "", label: "the badge", rgb: [100, 50, 150] },
   "limit.5h.from": { group: "5h limit bar and badge", label: "", rgb: [34, 211, 238] },
   "limit.5h.to": { group: "", label: "the badge", rgb: [15, 140, 150] },
+  // A limit's pace, in every style but classic: slate for an allowance that goes unused, amber to red for one that runs out early.
+  "pace.under": { group: "Limit pace", label: "under pace", rgb: [148, 163, 184] },
+  "pace.over.from": { group: "", label: "over pace", rgb: [251, 191, 36] },
+  "pace.over.to": { group: "", label: "over pace, much of the window left at run-out", rgb: [239, 68, 68] },
+  "pace.par": { group: "", label: "the gauge's pipe", rgb: [229, 231, 235] },
+  "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe", rgb: [107, 114, 128] },
   // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
   // as a band of its own.
   "context.low": { group: "Context bar and badge", label: "plenty left", rgb: [34, 197, 94] },
@@ -476,6 +490,8 @@ let pingFor = 0;
 let pingAt = -Infinity;
 // The cells each bar draws, from the limit_7d_length, limit_5h_length and context_length options.
 let barCells = BAR_CELLS;
+// The limit_style option; a value it does not know reads as classic.
+let limitStyle: LimitStyle = "classic";
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
 // smart_zone option off.
 let smartZone = 200_000;
@@ -546,6 +562,7 @@ export const register: Register = (on, options) => {
     "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
     context: lengthOf(options.context_length, BAR_CELLS.context),
   };
+  limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
   on("session.start", async ($, e, next) => {
@@ -840,7 +857,8 @@ async function drawRow($: EngineInterface, ui: Ui, row: Row, ordering: boolean):
   const { value: git } = await $.state.get(GIT);
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, now: Math.floor(Date.now() / 1000), phase };
+  const { value: readAt = 0 } = await $.state.get(READ);
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, readAt, now: Math.floor(Date.now() / 1000), phase };
   const s = ordering ? withSamples(live) : live;
   // A git tag draws nothing until the first git scan.
   const gitTag = s.git && gitParts(ui, s.git, s.pr);
@@ -849,7 +867,7 @@ async function drawRow($: EngineInterface, ui: Ui, row: Row, ordering: boolean):
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
 // turns up during work: the limits, context, turns, costs and cache; a branch, worktree, commits ahead and behind, conflict and
-// changes; a pull request with its review, comments and checks.
+// changes; a pull request with its review, comments and checks. The readings count as read now, so the limits show a pace.
 function withSamples(s: Snapshot): Snapshot {
   const kinds = s.usage.rateLimits.map((r) => r.kind);
   const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
@@ -865,6 +883,7 @@ function withSamples(s: Snapshot): Snapshot {
   const checked = pr.checks.pending + pr.checks.failure + pr.checks.success > 0;
   return {
     ...s,
+    readAt: s.now * 1000,
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
     tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 } },
@@ -1134,6 +1153,17 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
   const hitIn = (elapsed * (100 - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
   const left = (resetAt - now) / 1000;
   return hitIn > 0 && hitIn < left ? { hitIn, left } : undefined;
+}
+
+// A limit's pace as of the response that reported it: r is the percent used over the share of the window passed times
+// the target, 1 when the use reaches the target just as the window resets. Both windows begin at their reset time
+// minus their length, the share counting nights and idle hours alike. None on the run-out warning's terms: no reset
+// time, a stale reading, or too early in the window.
+function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number } | undefined {
+  if (!found.resetsAt || now - readAt > FORECAST_FRESH_MS) return undefined;
+  const share = 1 - (Date.parse(found.resetsAt) - readAt) / 1000 / limit.seconds;
+  if (!(share >= FORECAST_FROM)) return undefined;
+  return { r: found.percentUsed / (share * target), share };
 }
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
@@ -1700,6 +1730,33 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
       hoverOver(Box, ` ${limit.badge} `.length + n - [...shown].length, Text({ color: hex(from), backgroundColor: hex(empty), bold: true, children: shown })),
     );
   }
+  return Box({ key: limit.kind, flexDirection: "row", children: parts });
+}
+
+// The gauge: the badge reads the limit and its percent used, rounded as the run-out warning rounds it; the bar is the
+// pace, half the length, rounded down, on each side of a centre pipe. Under pace the left side fills outward from the
+// pipe by the share of the target that goes unused, 1 - r; over pace the right side by the share of the window still
+// to go when the limit runs out, 1 - 1/r, from amber at the pipe to red at the far end, so a worse pace reads redder.
+// Each side fills in half cells. Without a pace every cell is blank and the pipe dim.
+function gaugeParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { r: number } | undefined) {
+  const side = Math.floor(barCells[limit.badge] / 2);
+  const under = pace !== undefined && pace.r < 1;
+  const halves = pace === undefined ? 0 : Math.round((under ? 1 - pace.r : 1 - 1 / pace.r) * 2 * side);
+  const { to } = stops(`limit.${limit.badge}`);
+  const over = stops("pace.over");
+  const empty = hex(color("empty"));
+  // The j-th cell out from the pipe, `filled` halves out: whole, its half on the pipe's side, or blank.
+  const cell = (filled: number, j: number, rgb: RGB, half: string) => {
+    const glyph = filled >= 2 * j + 2 ? "█" : filled === 2 * j + 1 ? half : " ";
+    return Text({ color: glyph === " " ? empty : hex(rgb), backgroundColor: empty, children: glyph });
+  };
+  const out = [...Array(side).keys()];
+  const parts = [
+    Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ${Math.round(found.percentUsed)}% ` }),
+    ...[...out].reverse().map((j) => cell(under ? halves : 0, j, color("pace.under"), "▐")),
+    Text({ color: hex(color(pace ? "pace.par" : "pace.none")), backgroundColor: empty, children: "│" }),
+    ...out.map((j) => cell(under ? 0 : halves, j, lerp(over.from, over.to, j, side), "▌")),
+  ];
   return Box({ key: limit.kind, flexDirection: "row", children: parts });
 }
 
