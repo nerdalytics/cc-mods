@@ -240,7 +240,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Cockp
 | Compact when the smart zone is nearly used | `auto_compact` | false | Runs `/compact` as described under [Status row](#status-row). |
 | Offer a compaction when the smart zone is nearly used | `compact_hint` | true | Shows the line with the `Compact` button once the context has used 90% of the smart zone, as described under [Status row](#status-row). |
 | Dismissed offers stay hidden (minutes) | `dismiss_minutes` | 0 | How long the cross on the `Start fresh` and `Compact` lines hides its line. 0 hides it for the rest of the session. |
-| Limit tags › style | `limit_style` | classic | How the 7d and 5h tags draw: `classic`, `lanes`, `gauge` or `notch`, as described under [Status row](#status-row). The mod reads any other value as `classic`. |
+| Limit tags › style | `limit_style` | classic | How the 7d and 5h tags draw: `classic`, `lanes`, `gauge` or `notch`, as described under [Status row](#status-row). `/config` offers the four to pick from. A value set by hand that is none of them reads as `classic`. |
 | 7d bar › length (cells) | `limit_7d_length` | 7 | The number of cells the 7d limit's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. A fraction is rounded down, and anything under 1 draws 1 cell. |
 | 5h bar › length (cells) | `limit_5h_length` | 10 | The number of cells the 5h limit's bar draws, as `limit_7d_length` does for the 7d bar. |
 | Context bar › length (cells) | `context_length` | 10 | The number of cells the context bar draws, as `limit_7d_length` does for the 7d bar. |
