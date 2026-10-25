@@ -1359,6 +1359,81 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // While the 7d is used up the 5h cannot be spent. 10% of the 5h with 60% of its window gone would fill 8 halves left of
+  // the pipe; paused it draws as a gauge without a pace. The 7d resets in 52.5 hours, 2d4h as the countdown rounds down.
+  const SEVEN_USED_UP = { kind: "seven_day", percentUsed: 100, resetsAt: new Date(Date.now() + 52.5 * HOUR).toISOString() } satisfies SessionRateLimit;
+  test("draws the 5h gauge paused, empty with its pipe dim, while the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    const ui = await mountHint($);
+    const gauge = await limitTagOf(ui, "five_hour");
+    expect(gauge.badge).toBe(" 5h 10% ");
+    expect(gauge.bar).toBe("     │     ");
+    expect(gauge.colors).toEqual([...Array(5).fill(GREY), "#6b7280", ...Array(5).fill(GREY)]);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/^5h limit: 10% used, resets in \S+\. It is paused until the 7d resets in 2d4h\.$/);
+    await ui.unmount();
+  });
+
+  // With k measured and the 7d at 100%, the 5h's target is its own percent used: at 0% its pace would be 0 / 0. Paused,
+  // it draws none, so no NaN reaches the gauge or the words. The 7d resets in 3 days, 2d23h once a second passes.
+  test("draws the 5h at 0% paused with no NaN once k is measured and the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [0, 2 * HOUR, 100, DAYS_3]]);
+    const ui = await mountHint($);
+    const gauge = await limitTagOf(ui, "five_hour");
+    expect(gauge.badge).toBe(" 5h 0% ");
+    expect(gauge.colors).toEqual([...Array(5).fill(GREY), "#6b7280", ...Array(5).fill(GREY)]);
+    const explanation = await explanationOf(ui, "limit_5h");
+    expect(explanation).not.toContain("NaN");
+    expect(explanation).toMatch(/^5h limit: 0% used, resets in \S+\. It is paused until the 7d resets in (3d0h|2d23h)\.$/);
+    await ui.unmount();
+  });
+
+  // Paused, neither lane of `lanes` nor the usage of `notch` draws, dim or lit, and the notch is gone.
+  for (const [style, bar] of [["lanes", "▀".repeat(10)], ["notch", " ".repeat(10)]] as const)
+    test(`draws the 5h ${style} paused with every cell empty while the 7d is at 100%`, { options: { limit_style: style } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+      const ui = await mountHint($);
+      const tag = await limitTagOf(ui, "five_hour");
+      expect(tag.bar).toBe(bar);
+      expect([...tag.colors, ...tag.backgrounds]).toEqual(Array(20).fill(GREY));
+      await ui.unmount();
+    });
+
+  // Classic draws no pace, so a used-up 7d leaves its 5h bars as they were: 10% used lights 9 of 10 bottom halves, and
+  // 45% of the window still to go 4 top halves. Its explanation says nothing of a pause.
+  test("leaves the classic 5h bars and explanation as they were while the 7d is at 100%", async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.55)]);
+    const ui = await mountHint($);
+    expect(litCells(elements(must(await ui.find({ type: "Box", key: "five_hour" }), "the 5h tag").children).slice(1))).toBe("BBBBUUUUU_");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/^5h limit: 10% used, resets in \S+\.$/);
+    await ui.unmount();
+  });
+
+  // This session last heard the 7d at 80%, but another session's transcript has its refusal on the 7d, resetting in 52.5
+  // hours: the 7d is used up all the same.
+  test("draws the 5h gauge paused while a refusal on the 7d is in force below 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const refusal = JSON.stringify({
+      type: "assistant",
+      error: "rate_limit",
+      apiError: "usage_limit_reached",
+      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((Date.now() + 52.5 * HOUR) / 1000) },
+    });
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("process.run", (_$, e) => ({
+      value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false },
+    }));
+    await startWithLimits($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)]);
+    const ui = await mountHint($);
+    for (let i = 0; i < 50 && (await limitTagOf(ui, "five_hour")).bar !== "     │     "; i++) await settle();
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/It is paused until the 7d resets in 2d4h\.$/);
+    await ui.unmount();
+  });
+
   // A value on the grey says hovering shows more. Every chip has an explanation, so its value stands on the grey while
   // the explanation line can show it, the turns before any subagent and a cold cache included, and never without it.
   const valueBackgrounds = async (ui: { find: Mounted["find"] }, key: string) =>

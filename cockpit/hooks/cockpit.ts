@@ -69,14 +69,17 @@ const SEGMENTS = {
 
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
 // reading has it. Every pace style's tag and the explanation read the pace here, the gauge and the words its r against
-// the target, lanes and notch its par, so they agree.
-function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number; par: number } } | undefined {
+// the target, lanes and notch its par, so they agree. While the 7d is used up, a refusal still in force included, the 5h
+// cannot be spent: it is paused, with no pace, and `paused` holds the seconds until the 7d resets (0 without a reset time).
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number; par: number }; paused?: number } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
   const found = limit && limits.find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
-  const target = badge === "5h" ? fiveHourTarget(found, limits.find((r) => r.kind === "seven_day"), s.k) : 100;
+  const seven = limits.find((r) => r.kind === "seven_day");
+  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: seven.resetsAt ? Math.floor(Date.parse(seven.resetsAt) / 1000) - s.now : 0 };
+  const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
   return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target) };
 }
 
@@ -92,15 +95,18 @@ function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: nu
 function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
   const reading = limitOf(s, badge);
   if (!reading) return [];
-  const { limit, found, left, pace } = reading;
+  const { limit, found, left, pace, paused } = reading;
   const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, barCells[limit.badge]);
+  // Paused, lanes and notch draw as a window used up with no time left, which leaves every cell empty; the gauge's
+  // badge still reads the real percent used.
+  const drawn = paused === undefined ? found : { ...found, percentUsed: 100 };
   const bar =
     limitStyle === "gauge"
       ? gaugeCells(Text, limit, pace)
       : limitStyle === "lanes"
-        ? lanesCells(Text, limit, found, timeLeft, pace)
+        ? lanesCells(Text, limit, drawn, paused === undefined ? timeLeft : 0, pace)
         : limitStyle === "notch"
-          ? notchCells(Text, limit, found, pace)
+          ? notchCells(Text, limit, drawn, pace)
           : classicCells(Text, limit, found, timeLeft);
   const label = limitStyle === "gauge" ? `${limit.badge} ${Math.round(found.percentUsed)}%` : limit.badge;
   const { to } = stops(`limit.${limit.badge}`);
@@ -1249,10 +1255,11 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    const { limit, found, left = 0 } = reading;
+    const { limit, found, left = 0, paused } = reading;
     const pace = limitStyle === "classic" ? undefined : reading.pace;
+    const pause = limitStyle === "classic" || paused === undefined ? "" : ` It is paused until the 7d resets${paused > 0 ? ` in ${countdown(paused)}` : ""}.`;
     // Rounded as the gauge's badge and the run-out warning round it.
-    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.${pace ? ` ${paceWords(limit, pace.r)}` : ""}`;
+    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.${pace ? ` ${paceWords(limit, pace.r)}` : ""}${pause}`;
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
