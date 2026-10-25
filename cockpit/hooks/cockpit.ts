@@ -1146,12 +1146,12 @@ async function compactLine($: EngineInterface, ui: Ui) {
 // At the pace the window has run at since it began, as of the response that reported it: seconds from now until it
 // reaches 100%, and until it resets. Nothing while it is on track, out already, early in its window, or its reading old.
 function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number): { hitIn: number; left: number } | undefined {
-  if (!found.resetsAt || found.percentUsed <= 0 || found.percentUsed >= 100 || now - readAt > FORECAST_FRESH_MS) return undefined;
-  const resetAt = Date.parse(found.resetsAt);
-  const elapsed = limit.seconds - (resetAt - readAt) / 1000;
-  if (!(elapsed >= limit.seconds * FORECAST_FROM)) return undefined;
+  if (!found.resetsAt || found.percentUsed <= 0 || found.percentUsed >= 100) return undefined;
+  const pace = paceOf(limit, found, readAt, now, 100);
+  if (!pace) return undefined;
+  const elapsed = pace.share * limit.seconds;
   const hitIn = (elapsed * (100 - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
-  const left = (resetAt - now) / 1000;
+  const left = (Date.parse(found.resetsAt) - now) / 1000;
   return hitIn > 0 && hitIn < left ? { hitIn, left } : undefined;
 }
 
