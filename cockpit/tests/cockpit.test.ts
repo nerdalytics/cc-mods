@@ -988,7 +988,8 @@ describe("cockpit", () => {
     const ui = await explained($, on);
     const [warning, ...rest] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
     expect(flat(warning)).toMatch(/at this pace/);
-    expect(rest).toMatchObject(EXPLAINED.map(() => ({ props: { position: "absolute", backgroundColor: "#373a48" } })));
+    // At least as tall as the line, so a short explanation covers every row a wrapped warning takes too.
+    expect(rest).toMatchObject(EXPLAINED.map(() => ({ props: { position: "absolute", backgroundColor: "#373a48", minHeight: "100%" } })));
     await ui.unmount();
   });
 
@@ -1078,6 +1079,13 @@ describe("cockpit", () => {
       for (const key of keys) expect(new Set(await valueBackgrounds(ui, key))).toEqual(new Set([grey]));
       await ui.unmount();
     });
+
+  test("still reveals each tag's explanation in the explanation line with limit_forecast off, which shows no warning", { options: { limit_forecast: false } }, async ($, on) => {
+    const ui = await explained($, on);
+    expect(shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"))).toBe("");
+    expect((await explanationsIn(ui)).map(scopeOf)).toEqual(EXPLAINED.map(([tag]) => `explain-${tag}`));
+    await ui.unmount();
+  });
 
   // The scope is the plugin's across sites, so a tag above the prompt reveals its explanation in the line under it.
   test("reveals the explanation of a tag in a row above the prompt in the explanation line under it", { options: { layout: `${STATUS};prompt;${GIT};fresh;compact;explain` } }, async ($, on) => {

@@ -1194,12 +1194,13 @@ async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
   const shown = (await runOutWarning($, ui)) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
   const s = await snapshotOf($, ordering);
   const texts = s ? explanations(s) : {};
-  // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it.
+  // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it: at
+  // least as tall as the line, so every row of a wrapped warning, while a longer explanation runs on over what lies below.
   const grey = hex(color("empty"));
   const overlays = STATUS_ROW.flatMap((tag) => {
     const text = texts[tag];
     if (text === undefined || !isShown(tag)) return [];
-    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: [ui.Text({ backgroundColor: grey, children: text })] })];
+    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: [ui.Text({ backgroundColor: grey, children: text })] })];
   });
   return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: [...(shown ? [shown] : []), ...overlays] });
 }
