@@ -215,6 +215,7 @@ Under the prompt, Claude Code does not tell the mod how many rows are left for i
 
 The mod no longer reads a removed option, so its value is not carried over to what replaced it.
 
+- **1.2.0** removes the `forecast` line from `layout`. The run-out warning now shows in the explanation line, `explain`, which a layout that leaves it out draws last. A saved `forecast` line stays as an empty row, which draws nothing, and `/cockpit:order` lists it as `▤ row N: empty`, so you can drop it under hidden. The hover texts moved to the explanation line too: hovering a tag shows its explanation there, and with `explain_row` off a hover shows nothing. The release also adds `limit_style`, `explain_row` and the bar lengths `limit_7d_length`, `limit_5h_length` and `context_length`. Dropping a layout name and moving the hover texts would make this a major release under the repository's versioning rule, but it ships as a minor release by choice.
 - **1.0.0** renames the mod from statusline (last released as 0.22.3) to cockpit and starts its versions over, as it does more than draw a status line. Claude Code sees a new plugin, so install `cockpit` and run `/plugin uninstall statusline@cc-mods`, which also deletes the old options. The options start from their defaults: set them again in `/config`, `/cockpit:order` and `/cockpit:colors`. The commands are now `/cockpit:order`, `/cockpit:colors` and `/cockpit:handoff`.
 - **statusline 0.22.0** replaces the git row's and the status row's options with `layout`: `row_git`, `row_git_position`, `git_order`, the `git_<name>` toggles, `row_status`, `row_status_position`, `segment_order`, the `segment_<name>` toggles, `line_order`, and the offers' `fresh_start_position`, `compact_hint_position` and `limit_forecast_position`. `layout` starts with the arrangement earlier versions drew by default, the git row above the prompt and the status row and the offers under it. If you had changed any of those, set them again with `/cockpit:order`. The offers' `fresh_start`, `compact_hint` and `limit_forecast` toggles stay.
 - **statusline 0.19.0** replaces the `density` option with gaps. An order saved before 0.19.0 has no gaps, so its tags touch until you drag gaps in with `/cockpit:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
@@ -251,7 +252,7 @@ Change these in `/config`, under the plugin. Each title there starts with `Cockp
 
 ## Needs
 
-- Claude Code 2.1.287 or later.
+- Claude Code 2.1.303 or later.
 - A [Nerd Font](https://www.nerdfonts.com/) in the terminal. The mod uses its glyphs for the subagent bolt, the pull request's draft, review, comment and check marks, the warning sign of the conflict and the run-out warning, and the icons of the `Start fresh` and `Compact` buttons.
 - `git` for the git row, and `gh`, signed in, for the pull request details. Only GitHub knows whether the pull request still merges into its base branch after others push to it, so `conflict` needs `gh` too.
 
