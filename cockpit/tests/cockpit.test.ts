@@ -1369,7 +1369,7 @@ describe("cockpit", () => {
     const gauge = await limitTagOf(ui, "five_hour");
     expect(gauge.badge).toBe(" 5h 10% ");
     expect(gauge.bar).toBe("     │     ");
-    expect(gauge.colors).toEqual([...Array(5).fill(GREY), "#6b7280", ...Array(5).fill(GREY)]);
+    expect(gauge.colors).toEqual([...Array(5).fill(GREY), DIM, ...Array(5).fill(GREY)]);
     expect(await explanationOf(ui, "limit_5h")).toMatch(/^5h limit: 10% used, resets in \S+\. It is paused until the 7d resets in 2d4h\.$/);
     await ui.unmount();
   });
@@ -1382,7 +1382,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     const gauge = await limitTagOf(ui, "five_hour");
     expect(gauge.badge).toBe(" 5h 0% ");
-    expect(gauge.colors).toEqual([...Array(5).fill(GREY), "#6b7280", ...Array(5).fill(GREY)]);
+    expect(gauge.colors).toEqual([...Array(5).fill(GREY), DIM, ...Array(5).fill(GREY)]);
     const explanation = await explanationOf(ui, "limit_5h");
     expect(explanation).not.toContain("NaN");
     expect(explanation).toMatch(/^5h limit: 0% used, resets in \S+\. It is paused until the 7d resets in (3d0h|2d23h)\.$/);
