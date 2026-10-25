@@ -44,6 +44,27 @@ const litCells = (cells: readonly unknown[]): string =>
     })
     .join("");
 const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
+// What the explanation line shows in its flow, the hidden explanations laid over it left out.
+const shownIn = (line: FoundElement) => elements(line.children).filter((child) => child.props.position !== "absolute").map(flat).join("");
+// The seven tags an explanation stands behind, by the scope each joins and the key its Box draws with.
+const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"]] as const;
+// A tag's keyed Box as drawn, its hover included, which FoundElement.props leaves out.
+const drawnTag = async (ui: { findAll: Mounted["findAll"] }, key: string) => {
+  for (const box of await ui.findAll({ type: "Box" })) {
+    const tag = elements(box.children).find((child) => child.props.key === key);
+    if (tag) return tag;
+  }
+  throw new Error(`the ${key} tag did not draw`);
+};
+// The hover group a drawn Box joins.
+const scopeOf = (node: object): unknown => {
+  const hover: unknown = "hover" in node ? node.hover : undefined;
+  return typeof hover === "object" && hover !== null && "scope" in hover ? hover.scope : undefined;
+};
+// The explanation line's explanations: the Boxes laid over it, after what it shows in its flow.
+const explanationsIn = async (ui: { find: Mounted["find"] }) => elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position === "absolute");
+// One tag's explanation as the explanation line holds it, hidden or not.
+const explanationOf = async (ui: { find: Mounted["find"] }, tag: string) => flat((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`));
 // The rows of tags: the wrapping Boxes with a gap between their tags, not the offer lines, which wrap with none.
 const tagRows = async (ui: { findAll: Mounted["findAll"] }) => (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap" && b.props.columnGap !== undefined);
 // An element with no children of its own (a spacer, a blank line) is drawn with its props alone.
@@ -224,26 +245,22 @@ describe("cockpit", () => {
 
     // The model name is one Text per glyph, so only its first glyph is matchable here.
     expect(await ui.find({ type: "Text", text: "O" })).toBeDefined();
-    expect(await ui.find({ type: "Text", text: /1d1h/ })).toBeDefined();
-    expect(await ui.find({ type: "Text", text: /2h5[56]m/ })).toBeDefined();
+    // Hovered, each limit's countdown to its reset.
+    expect(await explanationOf(ui, "limit_7d")).toMatch(/1d1h/);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/2h5[56]m/);
     // A window the mod has no bar for shows as its name and percentage.
     expect(await ui.find({ type: "Text", text: "seven_day_fable 86%" })).toBeDefined();
     // The context bar against the 900,000-token compaction threshold: 797,100 used is 88%, so 1 of 10 cells of window
     // left underneath; past the 200,000-token smart zone, none on top. 597,100 of the 700,000 between the smart zone
-    // and the threshold is 85%: the full moon. Hovered, the 102,900 tokens left.
-    let context;
-    for (let i = 0; i < 50 && !context; i++) {
-      context = await ui.find({ type: "Box", key: "context" });
-      if (!context || !JSON.stringify(context).includes("102.9K")) {
-        context = undefined;
-        await settle();
-      }
-    }
-    if (!context) throw new Error("the context chip did not draw");
-    expect(flat(context.children[0])).toBe(" ● ");
-    const halves = litCells(context.children.slice(1, -1));
-    expect(halves).toBe("U_________");
-    expect(flat(context.children.at(-1)).trim()).toBe("102.9K");
+    // and the threshold is 85%: the full moon. The threshold comes after the first draw, which measures the whole window.
+    const bar = async () => {
+      const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
+      return { badge: flat(context.children[0]), halves: litCells(context.children.slice(1)) };
+    };
+    for (let i = 0; i < 50 && (await bar()).halves !== "U_________"; i++) await settle();
+    expect(await bar()).toEqual({ badge: " ● ", halves: "U_________" });
+    // Hovered, the 102,900 tokens left.
+    expect(await explanationOf(ui, "context")).toContain("102.9K");
     // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap is
     // padding after a tag, so a wrapped line starts flush.
     const rows = await tagRows(ui);
@@ -365,9 +382,8 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
     expect(flat(context.children[0])).toBe(" ◆ ");
-    const halves = litCells(context.children.slice(1, -1));
-    expect(halves).toBe("BBBBBUUUU_");
-    expect(flat(context.children.at(-1)).trim()).toBe("950.0K");
+    expect(litCells(context.children.slice(1))).toBe("BBBBBUUUU_");
+    expect(await explanationOf(ui, "context")).toContain("950.0K");
     await ui.unmount();
   });
 
@@ -381,7 +397,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
     expect(flat(context.children[0])).toBe(" ◔ ");
-    const cells = elements(context.children.slice(1, -1));
+    const cells = elements(context.children.slice(1));
     expect(cells.map((t) => (t.props.backgroundColor !== "#373a48" ? "B" : "_")).join("")).toBe("BBBBBBB___");
     expect(cells.every((t) => t.props.color === t.props.backgroundColor)).toBe(true);
     await ui.unmount();
@@ -391,13 +407,16 @@ describe("cockpit", () => {
   // the compaction threshold when auto-compaction is on, else the raw window, else the window the usage names. Each case
   // names the window, the tokens and the breakdown, and the bar is the arithmetic on them: the tokens left, the share of
   // them underneath (B both halves lit, T the smart zone's top half, U the bottom half), and the glyph for the zone.
-  const contextBar = async (ui: Mounted<"terminal", "PromptHint">, left: string) => {
+  // The bar as drawn once it reaches `bar`, or as last drawn: the breakdown comes after the first draw.
+  const contextBar = async (ui: Mounted<"terminal", "PromptHint">, bar: { badge: string; lit: string }) => {
+    let drawn;
     for (let i = 0; i < 50; i++) {
-      const chip = await ui.find({ type: "Box", key: "context" });
-      if (chip && flat(chip.children.at(-1)).trim() === left) return { badge: flat(chip.children[0]), lit: litCells(chip.children.slice(1, -1)) };
+      const chip = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
+      drawn = { badge: flat(chip.children[0]), lit: litCells(chip.children.slice(1)) };
+      if (drawn.badge === bar.badge && drawn.lit === bar.lit) break;
       await settle();
     }
-    throw new Error(`the context bar never said ${left} left`);
+    return drawn;
   };
   const smartZone = { smart_zone_tokens: 150_000 };
   for (const [title, options, context, left, bar] of [
@@ -417,7 +436,8 @@ describe("cockpit", () => {
       on("session.model", () => ({ value: "claude-opus-5-5" }));
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
       const ui = await mountHint($);
-      expect(await contextBar(ui, left)).toEqual(bar);
+      expect(await contextBar(ui, bar)).toEqual(bar);
+      expect(await explanationOf(ui, "context")).toContain(left);
       await ui.unmount();
     });
 
@@ -431,11 +451,13 @@ describe("cockpit", () => {
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    expect(await contextBar(ui, "675.0K")).toEqual({ badge: " ◑ ", lit: "UUUUU_____" });
+    expect(await contextBar(ui, { badge: " ◑ ", lit: "UUUUU_____" })).toEqual({ badge: " ◑ ", lit: "UUUUU_____" });
+    expect(await explanationOf(ui, "context")).toContain("675.0K");
     // Against 900,000: 225,000 left, 75% used, 2 cells left; (675,000 - 150,000) of the 750,000 beyond the smart zone is the fourth moon.
     threshold = 900_000;
     await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
-    expect(await contextBar(ui, "225.0K")).toEqual({ badge: " ◕ ", lit: "UU________" });
+    expect(await contextBar(ui, { badge: " ◕ ", lit: "UU________" })).toEqual({ badge: " ◕ ", lit: "UU________" });
+    expect(await explanationOf(ui, "context")).toContain("225.0K");
     await ui.unmount();
   });
 
@@ -463,17 +485,9 @@ describe("cockpit", () => {
     // A dim half is #373a48: the glyph colour is the top half, the background the bottom.
     const cells = litCells(await ui.findAll({ type: "Text", text: "▀" }));
     expect(cells).toBe("BBUUU__BBTTT_____");
-
-    // Each limit is a hover scope; its countdown to the reset waits hidden until the pointer is on it.
-    // FoundElement.props leaves `hover` out; the drawn children carry it.
-    for (const [kind, used] of [["seven_day", "2d12h"], ["five_hour", "2h4"]] as const) {
-      const scope = must(await ui.find({ type: "Box", key: kind }), `the ${kind} limit`);
-      expect(scope.children.at(-1)).toMatchObject({
-        props: { position: "absolute", display: "none" },
-        hover: { display: "flex" },
-        children: [{ type: "Text", children: [expect.stringContaining(used)] }],
-      });
-    }
+    // Hovered, each limit's countdown to its reset.
+    expect(await explanationOf(ui, "limit_7d")).toContain("2d12h");
+    expect(await explanationOf(ui, "limit_5h")).toContain("2h4");
     await ui.unmount();
   });
 
@@ -585,14 +599,14 @@ describe("cockpit", () => {
       expect({ "7d": await length("seven_day"), "5h": await length("five_hour"), context: await length("context") }).toEqual(lengths);
       await ui.unmount();
     });
-  // A hovered value wider than its tag's bar starts at the tag's left edge, not over the tag before it.
+  // A hovered value no longer lays over its tag, so a bar shorter than the value has nothing to spill over the tag before it.
   for (const [title, options, key] of [
-    ["starts the 5h countdown at its tag's left edge on a 1-cell bar", { limit_5h_length: 1 }, "five_hour"],
-    ["starts the context's tokens left at its tag's left edge at context_length 0", { context_length: 0 }, "context"],
+    ["lays no countdown over a 1-cell 5h bar", { limit_5h_length: 1 }, "five_hour"],
+    ["lays no tokens left over the context bar at context_length 0", { context_length: 0 }, "context"],
   ] satisfies [string, Record<string, number>, string][])
     test(title, { options }, async ($, on) => {
       const ui = await mountBars($, on);
-      expect(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children.at(-1)).toMatchObject({ props: { position: "absolute", left: 0 } });
+      expect(elements(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children).filter((part) => part.props.position === "absolute")).toEqual([]);
       await ui.unmount();
     });
 
@@ -645,19 +659,16 @@ describe("cockpit", () => {
         await settle();
       }
       expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
-      // Each chip: a space, its tag, its value's tag right against it, and the hidden hover value laid over the value's tag.
+      // Each chip: a space, its tag, and its value's tag right against it.
       // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
       // The prompts / the main session's requests: A once though written twice; hovered, one subagent / its two requests.
       for (const [key, tag, value, hover] of chips) {
         const chip = must(await ui.find({ type: "Box", key }), `the ${key} chip`);
         expect(flat(chip.children[0])).toBe(tag);
-        // The value's tag is as wide as the longer of value and hover value, so the hover value fits it whole.
-        // Both right-aligned, a space short of the tag's right edge.
-        const shown = flat(chip.children[1]);
-        expect(shown).toBe(`${value} `.padStart(shown.length));
-        const overlay = chip.children.at(-1);
-        expect(overlay).toMatchObject({ props: { position: "absolute", display: "none" }, hover: { display: "flex" } });
-        expect(flat(overlay)).toBe(`${hover} `.padStart(shown.length));
+        // Padded to the value alone, a space each side.
+        expect(flat(chip.children[1])).toBe(` ${value} `);
+        // Hovered, the explanation line shows what the tag's own hover showed.
+        expect(await explanationOf(ui, key)).toContain(hover);
       }
       // Merged, the agents' chip is gone.
       expect(await ui.findAll({ type: "Box", key: "agents" })).toHaveLength(chips.some(([key]) => key === "agents") ? 1 : 0);
@@ -708,7 +719,8 @@ describe("cockpit", () => {
     // 50 minutes left of the hour (49 once a second passes).
     expect(flat(cache.children[0])).toBe(" ● ");
     expect(flat(cache.children[1])).toMatch(/^ (50|49)m \$0\.20 $/);
-    expect(flat(cache.children.at(-1)).trim()).toBe("$8.00");
+    // Hovered, the explanation line shows what writing it again costs once cold.
+    expect(await explanationOf(ui, "cache")).toContain("$8.00");
     // Hoverable, so the value stands on the grey.
     expect(JSON.stringify(cache.children[1])).toContain("#373a48");
     await ui.unmount();
@@ -737,8 +749,8 @@ describe("cockpit", () => {
     cache = await chip(ui);
     expect(flat(cache.children[0])).toBe(" ○ ");
     expect(flat(cache.children[1])).toBe(" cold $8.00 ");
-    // Cold has no hover, so no grey either.
-    expect(JSON.stringify(cache.children[1])).not.toContain("#373a48");
+    // Cold, it still has an explanation, so the value stands on the grey too.
+    expect(JSON.stringify(cache.children[1])).toContain("#373a48");
     await ui.unmount();
   });
 
@@ -891,7 +903,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
     // The warning sign, then the sentence; blank when the warning does not apply.
-    expect(explain.text).toMatch(shown ? /^\uf071 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/ : /^$/);
+    expect(shownIn(explain)).toMatch(shown ? /^\uf071 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/ : /^$/);
     await ui.unmount();
   });
 
@@ -910,9 +922,172 @@ describe("cockpit", () => {
     ]);
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
-    expect(explain.text).toMatch(shown);
-    expect(explain.text).not.toMatch(hidden);
+    expect(shownIn(explain)).toMatch(shown);
+    expect(shownIn(explain)).not.toMatch(hidden);
     await ui.unmount();
+  });
+
+  // A session that draws all seven explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
+  // so the run-out warning shows, the 7d at 20%, 120,000 of 200,000 tokens of context left, 7 prompts, and the main
+  // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
+  // subagent's one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00, reads it for $0.20.
+  async function explained($: Engine, on: On, { cachedAgo = 10, agents = true } = {}): Promise<Mounted<"terminal", "PromptHint">> {
+    stubHint(on);
+    const now = Date.now();
+    const at = new Date(now - cachedAgo * 60_000).toISOString();
+    const usage = (out: number, read: number, w1: number) => ({ input_tokens: 0, output_tokens: out, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });
+    const main = { type: "assistant", requestId: "A", timestamp: at, message: { model: "claude-opus-5-5", usage: usage(10, 0, 1_000_000) } };
+    const agent = { type: "assistant", requestId: "B", agentId: "a1", timestamp: at, message: { model: "claude-haiku-5-5", usage: usage(1_000, 150_000, 0) } };
+    const transcript = [main, ...(agents ? [agent] : [])].map((r) => JSON.stringify(r)).join("\n");
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({
+      value: {
+        startedAt: 0,
+        context: { tokens: 80_000, window: 200_000 },
+        rateLimits: [
+          { kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() },
+          { kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() },
+        ],
+      },
+    }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("session.turns", () => ({ value: 7 }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      yield { stream: "stdout", text: transcript };
+      return { value: { code: 0, signal: null } };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    // The token scan has run once the cache tag draws here, or with it above the prompt, once its explanation does.
+    const scanned = async () => (await ui.find({ type: "Box", key: "cache" })) !== undefined || (await ui.find({ type: "Text", text: /^Cache / })) !== undefined;
+    for (let i = 0; i < 50 && !(await scanned()); i++) await settle();
+    return ui;
+  }
+
+  for (const [style, said] of [["classic", ""], ["gauge", ", the gauge's too"]] as const)
+    test(`joins each of the seven tags to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
+      const ui = await explained($, on);
+      for (const [tag, key] of EXPLAINED) expect(await drawnTag(ui, key)).toMatchObject({ hover: { scope: `explain-${tag}` } });
+      // Each explanation hidden until its tag's scope is hovered, then laid over the line from its top left corner.
+      expect(await explanationsIn(ui)).toMatchObject(EXPLAINED.map(([tag]) => ({ props: { position: "absolute", top: 0, left: 0, width: "100%", display: "none" }, hover: { scope: `explain-${tag}`, display: "flex" } })));
+      await ui.unmount();
+    });
+
+  test("draws no overlay of its own in any of the seven tags", async ($, on) => {
+    const ui = await explained($, on);
+    for (const [, key] of EXPLAINED) expect(JSON.stringify(await drawnTag(ui, key))).not.toContain('"position":"absolute"');
+    await ui.unmount();
+  });
+
+  // A Box placed absolute paints over those before it, so each explanation comes after the warning, on a background of its own.
+  test("lays each explanation on the grey after the run-out warning, so a revealed one covers the warning's text", async ($, on) => {
+    const ui = await explained($, on);
+    const [warning, ...rest] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
+    expect(flat(warning)).toMatch(/at this pace/);
+    expect(rest).toMatchObject(EXPLAINED.map(() => ({ props: { position: "absolute", backgroundColor: "#373a48" } })));
+    await ui.unmount();
+  });
+
+  // The kit lays nothing out, so the wrap is read off the props: placed absolute, an explanation takes no room in the
+  // line, and with no fixed height and nothing cut off, the lines it wraps onto paint over what lies below the line.
+  test("wraps a long explanation between words, its further lines laid over what lies below the line rather than moving it", async ($, on) => {
+    const ui = await explained($, on);
+    const explanations = await explanationsIn(ui);
+    expect(explanations).toHaveLength(EXPLAINED.length);
+    for (const explanation of explanations) {
+      expect(explanation.props).toMatchObject({ position: "absolute", width: "100%" });
+      expect([explanation.props.height, explanation.props.overflow]).toEqual([undefined, undefined]);
+      // A Text wraps between words unless its wrap says otherwise.
+      for (const text of elements(explanation.children)) expect([undefined, "wrap"]).toContain(text.props.wrap);
+    }
+    await ui.unmount();
+  });
+
+  test("explains the context tag with the tokens left", async ($, on) => {
+    const ui = await explained($, on);
+    expect(await explanationOf(ui, "context")).toContain("120.0K");
+    await ui.unmount();
+  });
+
+  // 7 prompts and the main session's 1 request; once a subagent has run, its count and its 1 request, as the hover had them.
+  for (const [title, agents, shown] of [
+    ["explains the turns tag before any subagent has run with what it shows", false, "7 / 1"],
+    ["explains the turns tag with the subagents' count and requests once one has run", true, " 1 / 1"],
+  ] as const)
+    test(title, async ($, on) => {
+      const ui = await explained($, on, { agents });
+      expect(await explanationOf(ui, "turns")).toContain(shown);
+      await ui.unmount();
+    });
+
+  // The main session's 1,000,010 tokens; the subagent's 151,000; merged, both together.
+  for (const [title, options, tag, shown] of [
+    ["explains the costs tag with the main session's tokens", {}, "tokens", "1.00M"],
+    ["explains the costs tag with the main session's and its subagents' tokens together when merge_costs is on", { merge_costs: true }, "tokens", "1.15M"],
+    ["explains the subagents' costs tag with their tokens", {}, "agents", "151.0K"],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await explained($, on);
+      expect(await explanationOf(ui, tag)).toContain(shown);
+      await ui.unmount();
+    });
+
+  // Written 10 minutes ago the hour's cache is warm, and the explanation adds what the hover showed: the $8.00 it costs
+  // once cold. Written two hours ago it is cold, and the explanation says what the tag shows.
+  for (const [title, cachedAgo, shown] of [
+    ["explains the warm cache tag with what the prompt costs once the cache is cold", 10, /\$0\.20.*\$8\.00/],
+    ["explains the cold cache tag with what it shows", 120, /cold.*\$8\.00/],
+  ] as const)
+    test(title, async ($, on) => {
+      const ui = await explained($, on, { cachedAgo });
+      expect(await explanationOf(ui, "cache")).toMatch(shown);
+      await ui.unmount();
+    });
+
+  // The 5h at 70% resets in 2 hours (1h59m once a second passes), the 7d at 20% in 1d1h.
+  for (const [style, said] of [["classic", ""], ["gauge", " on the gauge too"]] as const)
+    test(`explains each limit tag with its badge, its percent used and the time until it resets${said}`, { options: { limit_style: style } }, async ($, on) => {
+      const ui = await explained($, on);
+      expect(await explanationOf(ui, "limit_5h")).toMatch(/5h.* 70%.* (1h59m|2h0m)/);
+      expect(await explanationOf(ui, "limit_7d")).toMatch(/7d.* 20%.* 1d1h/);
+      await ui.unmount();
+    });
+
+  test("rounds a limit's percent used in its explanation, as the gauge's badge and the run-out warning round it", async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 50.6, resetsAt: new Date(Date.now() + 90_030_000).toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_7d")).toMatch(/ 51%/);
+    await ui.unmount();
+  });
+
+  // A value on the grey says hovering shows more. Every chip has an explanation, so its value stands on the grey while
+  // the explanation line can show it, the turns before any subagent and a cold cache included, and never without it.
+  const valueBackgrounds = async (ui: { find: Mounted["find"] }, key: string) =>
+    elements(elements(must(await ui.find({ type: "Box", key }), `the ${key} chip`).children)[1]?.children ?? []).map((glyph) => glyph.props.backgroundColor);
+  for (const [title, options, agents, cachedAgo, keys, grey] of [
+    ["keeps each chip's value on the grey while explain_row is on, the turns before any subagent and a cold cache included", {}, false, 120, ["turns", "tokens", "cache"], "#373a48"],
+    ["stands no chip's value on the grey with explain_row off", { explain_row: false }, true, 10, ["turns", "tokens", "agents", "cache"], undefined],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await explained($, on, { agents, cachedAgo });
+      for (const key of keys) expect(new Set(await valueBackgrounds(ui, key))).toEqual(new Set([grey]));
+      await ui.unmount();
+    });
+
+  // The scope is the plugin's across sites, so a tag above the prompt reveals its explanation in the line under it.
+  test("reveals the explanation of a tag in a row above the prompt in the explanation line under it", { options: { layout: `${STATUS};prompt;${GIT};fresh;compact;explain` } }, async ($, on) => {
+    const below = await explained($, on);
+    expect(await below.find({ type: "Box", key: "context" })).toBeUndefined();
+    expect((await explanationsIn(below)).map(scopeOf)).toContain("explain-context");
+    await below.unmount();
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    expect(await drawnTag(above, "context")).toMatchObject({ hover: { scope: "explain-context" } });
+    await above.unmount();
   });
 
   const idle = [subagent("completed")];
@@ -2275,7 +2450,7 @@ describe("cockpit", () => {
     // A cell's bottom half, its background: the usage left, or the context window left.
     const colours = (cells: readonly unknown[]) => elements(cells).map(({ props }) => props.backgroundColor);
     await ui.unmount();
-    return { badge: elements(limit.children)[0]?.props, cells: colours(limit.children.slice(1, -1)), context: elements(context.children)[0]?.props, contextCells: colours(context.children.slice(1, -1)) };
+    return { badge: elements(limit.children)[0]?.props, cells: colours(limit.children.slice(1)), context: elements(context.children)[0]?.props, contextCells: colours(context.children.slice(1)) };
   }
 
   test("draws the colors option's colours, a gradient from one to the other", { options: { colors: "limit.5h.from=#112233, limit.5h.to=#FFFFFF,context.low=0000ff,pr.nope=#123456,turns.from=red" } }, async ($, on) => {

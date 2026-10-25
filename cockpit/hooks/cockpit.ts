@@ -65,11 +65,18 @@ const SEGMENTS = {
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
-// One limit's bar, none until a reading has it.
-function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
+// A limit tag's window and its reading, none until a reading has it.
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
-  if (!limit || !found) return [];
+  return limit && found ? { limit, found } : undefined;
+}
+
+// One limit's bar, none until a reading has it.
+function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
+  const reading = limitOf(s, badge);
+  if (!reading) return [];
+  const { limit, found } = reading;
   if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, s.now)];
   // The whole allowance is each window's target.
   return [gaugeParts(Box, Text, limit, found, paceOf(limit, found, s.readAt, s.now * 1000, 100))];
@@ -98,6 +105,8 @@ const TAGS = [...GIT_ROW, ...STATUS_ROW];
 type Tag = GitTag | StatusTag;
 const isTag = (name: string): name is Tag => TAGS.some((tag) => tag === name);
 const isGitTag = (name: Tag): name is GitTag => GIT_ROW.some((tag) => tag === name);
+// The hover group a status tag joins, which reveals its explanation in the explanation line, on either side of the prompt.
+const explainScope = (tag: StatusTag) => `explain-${tag}`;
 // The tags that need the pull request, which gh fetches.
 const PR_TAGS: readonly Tag[] = ["pr", "review", "comments", "conflict", "checks"];
 const LINES = ["fresh", "compact", "explain"] as const;
@@ -112,6 +121,8 @@ const DEFAULT_LAYOUT = [GIT_ROW.join(",gap-1,"), "prompt", STATUS_ROW.join(",gap
 let layout: Layout = layoutOf(DEFAULT_LAYOUT);
 let aboveLines: (Row | Line | Spacer)[] = [];
 let belowLines: (Row | Line | Spacer)[] = [];
+// Whether a row on either side of the prompt holds the tag, so it is switched on.
+const isShown = (tag: Tag) => [...aboveLines, ...belowLines].some((line) => isRow(line) && line.includes(tag));
 
 // The layout option: lines split by ";", tags and lines by ",". Unknown and repeated names are dropped; a tag left out
 // goes after the one before it in the default order (the first one first in the first row), a prompt left out after the
@@ -341,8 +352,8 @@ const BAR_CELLS = { "7d": 7, "5h": 10, context: 10 };
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
 // its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
 // what a thing does:
-// - hoverable: a tag, then the value on the grey (empty), which a hover lays its own value over;
-// - data without a hover: a tag, then the value on no background;
+// - hoverable: a tag, then the value on the grey (empty); hovered, its explanation shows on the grey in the explanation line;
+// - data without a hover: a tag, then the value on no background, as every chip is with the explanation line off;
 // - plain text: coloured or dim, on no background;
 // - a button: icon and label on one fill, between two half-block bars, in a colour no chip uses;
 // - a link: gradient text on no background, opened by a click.
@@ -389,7 +400,7 @@ const COLORS = {
   "pr.merged": { group: "", label: "merged", rgb: [168, 85, 247] },
   "pr.closed": { group: "", label: "closed", rgb: [130, 135, 152] },
   "pr.failed": { group: "", label: "a failed check's cross", rgb: [239, 68, 68] },
-  empty: { group: "Empty", label: "bar cells past their end, the grey behind a value that hovers", rgb: [55, 58, 72] },
+  empty: { group: "Empty", label: "bar cells past their end, the grey behind a value that hovers and behind its explanation", rgb: [55, 58, 72] },
   // main: the action an offer makes; secondary: the cross that hides it.
   "button.main.fill": { group: "Buttons: Start fresh and Compact", label: "fill", rgb: [79, 70, 229] },
   "button.main.label": { group: "", label: "label", rgb: [199, 210, 254] },
@@ -530,6 +541,8 @@ let mergeCosts = false;
 // The limit_forecast option: the run-out warning in the explanation line, when a limit runs out before its reset at the
 // pace so far.
 let limitForecast = false;
+// The explain_row option: the explanation line, where hovering a tag shows its explanation.
+let explainRow = false;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
 
@@ -544,6 +557,7 @@ export const register: Register = (on, options) => {
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
+  explainRow = options.explain_row === true;
   // Each line on its side of the prompt, an offer only while its toggle is on.
   layout = layoutOf(options.layout);
   const shown = (line: Line) => options[LINE_TOGGLES[line]] === true;
@@ -762,8 +776,8 @@ export const register: Register = (on, options) => {
 
   // Under the prompt the engine's hint line draws, then the lines placed below it, in line_order. Among them are the
   // mod's own, one for each offer that holds: a fresh start once the cache is cold, a compaction once the smart zone is
-  // nearly spent; and the explanation line, with the run-out warning when a limit runs out before it resets. A draft in
-  // the prompt keeps them, as a reminder not to keep going. The fresh start waits while Claude works; the compaction does
+  // nearly spent; and the explanation line, with the run-out warning when a limit runs out before it resets and the
+  // explanation of a hovered tag. A draft in the prompt keeps them, as a reminder not to keep going. The fresh start waits while Claude works; the compaction does
   // not, for the command queues and runs once the session is idle. The offers have a button that hides them, for the
   // rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
@@ -844,8 +858,18 @@ function namingLine(ui: Ui, text: string) {
   return ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${text} ╌╌` })] });
 }
 
-// A row from the state, none until the first usage reading; read every frame (the tick), so it moves live.
+// A row from the state, none until the first usage reading.
 async function drawRow($: EngineInterface, ui: Ui, row: Row, ordering: boolean): Promise<ReturnType<Ui["Box"]> | undefined> {
+  const s = await snapshotOf($, ordering);
+  if (!s) return undefined;
+  // A git tag draws nothing until the first git scan.
+  const gitTag = s.git && gitParts(ui, s.git, s.pr);
+  return rowOf(ui, row.map((name) => (isFiller(name) ? name : isGitTag(name) ? (gitTag ? gitTag(name) : []) : SEGMENTS[name](ui, s))));
+}
+
+// What the rows and the explanation line draw, read once by each, so an explanation always agrees with its tag; none
+// until the first usage reading. Read every frame (the tick), so it moves live. While the order pane shows, the samples.
+async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapshot | undefined> {
   await $.state.get(TICK);
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return undefined;
@@ -859,10 +883,7 @@ async function drawRow($: EngineInterface, ui: Ui, row: Row, ordering: boolean):
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: readAt = 0 } = await $.state.get(READ);
   const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, readAt, now: Math.floor(Date.now() / 1000), phase };
-  const s = ordering ? withSamples(live) : live;
-  // A git tag draws nothing until the first git scan.
-  const gitTag = s.git && gitParts(ui, s.git, s.pr);
-  return rowOf(ui, row.map((name) => (isFiller(name) ? name : isGitTag(name) ? (gitTag ? gitTag(name) : []) : SEGMENTS[name](ui, s))));
+  return ordering ? withSamples(live) : live;
 }
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
@@ -1167,10 +1188,56 @@ function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: numb
 }
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
-// that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it.
+// that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it. Over it, hidden
+// until its tag's hover scope is hovered, each shown tag's explanation.
 async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
   const shown = (await runOutWarning($, ui)) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
-  return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: shown ? [shown] : [] });
+  const s = await snapshotOf($, ordering);
+  const texts = s ? explanations(s) : {};
+  // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it.
+  const grey = hex(color("empty"));
+  const overlays = STATUS_ROW.flatMap((tag) => {
+    const text = texts[tag];
+    if (text === undefined || !isShown(tag)) return [];
+    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: [ui.Text({ backgroundColor: grey, children: text })] })];
+  });
+  return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: [...(shown ? [shown] : []), ...overlays] });
+}
+
+// Each status tag's explanation, for a tag the snapshot draws.
+function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
+  const out: Partial<Record<StatusTag, string>> = {};
+  const t = s.tokens;
+  const { context } = s.usage;
+  for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
+    const found = limitOf(s, badge)?.found;
+    if (!found) continue;
+    const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : 0;
+    // Rounded as the gauge's badge and the run-out warning round it.
+    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.`;
+  }
+  if (context.tokens !== undefined && context.window > 0) {
+    const usable = usableOf(context, s.compactAt);
+    out.context = `Context: ${formatTokens(usable - context.tokens)} tokens left of ${formatTokens(usable)}.`;
+  }
+  if (s.turns !== undefined) {
+    const { value, agents } = turnsOf(s.turns, t);
+    out.turns = `Prompts sent${t ? " / the main session's requests for them" : ""}: ${value}.${agents ? ` Subagents run / their requests: ${agents}.` : ""}`;
+  }
+  if (t) {
+    const { all, spend } = costsOf(t, mergeCosts);
+    out.tokens = `${all ? "Main session and subagents" : "Main session"}: ${dollars(spend)} for ${formatTokens(spend.tokens)} tokens.`;
+    if (t.agents.count > 0 && !all) out.agents = `Subagents: ${dollars(t.agents)} for ${formatTokens(t.agents.tokens)} tokens.`;
+  }
+  const c = t?.cache;
+  if (c) {
+    const left = cacheLeft(c, s.sent, s.now);
+    out.cache =
+      left > 0
+        ? `Cache warm for ${countdown(Math.min(left, c.ttl - 1))}: the next prompt reads it for ${usd(c.read)}. Once cold, writing it again costs ${usd(c.write)}.`
+        : `Cache cold: the next prompt writes it again for ${usd(c.write)}.`;
+  }
+  return out;
 }
 
 // The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,
@@ -1394,8 +1461,7 @@ function refreshGit($: EngineInterface): void {
     // statusline.zsh asked gh only for a branch on a remote that is not the default; gh goes over the network,
     // so the git parts draw first. Nor is it asked while no shown part draws what it answers.
     const named = git.branch !== "" && git.branch !== "HEAD" && git.branch !== git.defaultBranch;
-    const shown = [...aboveLines, ...belowLines].some((line) => isRow(line) && line.some((tag) => isTag(tag) && PR_TAGS.includes(tag)));
-    const branch = named && !git.vsDefault && shown ? `${git.top}:${git.branch}` : "";
+    const branch = named && !git.vsDefault && PR_TAGS.some(isShown) ? `${git.top}:${git.branch}` : "";
     const now = await $.clock.now();
     if (branch === prFor && now - prAt < (prBusy ? PR_BUSY_POLL_MS : PR_POLL_MS)) return;
     prFor = branch;
@@ -1701,11 +1767,7 @@ function requestCost(
 
 // Two bars stacked in one row, depleting right to left as statusline.zsh's bars did: every cell is ▀,
 // its glyph colour the top half (the window's time left), its background the bottom half (its usage left).
-// A half past its bar's end is dim, so both bars show where 100% is.
-// The countdown to the reset shows only while the limit is hovered, laid over the bar: a keyed Box is the
-// hover scope, and the countdown an absolute Box drawn last, so it paints over the bar without moving anything.
-// Right-aligned, a space short of the bar's end as the chips' values keep one, on the bar's dim grey; the longest
-// countdown (23h59m) and its space are 7 cells, the default 7d bar's width.
+// A half past its bar's end is dim, so both bars show where 100% is. Hovered, the explanation line shows the countdown.
 function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, now: number) {
   const n = barCells[limit.badge];
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - now : undefined;
@@ -1724,13 +1786,7 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
       }),
     );
   }
-  if (left !== undefined && left > 0) {
-    const shown = `${countdown(left)} `.padStart(n);
-    parts.push(
-      hoverOver(Box, ` ${limit.badge} `.length + n - [...shown].length, Text({ color: hex(from), backgroundColor: hex(empty), bold: true, children: shown })),
-    );
-  }
-  return Box({ key: limit.kind, flexDirection: "row", children: parts });
+  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
 }
 
 // The gauge: the badge reads the limit and its percent used, rounded as the run-out warning rounds it; the bar is the
@@ -1757,44 +1813,39 @@ function gaugeParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
     Text({ color: hex(color(pace ? "pace.par" : "pace.none")), backgroundColor: empty, children: "│" }),
     ...out.map((j) => cell(under ? 0 : halves, j, lerp(over.from, over.to, j, side), "▌")),
   ];
-  return Box({ key: limit.kind, flexDirection: "row", children: parts });
+  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
 }
 
-// Σ what the main session cost and AGENT_MARK what its subagents did, each a chip; hovered, the tokens behind it.
-// Merged, the Σ chip holds both and the subagents' chip is left out.
+// Σ what the main session cost and AGENT_MARK what its subagents did, each a chip; hovered, the explanation line shows
+// the tokens behind it. Merged, the Σ chip holds both and the subagents' chip is left out.
 function tokenParts(Box: Ui["Box"], Text: Ui["Text"], t: StatusTokens, merged: boolean) {
-  const { main, agents } = t;
-  const all = merged && agents.count > 0;
-  const spend = all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced } : main;
-  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(spend), hover: formatTokens(spend.tokens), ...stops("costs") })];
+  const { agents } = t;
+  const { all, spend } = costsOf(t, merged);
+  const parts = [chipParts(Box, Text, { key: "tokens", mark: "Σ", value: dollars(spend), ...stops("costs") })];
   if (agents.count && !all) {
-    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(agents), hover: formatTokens(agents.tokens), ...stops("agents") }));
+    parts.push(chipParts(Box, Text, { key: "agents", mark: AGENT_MARK, value: dollars(agents), ...stops("agents") }));
   }
   return parts;
 }
 
-type Chip = { key: string; mark: string; value: string; hover?: string; hoverStops?: { from: RGB; to: RGB }; from: RGB; to: RGB };
+// The Σ chip's spend: the main session's, or merged once a subagent has run (`all`), its subagents' added to it.
+function costsOf(t: StatusTokens, merged: boolean): { all: boolean; spend: StatusSpend } {
+  const { main, agents } = t;
+  const all = merged && agents.count > 0;
+  return { all, spend: all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced } : main };
+}
+
+type Chip = { key: "turns" | "tokens" | "agents" | "cache"; mark: string; value: string; from: RGB; to: RGB };
 
 // Two tags side by side, as a limit's badge sits against its bar: the mark on the darker stop in its contrast colour,
-// then the value padded on the grey behind the limits' bars, in a gradient from the lighter stop to the darker. The
-// value's tag is as wide as the longer of the value and the hover value, so the hover value, laid over it unbolded,
-// fits whole; both are right-aligned, a space short of the right edge, as the limits' countdowns are. The hover value takes its own stops when it has them.
+// then the value, a space each side, in a gradient from the lighter stop to the darker.
 function chipParts(Box: Ui["Box"], Text: Ui["Text"], c: Chip) {
-  const tag = ` ${c.mark} `;
-  const width = Math.max([...c.value].length, c.hover ? [...c.hover].length : 0);
-  const pad = (text: string) => ` ${" ".repeat(width - [...text].length)}${text} `;
-  const gradient = (stops: { from: RGB; to: RGB }) => (i: number, n: number) => lerp(stops.from, stops.to, i, n);
   const children = [
-    Text({ color: hex(contrast(c.to)), backgroundColor: hex(c.to), children: tag }),
-    // The grey says a hover has more; a chip without one stands on no background.
-    run(Box, Text, pad(c.value), gradient(c), undefined, c.hover ? color("empty") : undefined),
+    Text({ color: hex(contrast(c.to)), backgroundColor: hex(c.to), children: ` ${c.mark} ` }),
+    // The grey says hovering shows more: every chip has an explanation, which only the explanation line can show.
+    run(Box, Text, ` ${c.value} `, (i, n) => lerp(c.from, c.to, i, n), undefined, explainRow ? color("empty") : undefined),
   ];
-  if (c.hover) {
-    children.push(
-      hoverOver(Box, [...tag].length, run(Box, Text, pad(c.hover), gradient(c.hoverStops ?? c), undefined, color("empty"))),
-    );
-  }
-  return Box({ key: c.key, flexDirection: "row", children });
+  return Box({ key: c.key, flexDirection: "row", hover: { scope: explainScope(c.key) }, children });
 }
 
 // statusline.zsh's REPO row: each segment a gradient one palette stop wide, starting at blue and stepping on per segment
@@ -1869,12 +1920,6 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
       });
 }
 
-// A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.
-// A value wider than a short bar would start left of its chip, over the tag before it, so it starts at the chip's edge.
-function hoverOver(Box: Ui["Box"], left: number, child: ReturnType<Ui["Box"] | Ui["Text"]>) {
-  return Box({ position: "absolute", top: 0, left: Math.max(0, left), display: "none", hover: { display: "flex" }, children: [child] });
-}
-
 type Piece = { text: string; href?: string; color?: RGB };
 
 // A remote's web address: git@host:o/r.git, ssh://git@host/o/r.git and https://host/o/r.git all give https://host/o/r;
@@ -1898,16 +1943,21 @@ function linkRun(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], pieces: Pie
   });
 }
 
-// PROMPT_MARK the prompts sent / the model requests the main session made for them; hovered, the same for its subagents:
-// AGENT_MARK how many ran / the requests they made. The requests come with the token scan, so until it has run the prompts show alone.
+// PROMPT_MARK the prompts sent / the model requests the main session made for them; hovered, the explanation line adds
+// the same for its subagents.
 function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, t: StatusTokens | undefined) {
-  const value = t ? `${turns} / ${t.main.requests}` : String(turns);
-  const hover = t?.agents.count ? `${AGENT_MARK} ${t.agents.count} / ${t.agents.requests}` : undefined;
-  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value, hover, ...stops("turns") });
+  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value: turnsOf(turns, t).value, ...stops("turns") });
 }
 
-// Warm: the time left before the cache expires and what the next prompt's cached prefix costs read; hovered, in the
-// cold colours, what it costs once cold. Cold: the cost of writing it again. Each request that hits the cache restarts its TTL.
+// The turns tag's value, and once a subagent has run, AGENT_MARK how many ran / the requests they made. The requests
+// come with the token scan, so until it has run the prompts stand alone.
+function turnsOf(turns: number, t: StatusTokens | undefined): { value: string; agents?: string } {
+  return { value: t ? `${turns} / ${t.main.requests}` : String(turns), agents: t?.agents.count ? `${AGENT_MARK} ${t.agents.count} / ${t.agents.requests}` : undefined };
+}
+
+// Warm: the time left before the cache expires and what the next prompt's cached prefix costs read; hovered, the
+// explanation line adds what it costs once cold. Cold: the cost of writing it again. Each request that hits the cache
+// restarts its TTL.
 // The mark is a moon with a quarter of its fill gone for each quarter of the TTL that has passed, and empty once cold.
 function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: number, sent: number | undefined) {
   const left = cacheLeft(c, sent, now);
@@ -1915,7 +1965,7 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
   // The first second after a request has the whole TTL left, which reads 1h0m (5m on a short cache) before the next
   // second reads 59m (4m): one second short of the TTL reads the same from the start.
   return left > 0
-    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, hover: usd(c.write), hoverStops: stops("cache.cold"), ...stops("cache.warm") })
+    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, ...stops("cache.warm") })
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
 }
 
@@ -1948,11 +1998,12 @@ function cells(pct: number, n: number): number {
 // left (the first `smart` tokens, where recall is precise), the bottom half the window left before auto-compaction;
 // past it the bottom refills red, a full bar per 25% over. With no smart zone (`smart` 0) each cell is one full-height
 // block of the window left, the glyph a moon filling across the whole window. Cells run red to green across the bar (zsh's _sl_gyr_ramp),
-// and the badge is zsh's recall-zone glyph on the colour of the percentage used. Hovered, the tokens left (zsh's ↻).
+// and the badge is zsh's recall-zone glyph on the colour of the percentage used. Hovered, the explanation line shows the
+// tokens left (zsh's ↻).
 function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["context"], limit: number | undefined, smart: number) {
   if (context.tokens === undefined || context.window <= 0) return [];
   const n = barCells.context;
-  const usable = limit && limit > 0 ? limit : context.window;
+  const usable = usableOf(context, limit);
   const current = context.tokens;
   const remaining = usable - current;
   const pct = Math.min(Math.floor((current * 100) / usable), 150);
@@ -1968,11 +2019,12 @@ function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["co
     const under = i < bottom ? (overflow ? color("context.over") : lit) : empty;
     parts.push(Text({ color: hex(smart <= 0 ? under : i < top ? lit : empty), backgroundColor: hex(under), children: "▀" }));
   }
-  const shown = `${formatTokens(remaining)} `.padStart(n);
-  parts.push(
-    hoverOver(Box, [...badge].length + n - [...shown].length, Text({ color: hex(badgeBg), backgroundColor: hex(empty), bold: true, children: shown })),
-  );
-  return [Box({ key: "context", flexDirection: "row", children: parts })];
+  return [Box({ key: "context", flexDirection: "row", hover: { scope: explainScope("context") }, children: parts })];
+}
+
+// The tokens the context runs to: the auto-compaction limit the session reports, else the whole window.
+function usableOf(context: StatusUsage["context"], limit: number | undefined): number {
+  return limit && limit > 0 ? limit : context.window;
 }
 
 // Ported from statusline.zsh's sl_calc_context_icon: the glyph says the recall zone, not the fill. Up to `smart`
