@@ -70,8 +70,8 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   return limit && found ? [limitParts(Box, Text, limit, found, s.now)] : [];
 }
 
-// The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer, which
-// its /config toggle switches on. Lines before `prompt` draw above the prompt, the rest under it below the engine's
+// The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
+// the explanation line, which its /config toggle switches on. Lines before `prompt` draw above the prompt, the rest under it below the engine's
 // hint line. A row holds any tags, the git ones and the status ones alike; the tags after a `hidden` line are off.
 // /cockpit:order writes it by dragging. Applied in register.
 // A spacer in a row takes a share of the room the tags leave, so what stands before it is pushed left and what stands
@@ -95,10 +95,10 @@ const isTag = (name: string): name is Tag => TAGS.some((tag) => tag === name);
 const isGitTag = (name: Tag): name is GitTag => GIT_ROW.some((tag) => tag === name);
 // The tags that need the pull request, which gh fetches.
 const PR_TAGS: readonly Tag[] = ["pr", "review", "comments", "conflict", "checks"];
-const LINES = ["fresh", "compact", "forecast"] as const;
+const LINES = ["fresh", "compact", "explain"] as const;
 type Line = (typeof LINES)[number];
 const isLine = (name: string): name is Line => LINES.some((line) => line === name);
-const LINE_TOGGLES: Record<Line, string> = { fresh: "fresh_start", compact: "compact_hint", forecast: "limit_forecast" };
+const LINE_TOGGLES: Record<Line, string> = { fresh: "fresh_start", compact: "compact_hint", explain: "explain_row" };
 type Row = (Tag | Filler)[];
 const isRow = (line: unknown): line is Row => Array.isArray(line);
 type Layout = { lines: (Row | Line | Spacer | "prompt")[]; hidden: Tag[] };
@@ -172,7 +172,7 @@ const LABELS: Record<string, string> = {
   changes: "changes",
   fresh: "cold cache: fresh start",
   compact: "smart zone: compaction",
-  forecast: "limit forecast",
+  explain: "explanation line",
   prompt: "━━ your prompt ━━",
   hidden: "╌╌ hidden: switched off ╌╌",
   spacer: "↔ spacer",
@@ -311,10 +311,10 @@ const HIGH_STEPS = 3;
 const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: HIGH_STEPS, xhigh: 4, max: 5 };
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
-// A limit is the account's, but a session hears its figure only in its own responses, so the forecast line needs one from
-// this session this recent: the session being prompted is the one that warns, an idle one's figure is stale.
+// A limit is the account's, but a session hears its figure only in its own responses, so the run-out warning needs one
+// from this session this recent: the session being prompted is the one that warns, an idle one's figure is stale.
 const FORECAST_FRESH_MS = 10 * 60_000;
-// Early in a window the pace is noise: no forecast until this share of it has gone.
+// Early in a window the pace is noise: no run-out warning until this share of it has gone.
 const FORECAST_FROM = 0.1;
 // The share of the smart zone the context has used when the line offering a compaction appears.
 const COMPACT_HINT_AT = 0.9;
@@ -368,7 +368,7 @@ const COLORS = {
   "cache.warm.to": { group: "", label: "the mark", rgb: [21, 128, 61] },
   "cache.cold.from": { group: "Cache chip, cold", label: "the fresh-start line's $", rgb: [248, 113, 113] },
   "cache.cold.to": { group: "", label: "the mark", rgb: [185, 28, 28] },
-  notice: { group: "Warnings", label: "the compaction line's diamond and link, the limit forecast's sign", rgb: [251, 191, 36] },
+  notice: { group: "Warnings", label: "the compaction line's diamond and link, the run-out warning's sign", rgb: [251, 191, 36] },
   // A pull request's number, whole in one colour by state; a failed check's cross stands out from the row's gradient.
   "pr.open": { group: "Pull request", label: "open", rgb: [250, 204, 21] },
   "pr.draft": { group: "", label: "draft", rgb: [240, 240, 245] },
@@ -511,7 +511,8 @@ let prBusy = false;
 let turnRate = false;
 // The merge_costs option: one cost chip for the main conversation and its subagents together.
 let mergeCosts = false;
-// The limit_forecast option: a line when a limit runs out before its reset at the pace so far.
+// The limit_forecast option: the run-out warning in the explanation line, when a limit runs out before its reset at the
+// pace so far.
 let limitForecast = false;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
@@ -580,7 +581,7 @@ export const register: Register = (on, options) => {
     const spacers = "Drag the spacer out of hidden to add one, and drop one under hidden to take it away.";
     const gaps = "A gap is that many columns, fixed: tags with neither a gap nor a spacer between them touch. Gaps drag out of hidden as the spacer does.";
     return pane(ui, "Cockpit order", "Press a row, drag it, release to drop it. Anything dropped under hidden is switched off.", [
-      ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. A row draws the tags under its marker in the list below. Drag the new row out of hidden to reserve one, then drop tags under its marker. A row dropped under hidden is gone, and its tags are switched off. The cold cache, smart zone and limit forecast lines show only while they apply. A spacer is a blank line. ${spacers}`),
+      ...section(ui, "Lines around the prompt", `A line above the prompt marker draws above your prompt. A line below it draws under your prompt. A row draws the tags under its marker in the list below. Drag the new row out of hidden to reserve one, then drop tags under its marker. A row dropped under hidden is gone, and its tags are switched off. The cold cache and smart zone lines show only while they apply. The explanation line always takes a line, and shows the run-out warning when a limit runs out before its reset. A spacer is a blank line. ${spacers}`),
       list("lines"),
       ...section(ui, "Tags", `Each row draws the tags under its marker, left to right. A spacer takes a share of the room the tags leave, pushing what stands before it left and what stands after it right. One spacer first draws the row against the right edge. Spacers side by side take a share each, so they push harder. ${gaps} ${spacers}`),
       list("tags"),
@@ -744,9 +745,10 @@ export const register: Register = (on, options) => {
 
   // Under the prompt the engine's hint line draws, then the lines placed below it, in line_order. Among them are the
   // mod's own, one for each offer that holds: a fresh start once the cache is cold, a compaction once the smart zone is
-  // nearly spent, a warning when a limit runs out before it resets. A draft in the prompt keeps them, as a reminder not
-  // to keep going. The fresh start waits while Claude works; the compaction does not, for the command queues and runs
-  // once the session is idle. The first two have a button that hides them, for the rest of the session or the dismiss_minutes option.
+  // nearly spent; and the explanation line, with the run-out warning when a limit runs out before it resets. A draft in
+  // the prompt keeps them, as a reminder not to keep going. The fresh start waits while Claude works; the compaction does
+  // not, for the command queues and runs once the session is idle. The offers have a button that hides them, for the
+  // rest of the session or the dismiss_minutes option.
   on("ui.render", { component: "PromptHint" }, async ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
     const drawn = await next(e);
@@ -792,9 +794,10 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
 }
 
 // The named lines, in order, each as the elements it draws now (none for an offer that does not hold); a spacer is a
-// blank line, and blank lines that meet, around an offer that does not hold, draw as one. While the order pane shows,
-// every blank line draws, each row every tag, and an offer that does not hold, or a row with no tags yet, a dim line
-// naming it in its place: a made-up offer would carry buttons that act.
+// blank line, and blank lines that meet, around an offer that does not hold or an empty row, draw as one. The
+// explanation line always draws, so the blank lines around it never meet. While the order pane shows, every blank line
+// draws, each row every tag, and an offer that does not hold, a row with no tags yet, or a blank explanation line, a
+// dim line naming it in its place: a made-up offer would carry buttons that act.
 async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer)[], isWorking: boolean) {
   // The panes not reading leaves the lines as they are.
   const ordering = (await $.ui.panes().catch(() => [])).some((pane) => pane.id === ORDER_PANE && pane.isShown);
@@ -807,11 +810,9 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer
       : name === SPACER ? [ui.Box({ height: 1 })]
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
-      : await forecastLines($, ui);
-    const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER ? undefined : `${LABELS[name]}: shows when it applies`;
-    if (ordering && empty && !found.some((line) => line !== undefined)) {
-      found.push(ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${empty} ╌╌` })] }));
-    }
+      : [await explainLine($, ui, ordering)];
+    const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER || name === "explain" ? undefined : `${LABELS[name]}: shows when it applies`;
+    if (ordering && empty && !found.some((line) => line !== undefined)) found.push(namingLine(ui, empty));
     for (const line of found) {
       if (line === undefined) continue;
       drawn.push(line);
@@ -819,6 +820,11 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer
     }
   }
   return drawn;
+}
+
+// The dim line the order pane draws in place of a line with nothing to show.
+function namingLine(ui: Ui, text: string) {
+  return ui.Box({ children: [ui.Text({ dimColor: true, children: `╌╌ ${text} ╌╌` })] });
 }
 
 // A row from the state, none until the first usage reading; read every frame (the tick), so it moves live.
@@ -1130,23 +1136,30 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
   return hitIn > 0 && hitIn < left ? { hitIn, left } : undefined;
 }
 
-// A line under the prompt for each limit that runs out before it resets: the pace is the whole window's so far, idle
-// nights included, so it is the one to plan by, not a burst's. Drawn only while the session's reading is fresh.
-async function forecastLines($: EngineInterface, ui: Ui) {
-  if (!limitForecast) return [];
+// The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
+// that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it.
+async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
+  const shown = (await runOutWarning($, ui)) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
+  return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: shown ? [shown] : [] });
+}
+
+// The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,
+// idle nights included, so it is the one to plan by, not a burst's. Shown only while the session's reading is fresh.
+async function runOutWarning($: EngineInterface, ui: Ui) {
+  if (!limitForecast) return undefined;
   const { value: usage } = await $.state.get(USAGE);
   const { value: readAt = 0 } = await $.state.get(READ);
   const now = Date.now();
-  return LIMITS.flatMap((limit) => {
+  const [first] = LIMITS.flatMap((limit) => {
     const found = usage?.rateLimits.find((r) => r.kind === limit.kind);
     const hit = found ? forecastOf(limit, found, readAt, now) : undefined;
-    if (!found || !hit) return [];
-    return [
-      notice(ui, WARN_MARK, color("notice"), [
-        ui.Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
-      ]),
-    ];
-  });
+    return found && hit ? [{ limit, found, hit }] : [];
+  }).sort((a, b) => a.hit.hitIn - b.hit.hitIn);
+  if (!first) return undefined;
+  const { limit, found, hit } = first;
+  return notice(ui, WARN_MARK, color("notice"), [
+    ui.Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
+  ]);
 }
 
 // Whether the person dismissed this offer, and the dismissal still holds: for the rest of the session, or dismissFor ms.

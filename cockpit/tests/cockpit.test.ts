@@ -60,8 +60,8 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
 const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache";
-const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
-const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
+const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
+const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
 function must<T>(found: T | undefined, what: string): T {
   if (found === undefined) throw new Error(`${what} did not draw`);
@@ -314,7 +314,7 @@ describe("cockpit", () => {
     });
   }
 
-  test("draws each row on its side of the prompt in the layout", { options: { layout: `${STATUS};prompt;${GIT};fresh;compact;forecast` } }, async ($, on) => {
+  test("draws each row on its side of the prompt in the layout", { options: { layout: `${STATUS};prompt;${GIT};fresh;compact;explain` } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -329,7 +329,7 @@ describe("cockpit", () => {
   });
 
   // Any tag goes in any row: the folder, a git part, beside the model under the prompt.
-  test("draws a git part and a status tag in one row", { options: { layout: "prompt;model,gap-1,folders;fresh;compact;forecast;hidden;branch,worktree,pr,review,comments,sync,conflict,checks,changes,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
+  test("draws a git part and a status tag in one row", { options: { layout: "prompt;model,gap-1,folders;fresh;compact;explain;hidden;branch,worktree,pr,review,comments,sync,conflict,checks,changes,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -506,7 +506,7 @@ describe("cockpit", () => {
   for (const [title, options, chips, marks] of [
     ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, SPLIT, ["⏎", "Σ", "\uf0e7"]],
     ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.25", "1.46M"]], ["⏎", "Σ"]],
-    ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;forecast;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "Σ"]],
+    ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;explain;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "Σ"]],
   ] as const) {
     test(title, { options }, async ($, on) => {
       stubHint(on);
@@ -681,7 +681,86 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("draws the limit forecast above the prompt when the layout puts it there", { options: { layout: `forecast;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
+  test("draws the explanation line under the prompt by default, after the fresh-start and compaction lines", async ($, on) => {
+    stubHint(on);
+    const below = await mountHint($);
+    const drawn = await below.drawn();
+    expect(leaves(isDrawn(drawn) ? drawn.children : []).at(-1)?.props.key).toBe("explain");
+    await below.unmount();
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    expect(await above.find({ type: "Box", key: "explain" })).toBeUndefined();
+    await above.unmount();
+    // The default layout as the order pane lists it: a stale default naming forecast would add an empty row-3.
+    const pane = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    expect((await pane.find({ type: "Client", key: "lines" }))?.props.props).toMatchObject({ items: ["row-1", "prompt", "row-2", "fresh", "compact", "explain", "hidden", "spacer", "row"] });
+    await pane.unmount();
+  });
+
+  // forecast is no longer a line's name: a saved layout's line of it is an empty row, and the explanation line goes last.
+  test("draws the explanation line last under the prompt for a saved layout that names forecast", { options: { layout: `forecast;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    expect(await above.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
+    await above.unmount();
+    const below = await mountHint($);
+    const drawn = await below.drawn();
+    const last = leaves(isDrawn(drawn) ? drawn.children : []).at(-1);
+    expect(last?.props.key).toBe("explain");
+    expect(flat(last)).toMatch(/at this pace/);
+    await below.unmount();
+  });
+
+  for (const [title, options, line] of [
+    ["draws the explanation line blank with nothing to show", {}, ""],
+    ["draws no explanation line and no run-out warning anywhere with explain_row off", { explain_row: false }, undefined],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    // With explain_row on nothing is shown: no limit at all. Off, a 5h that runs out early has no place to warn.
+    const rateLimits = line === undefined ? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] : [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const below = await mountHint($);
+    const explain = await below.find({ type: "Box", key: "explain" });
+    expect(explain?.text).toBe(line);
+    expect(await below.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
+    await below.unmount();
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    expect(await above.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
+    await above.unmount();
+  });
+
+  test("wraps a run-out warning wider than the window between words, the explanation line growing for it", async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
+    expect(explain.props.height).toBeUndefined();
+    // The kit lays nothing out, so the wrap is read off the props: a sentence Box that wraps, and text that is not cut.
+    // Outermost first: the hint's own column goes, then the explanation line, leaving what the warning sits in.
+    const [, ...holding] = (await ui.findAll({ type: "Box", text: /at this pace/ })).filter((b) => b.props.key !== "explain");
+    expect(holding.some((b) => b.props.flexWrap === "wrap")).toBe(true);
+    expect(holding.every((b) => b.props.overflow === undefined && b.props.height === undefined)).toBe(true);
+    expect((await ui.find({ type: "Text", text: /at this pace/ }))?.props.wrap).toBeUndefined();
+    await ui.unmount();
+  });
+
+  test("draws the explanation line above the prompt when the layout puts it there", { options: { layout: `explain;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
     stubHint(on);
     const now = Date.now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -725,10 +804,39 @@ describe("cockpit", () => {
     on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - readAgoMin * 60_000 - 1_000, version: 1 } }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    const line = await ui.find({ type: "Text", text: /at this pace/ });
-    if (shown) expect(line?.text).toMatch(/^ 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/);
-    else expect(line).toBeUndefined();
-    expect(await ui.find({ type: "Text", text: /7d at/ })).toBeUndefined();
+    const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
+    // The warning sign, then the sentence; blank when the warning does not apply.
+    expect(explain.text).toMatch(shown ? /^\uf071 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/ : /^$/);
+    await ui.unmount();
+  });
+
+  // Both limits run out before their resets; the line warns of the one that runs out first. The 7d at 99% with a day
+  // left is 6 days in: 1h27m to go. The 5h at 70% with 2h left runs out in 1h17m, at 65% in 1h36m.
+  for (const [five, shown, hidden] of [
+    [70, /^\uf071 5h at 70%: at this pace it runs out in 1h17m, /, /7d at/],
+    [65, /^\uf071 7d at 99%: at this pace it runs out in 1h27m, /, /5h at/],
+  ] as const)
+  test(`warns of the limit that runs out sooner, with the 5h at ${five}% and the 7d at 99%`, async ($, on) => {
+    stubHint(on);
+    const now = Date.now();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({
+      value: {
+        startedAt: 0,
+        context: { window: 1_000_000 },
+        rateLimits: [
+          { kind: "five_hour", percentUsed: five, resetsAt: new Date(now + 120 * 60_000).toISOString() },
+          { kind: "seven_day", percentUsed: 99, resetsAt: new Date(now + 86_400_000).toISOString() },
+        ],
+      },
+    }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("state.get", { plugin: "cockpit", key: "readAt" }, () => ({ value: { value: now - 1_000, version: 1 } }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
+    expect(explain.text).toMatch(shown);
+    expect(explain.text).not.toMatch(hidden);
     await ui.unmount();
   });
 
@@ -1379,12 +1487,16 @@ describe("cockpit", () => {
     for (let i = 0; i < 50 && (await chips()).length < 7; i++) await settle();
     expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"]);
     expect(await ui.find({ type: "Text", text: /smart zone: compaction: shows when it applies/ })).toBeDefined();
+    // The blank explanation line names itself, dim, inside its own line.
+    expect((await ui.find({ type: "Box", key: "explain" }))?.text).toMatch(/explanation line/);
+    expect((await ui.find({ type: "Text", text: /explanation line/ }))?.props.dimColor).toBe(true);
 
     isOpen = false;
     await clock.advance(100);
     for (let i = 0; i < 50 && (await chips()).length > 0; i++) await settle();
     expect(await chips()).toEqual([]);
     expect(await ui.find({ type: "Text", text: /shows when it applies/ })).toBeUndefined();
+    expect((await ui.find({ type: "Box", key: "explain" }))?.text).toBe("");
     await ui.unmount();
   });
 
@@ -1556,8 +1668,8 @@ describe("cockpit", () => {
     { name: "queued checks", status: "QUEUED", calls: 2 },
     { name: "finished checks", status: "COMPLETED", calls: 1 },
     { name: "the pull request's parts hidden", status: "QUEUED", calls: 0, options: { layout: withGit("folders,gap-1,branch,gap-1,worktree,gap-1,sync,gap-1,changes", "pr,review,comments,conflict,checks") } },
-    { name: "the git row gone", status: "QUEUED", calls: 0, options: { layout: `prompt;${STATUS};fresh;compact;forecast;hidden;${GIT.replaceAll(",gap-1", "")}` } },
-    { name: "the pull request in the status row", status: "QUEUED", calls: 2, options: { layout: `folders;prompt;${STATUS},pr,checks;fresh;compact;forecast` } },
+    { name: "the git row gone", status: "QUEUED", calls: 0, options: { layout: `prompt;${STATUS};fresh;compact;explain;hidden;${GIT.replaceAll(",gap-1", "")}` } },
+    { name: "the pull request in the status row", status: "QUEUED", calls: 2, options: { layout: `folders;prompt;${STATUS},pr,checks;fresh;compact;explain` } },
   ] as { name: string; status: string; calls: number; options?: Record<string, string> }[]) {
     test(`asks gh ${calls} times in 12 s for ${name}`, { options }, async ($, on) => {
       stubHint(on);
@@ -1786,7 +1898,7 @@ describe("cockpit", () => {
     isLocked: false,
   });
   // The layout row is hidden, so the list leaves it out.
-  const ROWS = ["fresh_start", "compact_hint", "limit_forecast"].map((field) => configRow(field, true));
+  const ROWS = ["fresh_start", "compact_hint", "explain_row"].map((field) => configRow(field, true));
 
   test("hides the layout row in /config, and no other", async ($, on) => {
     // The engine beneath answers each row as it is.
@@ -1811,16 +1923,16 @@ describe("cockpit", () => {
     return written;
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
-  // (status), fresh, compact, forecast, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
+  // (status), fresh, compact, explain, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
   // (1-10), ── row 2 ── (11), model .. cache (12-19), ── hidden ── (20), spacer, gap-1, gap-2, gap-3 (21-24).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
   const STATUS_TAGS = "model,limit_7d,limit_5h,context,turns,tokens,agents,cache";
-  const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;forecast${hidden ? `;hidden;${hidden}` : ""}`;
+  const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
   test("dragging a row below the prompt marker moves it under the prompt", { options: PINNED }, async ($, on) => {
     // row 1 dropped on row 2's line goes below the prompt, after row 2.
-    expect(await dragIn(on, $, PINNED, "lines", 0, 2)).toEqual([["layout", `prompt;${STATUS_TAGS};${GIT_TAGS};fresh;compact;forecast`]]);
+    expect(await dragIn(on, $, PINNED, "lines", 0, 2)).toEqual([["layout", `prompt;${STATUS_TAGS};${GIT_TAGS};fresh;compact;explain`]]);
   });
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
@@ -1840,20 +1952,20 @@ describe("cockpit", () => {
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
     // The new row (8) dropped on the prompt marker's line, under row 1.
-    expect(await dragIn(on, $, PINNED, "lines", 8, 1)).toEqual([["layout", `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;forecast`]]);
+    expect(await dragIn(on, $, PINNED, "lines", 8, 1)).toEqual([["layout", `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain`]]);
   });
 
-  test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;forecast` } }, async ($, on) => {
+  test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,context,turns,tokens,agents,cache;fresh;compact;forecast`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,context,turns,tokens,agents,cache;fresh;compact;explain`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "lines", 2, 6)).toEqual([["layout", `${GIT_TAGS};prompt;fresh;compact;forecast;hidden;${STATUS_TAGS}`]]);
+    expect(await dragIn(on, $, PINNED, "lines", 2, 6)).toEqual([["layout", `${GIT_TAGS};prompt;fresh;compact;explain;hidden;${STATUS_TAGS}`]]);
   });
 
-  test("dragging the forecast line above the prompt marker puts it above the prompt", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "lines", 5, 0)).toEqual([["layout", `forecast;${GIT_TAGS};prompt;${STATUS_TAGS};fresh;compact`]]);
+  test("dragging the explanation line above the prompt marker puts it above the prompt", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "lines", 5, 0)).toEqual([["layout", `explain;${GIT_TAGS};prompt;${STATUS_TAGS};fresh;compact`]]);
   });
 
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
@@ -1880,7 +1992,7 @@ describe("cockpit", () => {
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
     // The spacer (7) dropped on the prompt marker's line, above it, under row 1.
-    expect(await dragIn(on, $, PINNED, "lines", 7, 1)).toEqual([["layout", `${GIT_TAGS};spacer;prompt;${STATUS_TAGS};fresh;compact;forecast`]]);
+    expect(await dragIn(on, $, PINNED, "lines", 7, 1)).toEqual([["layout", `${GIT_TAGS};spacer;prompt;${STATUS_TAGS};fresh;compact;explain`]]);
   });
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
@@ -1889,19 +2001,24 @@ describe("cockpit", () => {
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
-  test("dragging the forecast line into the hidden zone switches off its toggle", { options: PINNED }, async ($, on) => {
-    expect(await dragIn(on, $, PINNED, "lines", 5, 6)).toEqual([["limit_forecast", false]]);
+  test("dragging the explanation line into the hidden zone writes explain_row false", { options: PINNED }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "lines", 5, 6)).toEqual([["explain_row", false]]);
+  });
+
+  // Switched off, the explanation line is listed after hidden (8): dropped on the hidden marker's line, it is above it.
+  test("dragging the explanation line back out of the hidden zone writes explain_row true", { options: { ...PINNED, explain_row: false } }, async ($, on) => {
+    expect(await dragIn(on, $, PINNED, "lines", 8, 5)).toEqual([["explain_row", true]]);
   });
 
   test("a drop that changes nothing writes nothing", { options: PINNED }, async ($, on) => {
     expect(await dragIn(on, $, PINNED, "lines", 0, 0)).toEqual([]);
   });
 
-  test("the order pane lists the lines around the prompt marker and each row's tags under its marker, hidden ones after theirs", { options: { layout: "cache,model,limit_5h,context,turns,tokens;changes,spacer,folders,branch,worktree,pr,review,comments,sync,checks;prompt;fresh;compact;forecast;hidden;limit_7d,conflict", compact_hint: false } }, async ($, on) => {
+  test("the order pane lists the lines around the prompt marker and each row's tags under its marker, hidden ones after theirs", { options: { layout: "cache,model,limit_5h,context,turns,tokens;changes,spacer,folders,branch,worktree,pr,review,comments,sync,checks;prompt;fresh;compact;explain;hidden;limit_7d,conflict", compact_hint: false } }, async ($, on) => {
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "forecast", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 4 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 4 more" } });
     expect(await clientProps("tags")).toMatchObject({
       items: ["row-1", "cache", "model", "limit_5h", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
@@ -1909,6 +2026,13 @@ describe("cockpit", () => {
     });
     // Each list as wide as the pane, so its labels wrap inside it.
     expect((await ui.findAll({ type: "Client" })).map((c) => c.props.width)).toEqual(["100%", "100%"]);
+    await ui.unmount();
+  });
+
+  test("the order pane's text says the explanation line holds the run-out warning", async ($, on) => {
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    expect(await ui.find({ type: "Text", text: /The explanation line .*run-out warning/ })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /forecast/ })).toBeUndefined();
     await ui.unmount();
   });
 
@@ -1936,8 +2060,8 @@ describe("cockpit", () => {
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
   // left out goes after the first row, an offer left out last.
   for (const [layout, lines, tags] of [
-    ["branch,model;prompt;fresh", ["row-1", "prompt", "fresh", "compact", "forecast"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",")]],
-    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "forecast"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
+    ["branch,model;prompt;fresh", ["row-1", "prompt", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",")]],
+    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
@@ -1948,8 +2072,22 @@ describe("cockpit", () => {
     });
   }
 
+  // The spacers around a blank explanation line do not meet: it takes its line as a row does.
+  test("draws a blank explanation line as a line of its own between two spacers", { options: { layout: `${GIT};prompt;${STATUS};fresh;compact;spacer;explain;spacer` } }, async ($, on) => {
+    stubHint(on);
+    const below = await mountHint($);
+    const drawn = await below.drawn();
+    const lines = leaves(isDrawn(drawn) ? drawn.children : []);
+    expect(lines.slice(-3).map((line) => (line.props.key === "explain" ? "explain" : line.props.height === 1 ? "_" : flat(line)))).toEqual(["_", "explain", "_"]);
+    // At least one line, as wide as the window, and free to grow: no fixed height, nothing cut off.
+    expect(lines.at(-2)?.props).toMatchObject({ width: "100%", minHeight: 1 });
+    expect(lines.at(-2)?.props.height).toBeUndefined();
+    expect(lines.at(-2)?.props.overflow).toBeUndefined();
+    await below.unmount();
+  });
+
   // A row of nothing but a gap draws nothing.
-  test("draws a spacer among the lines as a blank line on its side of the prompt, spacers that meet as one", { options: { layout: `spacer;${GIT};gap-1;spacer;prompt;spacer;spacer;${STATUS};fresh;compact;forecast` } }, async ($, on) => {
+  test("draws a spacer among the lines as a blank line on its side of the prompt, spacers that meet as one", { options: { layout: `spacer;${GIT};gap-1;spacer;prompt;spacer;spacer;${STATUS};fresh;compact;explain` } }, async ($, on) => {
     stubHint(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -1961,16 +2099,16 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const below = await mountHint($);
-    // A line spelled: a blank one as "_", a row as "row".
+    // A line spelled: a blank one as "_", a row as "row", the explanation line as "explain".
     const lines = async (ui: { drawn: () => Promise<unknown> }) => {
       const drawn = await ui.drawn();
-      return leaves(isDrawn(drawn) ? drawn.children : []).map((line) => (line.props.height === 1 ? "_" : line.props.flexWrap === "wrap" ? "row" : flat(line)));
+      return leaves(isDrawn(drawn) ? drawn.children : []).map((line) => (line.props.key === "explain" ? "explain" : line.props.height === 1 ? "_" : line.props.flexWrap === "wrap" ? "row" : flat(line)));
     };
     for (let i = 0; i < 50 && !(await lines(above)).includes("row"); i++) await settle();
     expect(await lines(above)).toEqual(["_", "row", "_"]);
     // Under the engine's hint line, the two spacers as one blank line.
-    expect((await lines(below)).slice(-3)).not.toEqual(["_", "_", "row"]);
-    expect((await lines(below)).slice(-2)).toEqual(["_", "row"]);
+    expect((await lines(below)).slice(-4)).not.toEqual(["_", "_", "row", "explain"]);
+    expect((await lines(below)).slice(-3)).toEqual(["_", "row", "explain"]);
     await above.unmount();
     await below.unmount();
   });
@@ -2107,6 +2245,14 @@ describe("cockpit", () => {
     // The label is text of its own, not the field's: it wraps where the field cannot.
     expect((await ui.find({ type: "Input", key: "pr.open" }))?.props.label).toBeUndefined();
     expect(await ui.find({ type: "Text", text: "a failed check's cross" })).toBeDefined();
+    await ui.unmount();
+  });
+
+  test("names the run-out warning's sign among what the warnings colour sets", async ($, on) => {
+    on("config.list", () => ({ value: [] }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    expect(await ui.find({ type: "Text", text: "the compaction line's diamond and link, the run-out warning's sign" })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: /forecast/ })).toBeUndefined();
     await ui.unmount();
   });
 
