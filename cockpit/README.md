@@ -83,7 +83,7 @@ Outside a repository the row shows only the folders. Within a row, the git parts
 
 ### Clicking and hovering
 
-A value on a grey background shows more when you hover over it: the tag's explanation, in the explanation line. The `⏎`, `Σ`, bolt and cache tags always stand on the grey, and the 7d, 5h and context bars explain themselves too. A value on no background has nothing more to show. With `explain_row` off there is no explanation line, so no value stands on the grey. A label on indigo between two half blocks, such as `Compact`, is a button, and so is the cross on slate after it. These are the default colours, and [`/cockpit:colors`](#colours) changes them.
+A value on a grey background shows more when you hover over it: the tag's explanation, in the explanation line. The `⏎`, `Σ`, bolt and cache tags stand on the grey in every state, a cold cache and the turns before any subagent included, and the 7d, 5h and context bars explain themselves too. A value on no background has nothing more to show. With `explain_row` off there is no explanation line, so no value stands on the grey. A label on indigo between two half blocks, such as `Compact`, is a button, and so is the cross on slate after it. These are the default colours, and [`/cockpit:colors`](#colours) changes them.
 
 The git row is made of links, and a click opens them the way your terminal opens any link:
 

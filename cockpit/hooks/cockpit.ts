@@ -65,11 +65,13 @@ const SEGMENTS = {
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
-// A limit tag's window and its reading, none until a reading has it.
-function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit } | undefined {
+// A limit tag's window, its reading and the seconds until it resets (none without a reset time), none until a reading
+// has it.
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
-  return limit && found ? { limit, found } : undefined;
+  if (!limit || !found) return undefined;
+  return { limit, found, left: found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined };
 }
 
 // One limit's bar, none until a reading has it.
@@ -77,7 +79,7 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   const reading = limitOf(s, badge);
   if (!reading) return [];
   const { limit, found } = reading;
-  if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, s.now)];
+  if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, reading.left)];
   // The whole allowance is each window's target.
   return [gaugeParts(Box, Text, limit, found, paceOf(limit, found, s.readAt, s.now * 1000, 100))];
 }
@@ -1211,9 +1213,9 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   const t = s.tokens;
   const { context } = s.usage;
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
-    const found = limitOf(s, badge)?.found;
-    if (!found) continue;
-    const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : 0;
+    const reading = limitOf(s, badge);
+    if (!reading) continue;
+    const { found, left = 0 } = reading;
     // Rounded as the gauge's badge and the run-out warning round it.
     out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.`;
   }
@@ -1235,7 +1237,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     const left = cacheLeft(c, s.sent, s.now);
     out.cache =
       left > 0
-        ? `Cache warm for ${countdown(Math.min(left, c.ttl - 1))}: the next prompt reads it for ${usd(c.read)}. Once cold, writing it again costs ${usd(c.write)}.`
+        ? `Cache warm for ${warmFor(c, left)}: the next prompt reads it for ${usd(c.read)}. Once cold, writing it again costs ${usd(c.write)}.`
         : `Cache cold: the next prompt writes it again for ${usd(c.write)}.`;
   }
   return out;
@@ -1769,9 +1771,8 @@ function requestCost(
 // Two bars stacked in one row, depleting right to left as statusline.zsh's bars did: every cell is ▀,
 // its glyph colour the top half (the window's time left), its background the bottom half (its usage left).
 // A half past its bar's end is dim, so both bars show where 100% is. Hovered, the explanation line shows the countdown.
-function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, now: number) {
+function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, left: number | undefined) {
   const n = barCells[limit.badge];
-  const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - now : undefined;
   const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, n);
   const usageLeft = cells(100 - found.percentUsed, n);
   const { from, to } = stops(`limit.${limit.badge}`);
@@ -1963,11 +1964,15 @@ function turnsOf(turns: number, t: StatusTokens | undefined): { value: string; a
 function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: number, sent: number | undefined) {
   const left = cacheLeft(c, sent, now);
   const mark = MOON[left > 0 ? Math.min(Math.ceil((left * 4) / c.ttl), 4) : 0] ?? "●";
-  // The first second after a request has the whole TTL left, which reads 1h0m (5m on a short cache) before the next
-  // second reads 59m (4m): one second short of the TTL reads the same from the start.
   return left > 0
-    ? chipParts(Box, Text, { key: "cache", mark, value: `${countdown(Math.min(left, c.ttl - 1))} ${usd(c.read)}`, ...stops("cache.warm") })
+    ? chipParts(Box, Text, { key: "cache", mark, value: `${warmFor(c, left)} ${usd(c.read)}`, ...stops("cache.warm") })
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
+}
+
+// The time a warm cache has left, `left` seconds. The first second after a request has the whole TTL left, which reads
+// 1h0m (5m on a short cache) before the next second reads 59m (4m): one second short of the TTL reads the same from the start.
+function warmFor(c: StatusCache, left: number): string {
+  return countdown(Math.min(left, c.ttl - 1));
 }
 
 // Seconds the cache has left. The TTL runs from the last request sent or answered, whichever is later; a send is known

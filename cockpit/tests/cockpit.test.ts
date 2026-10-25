@@ -1072,6 +1072,7 @@ describe("cockpit", () => {
     elements(elements(must(await ui.find({ type: "Box", key }), `the ${key} chip`).children)[1]?.children ?? []).map((glyph) => glyph.props.backgroundColor);
   for (const [title, options, agents, cachedAgo, keys, grey] of [
     ["keeps each chip's value on the grey while explain_row is on, the turns before any subagent and a cold cache included", {}, false, 120, ["turns", "tokens", "cache"], "#373a48"],
+    ["keeps each chip's value on the grey while explain_row is on, the subagents' costs and a warm cache included", {}, true, 10, ["turns", "tokens", "agents", "cache"], "#373a48"],
     ["stands no chip's value on the grey with explain_row off", { explain_row: false }, true, 10, ["turns", "tokens", "agents", "cache"], undefined],
   ] as const)
     test(title, { options }, async ($, on) => {
