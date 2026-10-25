@@ -1066,6 +1066,63 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // 51% with a third of the 7d gone is r 1.53: it runs out with 1 - 1/1.53 of the window, 2d10h, still to go, and it
+  // resets in two thirds of it, 4d16h, less the seconds the test takes.
+  test("explains an over-pace limit with how long before its reset it runs out", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 51, 1 / 3)]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_7d")).toMatch(/7d.* 51%.* 4d1[56]h.*runs out 2d10h before it resets/);
+    await ui.unmount();
+  });
+
+  // 10% with 60% of the 7d gone is r 0.17: 83% of the target goes unused.
+  test("explains an under-pace limit with the share of its target that goes unused", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_7d")).toContain("~83% unused");
+    await ui.unmount();
+  });
+
+  // 52% with half the 7d gone is r 1.04, within 0.05 of 1.
+  test("explains a limit within 0.05 of its pace as on pace", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 52, 0.5)]);
+    const ui = await mountHint($);
+    const explanation = await explanationOf(ui, "limit_7d");
+    expect(explanation).toContain("on pace");
+    expect(explanation).not.toMatch(/runs out|unused/);
+    await ui.unmount();
+  });
+
+  // 51% with a third of the 7d gone is over pace with a usable reading; each of these takes the pace away.
+  for (const [title, limit, readAgoMs] of [
+    ["explains a limit with no pace words while less than a tenth of its window has passed", reading("seven_day", 51, 0.05), 1_000],
+    ["explains a limit with no pace words when this session's last response is 11 minutes old", reading("seven_day", 51, 1 / 3), 11 * 60_000],
+  ] satisfies [string, SessionRateLimit, number][])
+    test(title, { options: { limit_style: "gauge" } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [limit], readAgoMs);
+      const ui = await mountHint($);
+      expect(await explanationOf(ui, "limit_7d")).toMatch(/^7d limit: 51% used, resets in \S+\.$/);
+      await ui.unmount();
+    });
+
+  // Over pace with a usable reading: classic draws no pace, so its words say none; lanes, even drawn as classic until
+  // it is built, is a pace style and says it.
+  for (const [style, shown] of [
+    ["classic", /^7d limit: 51% used, resets in \S+\.$/],
+    ["lanes", /runs out 2d10h before it resets/],
+  ] as const)
+    test(`explains an over-pace limit ${style === "classic" ? "with no pace words" : "with its pace"} at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [reading("seven_day", 51, 1 / 3)]);
+      const ui = await mountHint($);
+      expect(await explanationOf(ui, "limit_7d")).toMatch(shown);
+      await ui.unmount();
+    });
+
   // A value on the grey says hovering shows more. Every chip has an explanation, so its value stands on the grey while
   // the explanation line can show it, the turns before any subagent and a cold cache included, and never without it.
   const valueBackgrounds = async (ui: { find: Mounted["find"] }, key: string) =>

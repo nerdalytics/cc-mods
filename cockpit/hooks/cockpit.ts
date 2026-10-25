@@ -1215,9 +1215,11 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    const { found, left = 0 } = reading;
+    const { limit, found, left = 0 } = reading;
+    // The pace the gauge draws, so the words agree with it.
+    const pace = limitStyle === "classic" ? undefined : paceOf(limit, found, s.readAt, s.now * 1000, 100);
     // Rounded as the gauge's badge and the run-out warning round it.
-    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.`;
+    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.${pace ? ` ${paceWords(limit, pace.r)}` : ""}`;
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
@@ -1241,6 +1243,14 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
         : `Cache cold: the next prompt writes it again for ${usd(c.write)}.`;
   }
   return out;
+}
+
+// What a limit's pace r means: within 0.05 of 1 on pace; under it 1 - r of the target goes unused; over it the limit
+// runs out with 1 - 1/r of the window to go, the run-out warning's time before the reset.
+function paceWords(limit: (typeof LIMITS)[number], r: number): string {
+  if (Math.abs(r - 1) <= 0.05) return "It is on pace to reach its target as it resets.";
+  if (r < 1) return `At this pace it resets with ~${Math.round((1 - r) * 100)}% unused.`;
+  return `At this pace it runs out ${countdown((1 - 1 / r) * limit.seconds)} before it resets.`;
 }
 
 // The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,
