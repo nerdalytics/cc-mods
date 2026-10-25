@@ -68,8 +68,9 @@ const SEGMENTS = {
 } satisfies Record<string, Segment>;
 
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
-// reading has it. The tag and its explanation both read the pace here, so they agree.
-function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number } } | undefined {
+// reading has it. Every pace style's tag and the explanation read the pace here, the gauge and the words its r against
+// the target, lanes and notch its par, so they agree.
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number; par: number } } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
   const found = limit && limits.find((r) => r.kind === limit.kind);
@@ -1210,14 +1211,16 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
 }
 
 // A limit's pace as of the response that reported it: r is the percent used over the share of the window passed times
-// the target, 1 when the use reaches the target just as the window resets. Both windows begin at their reset time
-// minus their length, the share counting nights and idle hours alike. None on the run-out warning's terms: no reset
-// time, a stale reading, or too early in the window.
-function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number } | undefined {
+// the target, 1 when the use reaches the target just as the window resets. `par` is that product as a share of the
+// allowance, what the target would have used by now; at a target of 100% it is the share passed. Both windows begin at
+// their reset time minus their length, the share counting nights and idle hours alike. None on the run-out warning's
+// terms: no reset time, a stale reading, or too early in the window.
+function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number } | undefined {
   if (!found.resetsAt || now - readAt > FORECAST_FRESH_MS) return undefined;
   const share = 1 - (Date.parse(found.resetsAt) - readAt) / 1000 / limit.seconds;
   if (!(share >= FORECAST_FROM)) return undefined;
-  return { r: found.percentUsed / (share * target), share };
+  // target / 100 first: at 100 that is exactly 1, so the par is exactly the share and the lanes and notch draw as before.
+  return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
 }
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
@@ -1853,12 +1856,13 @@ function classicCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: S
   return parts;
 }
 
-// Classic's two lanes with the top one the par left, the share of the window still to go at the reading. Bottom cells
-// lit past the par line are allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace,
-// amber beside the line turning red away from it. Without a pace both lanes are dim, the top one classic's time left.
-function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, timeLeft: number, pace: { share: number } | undefined) {
+// Classic's two lanes with the top one the par left, what the target leaves of the allowance at the reading: the share
+// of the window still to go at a target of 100%. Bottom cells lit past the par line are allowance the pace leaves
+// unused, in slate; empty ones before it are spent ahead of pace, amber beside the line turning red away from it.
+// Without a pace both lanes are dim, the top one classic's time left.
+function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, timeLeft: number, pace: { par: number } | undefined) {
   const n = barCells[limit.badge];
-  const par = pace ? cells(100 * (1 - pace.share), n) : timeLeft;
+  const par = pace ? cells(100 * (1 - pace.par), n) : timeLeft;
   const usageLeft = cells(100 - found.percentUsed, n);
   const { from, to } = stops(`limit.${limit.badge}`);
   const empty = color("empty");
@@ -1871,14 +1875,14 @@ function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: Sta
   return parts;
 }
 
-// One full-height lane of the usage left, with a notch on the left edge of the cell after the par left, both rounded
-// to the nearest cell; a par left that fills the lane puts the notch after its last cell. Lit cells past the notch are
+// One full-height lane of the usage left, with a notch on the left edge of the cell after the par left, what the target
+// leaves of the allowance at the reading, both rounded to the nearest cell; a par left that fills the lane puts the notch after its last cell. Lit cells past the notch are
 // allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace, amber beside the notch
 // turning red away from it. Without a pace the usage is dim and there is no notch.
-function notchCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { share: number } | undefined) {
+function notchCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { par: number } | undefined) {
   const n = barCells[limit.badge];
   const usageLeft = Math.round(((100 - found.percentUsed) * n) / 100);
-  const notch = pace ? Math.min(n, Math.round((1 - pace.share) * n)) : undefined;
+  const notch = pace ? Math.min(n, Math.round((1 - pace.par) * n)) : undefined;
   const { from, to } = stops(`limit.${limit.badge}`);
   const empty = color("empty");
   const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });

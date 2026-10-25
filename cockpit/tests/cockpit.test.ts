@@ -1291,6 +1291,51 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The two readings of a 5h window that measure k 0.5, as above; a later window's reading follows them.
+  const K_HALF: Reading[] = [
+    [10, HOUR, 40, DAYS_3],
+    [20, HOUR, 45, DAYS_3],
+  ];
+  const SLATE = "#94a3b8";
+  const AMBER = "#fbbf24";
+
+  // The par left is what the target leaves by now: at a target of 40% with 60% of the window gone, 76%, 7 of the 10
+  // cells, the usage left lighting the 8th past it in slate. Against 100% the par left would be 40%, 4 cells.
+  test("draws the 5h lanes' par line at the par left of the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [20, 2 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    const lanes = await limitTagOf(ui, "five_hour");
+    expect(lanes.colors.filter((c) => c !== GREY)).toHaveLength(7);
+    expect(lanes.backgrounds.indexOf(SLATE)).toBe(7);
+    await ui.unmount();
+  });
+
+  // The same reading's par left, 76%, rounds to 8 of the 10 cells: the notch sits on the 9th's left edge. Against 100%
+  // it would sit on the 5th's.
+  test("notches the 5h lane at the par left of the target the 7d can still pay for", { options: { limit_style: "notch" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [20, 2 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar.indexOf("▏")).toBe(8);
+    await ui.unmount();
+  });
+
+  // A later 5h window at 37% halfway through, the 7d at 90%: a target of 57%, which 37% is over, r 1.3. Its par left,
+  // 71.5%, is 7 cells (lanes, rounded down) or 7 (notch, rounded); the usage left, 63%, is 6, so the 7th cell is spent
+  // ahead of pace, amber. Against 100% it would be under pace: a par left of 50%, 5 cells, the 6th cell slate.
+  for (const [style, notched] of [["lanes", -1], ["notch", 7]] as const)
+    test(`draws the 5h ${style} over pace, amber, against the target the 7d can still pay for`, { options: { limit_style: style } }, async ($, on) => {
+      stubHint(on);
+      await fedReadings($, on, [...K_HALF, [37, 2.5 * HOUR, 90, DAYS_3]]);
+      const ui = await mountHint($);
+      const tag = await limitTagOf(ui, "five_hour");
+      expect(tag.backgrounds[6]).toBe(AMBER);
+      expect(tag.backgrounds).not.toContain(SLATE);
+      expect(tag.bar.indexOf("▏")).toBe(notched);
+      await ui.unmount();
+    });
+
   // 10% to 24% of the 5h while the 7d goes 80% to 89%: k 9 / 14. The 7d resets in 1 hour, before the 5h window ends in
   // 3, so the 5h's target stays 100%: at 40% of its window 24% is ~40% unused. Bounded, it would be 41%, over pace.
   test("keeps the 5h target at 100% when the 7d resets before the 5h window ends", { options: { limit_style: "gauge" } }, async ($, on) => {
