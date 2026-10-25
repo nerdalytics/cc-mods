@@ -85,7 +85,7 @@
     "limit_style": {
       "type": "string",
       "title": "Cockpit: Limit tags › style",
-      "description": "How the 7d and 5h tags draw. classic: the time left in the top half of the bar, the usage left in the bottom. lanes: the top lane the par left, the bottom lane the usage left, the gap between them in the pace colours. gauge: the percent used in the badge, the bar the pace, filling left of a centre pipe under pace and right of it over pace. notch: the usage as one lane, a notch where the par is. A pace needs a reset time, a response of this session from the last 10 minutes, and a tenth of the window gone. classic (default) / lanes / gauge / notch",
+      "description": "How the 7d and 5h tags draw. classic: the time left in the top half of the bar, the usage left in the bottom. lanes: the token lane on top, lit to the usage left, and the time lane below, lit to the par left; at the token lane's end, impacted cells amber to red for spend ahead of par and spare cells blue for spend behind it; the time lane deep red when more cells are impacted than the token lane has lit. gauge: the percent used in the badge, the bar the pace, filling left of a centre pipe under pace and right of it over pace. notch: the usage as one lane, a notch where the par is. A pace needs a reset time, a response of this session from the last 10 minutes, and a tenth of the window gone. classic (default) / lanes / gauge / notch",
       "default": "classic",
       "options": ["classic", "lanes", "gauge", "notch"]
     },

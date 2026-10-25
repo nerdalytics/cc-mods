@@ -407,10 +407,14 @@ const COLORS = {
   "limit.7d.to": { group: "", label: "the badge", rgb: [100, 50, 150] },
   "limit.5h.from": { group: "5h limit bar and badge", label: "", rgb: [34, 211, 238] },
   "limit.5h.to": { group: "", label: "the badge", rgb: [15, 140, 150] },
-  // A limit's pace, in every style but classic: slate for an allowance that goes unused, amber to red for one that runs out early.
-  "pace.under": { group: "Limit pace", label: "under pace", rgb: [148, 163, 184] },
+  // A limit's pace, in every style but classic: amber to red for an allowance that runs out early; for one that goes
+  // unused, slate in gauge and notch, and in lanes blue, as spending is welcome. Deep red marks a lanes overspend its
+  // token lane is too short to show.
+  "pace.under": { group: "Limit pace", label: "gauge and notch: under pace", rgb: [148, 163, 184] },
   "pace.over.from": { group: "", label: "over pace", rgb: [251, 191, 36] },
   "pace.over.to": { group: "", label: "over pace, much of the window left at run-out", rgb: [239, 68, 68] },
+  "pace.spare": { group: "", label: "lanes: token cells spare under pace, where spending is welcome", rgb: [96, 165, 250] },
+  "pace.severe": { group: "", label: "lanes: the time lane, when more cells are over pace than the token lane holds", rgb: [153, 27, 27] },
   "pace.par": { group: "", label: "the gauge's pipe and the notch", rgb: [229, 231, 235] },
   "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe, the lanes and the notch's usage", rgb: [107, 114, 128] },
   // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
@@ -1863,21 +1867,32 @@ function classicCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: S
   return parts;
 }
 
-// Classic's two lanes with the top one the par left, what the target leaves of the allowance at the reading: the share
-// of the window still to go at a target of 100%. Bottom cells lit past the par line are allowance the pace leaves
-// unused, in slate; empty ones before it are spent ahead of pace, amber beside the line turning red away from it.
-// Without a pace both lanes are dim, the top one classic's time left.
+// Two lanes: the top one the token lane, lit to the usage left; the bottom one the time lane, lit to the par left, what
+// the target leaves of the allowance at the reading. The pace colours the cells the usage is ahead of or behind par,
+// counted from the unrounded reading, not from the two rounded lanes, which can round the difference away; at most the
+// whole token lane, its last cells. Over pace any spend ahead impacts a whole cell, amber turning red toward the lane's
+// end. Under pace only a whole cell left unspent is spare, in the spending-welcome colour. With more cells impacted
+// than the token lane has lit, the time lane draws deep red.
+// Without a pace both lanes are dim, the bottom one classic's time left.
 function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, timeLeft: number, pace: { par: number } | undefined) {
   const n = barCells[limit.badge];
-  const par = pace ? cells(100 * (1 - pace.par), n) : timeLeft;
   const usageLeft = cells(100 - found.percentUsed, n);
+  const parLeft = pace ? cells(100 * (1 - pace.par), n) : timeLeft;
+  const ahead = pace ? ((found.percentUsed - 100 * pace.par) * n) / 100 : 0;
+  // ε keeps an ahead that floating point puts a hair above a whole number, such as 2.0000000000000004, at that number.
+  const moved = ahead > 0 ? Math.ceil(ahead - 1e-9) : Math.floor(-ahead);
+  const k = Math.min(usageLeft, moved);
+  // More impacted than the token lane holds, a token lane rounded down to none included, would leave the overspend
+  // unshown, so the time lane takes the warning.
+  const severe = ahead > 0 && moved > usageLeft;
   const { from, to } = stops(`limit.${limit.badge}`);
   const empty = color("empty");
   const parts = [];
   for (let i = 0; i < n; i++) {
     const lit = pace ? lerp(from, to, i, n) : color("pace.none");
-    const bottom = i < usageLeft ? (pace && i >= par ? color("pace.under") : lit) : pace && i < par ? overPace(par - 1 - i, n) : empty;
-    parts.push(Text({ color: hex(i < par ? lit : empty), backgroundColor: hex(bottom), children: "▀" }));
+    const token = i >= usageLeft ? empty : i < usageLeft - k ? lit : ahead > 0 ? overPace(i - (usageLeft - k), k) : color("pace.spare");
+    const time = i >= parLeft ? empty : severe ? color("pace.severe") : lit;
+    parts.push(Text({ color: hex(token), backgroundColor: hex(time), children: "▀" }));
   }
   return parts;
 }

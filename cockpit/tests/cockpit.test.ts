@@ -579,12 +579,24 @@ describe("cockpit", () => {
   // The 7d's own gradient over 7 cells, #c084fc to #643296 as lerp truncates it, and the grey of an empty half.
   const LIT_7D = ["#c084fc", "#b277ec", "#a269db", "#925bc9"];
   const GREY = "#373a48";
-  // On a 7-cell 7d tag, 51% with a third gone is par 33%: the top lane lit to the par left, 67%, 4 cells; the bottom to
-  // the usage left, 49%, 3 cells; the one cell between them over pace, amber beside the par line. 10% with 60% gone
-  // lights the top lane to 2 cells and the bottom to 6, the 4 lit past the par line in slate.
+  // The 5h's own gradient over 10 cells, #22d3ee to #0f8c96 as lerp truncates it, and the lanes' pace colours.
+  const LIT_5H = ["#22d3ee", "#20cce5", "#1ec4db", "#1cbcd1", "#1ab4c8", "#18acbe", "#16a5b4", "#149dab"];
+  const RED = "#ef4444";
+  const SPARE = "#60a5fa";
+  const SEVERE = "#991b1b";
+  // On a 7-cell 7d tag, 51% with a third gone is par 33%, 1.2 cells ahead: the token lane on top lit to the usage left,
+  // 49%, 3 cells, its last 2 impacted, amber to red; the time lane below lit to the par left, 67%, 4 cells. 38% is 0.3
+  // cells ahead, which impacts the token lane's last of 4 cells. 33% is a hair behind par, which spares no cell. 10%
+  // with 60% gone is 3.5 cells behind par: 3 of the token lane's 6 cells are spare, and the time lane is lit to 2. 80%
+  // with 45% gone is 2.45 cells ahead, which impacts 3 cells, more than the token lane's 1: its time lane's 3 cells draw
+  // deep red. 95% with 80% gone is 1.05 cells ahead, 2 impacted, while the token lane rounds down to none.
   for (const [title, used, passed, tops, bottoms] of [
-    ["lights the lanes' gap before the par line amber to red over pace", 51, 1 / 3, [...LIT_7D, GREY, GREY, GREY], [...LIT_7D.slice(0, 3), "#fbbf24", GREY, GREY, GREY]],
-    ["draws the lanes' bottom cells lit past the par line in slate under pace", 10, 0.6, [...LIT_7D.slice(0, 2), GREY, GREY, GREY, GREY, GREY], [...LIT_7D.slice(0, 2), "#94a3b8", "#94a3b8", "#94a3b8", "#94a3b8", GREY]],
+    ["lights the lanes' last token cells amber to red, one per cell the usage is ahead of par", 51, 1 / 3, ["#c084fc", "#fbbf24", RED, GREY, GREY, GREY, GREY], [...LIT_7D, GREY, GREY, GREY]],
+    ["lights the lanes' last token cell amber for any spend ahead of par", 38, 1 / 3, [...LIT_7D.slice(0, 3), "#fbbf24", GREY, GREY, GREY], [...LIT_7D, GREY, GREY, GREY]],
+    ["draws the lanes on par in the limit's gradient with no pace colour", 33, 1 / 3, [...LIT_7D, GREY, GREY, GREY], [...LIT_7D, GREY, GREY, GREY]],
+    ["draws the lanes' last token cells in the spending-welcome colour, one per cell the usage is behind par", 10, 0.6, [...LIT_7D.slice(0, 3), SPARE, SPARE, SPARE, GREY], [...LIT_7D.slice(0, 2), GREY, GREY, GREY, GREY, GREY]],
+    ["draws the lanes' time lane deep red when more cells are impacted than the token lane holds", 80, 0.45, ["#fbbf24", ...Array(6).fill(GREY)], [SEVERE, SEVERE, SEVERE, GREY, GREY, GREY, GREY]],
+    ["draws the lanes' time lane deep red when the token lane is empty and the usage ahead of par", 95, 0.8, Array(7).fill(GREY), [SEVERE, ...Array(6).fill(GREY)]],
   ] as const)
     test(title, { options: { limit_style: "lanes" } }, async ($, on) => {
       stubHint(on);
@@ -593,11 +605,25 @@ describe("cockpit", () => {
       const lanes = await limitTagOf(ui, "seven_day");
       expect(lanes.badge).toBe(" 7d ");
       expect(lanes.bar).toBe("▀▀▀▀▀▀▀");
-      // The glyph colour is the top lane, the background the bottom.
+      // The glyph colour is the token lane, the background the time lane.
       expect(lanes.colors).toEqual([...tops]);
       expect(lanes.backgrounds).toEqual([...bottoms]);
       await ui.unmount();
     });
+
+  // On a 10-cell 5h tag with its target at 100%, 38% used with 19% gone is 1.9 cells ahead of par: 2 cells impacted at
+  // the end of the token lane, lit to the usage left, 62%, 6 cells. The time lane is lit to the par left, 81%, 8 cells.
+  test("lights the 5h lanes' tokens on top and the par left below, the impacted token cells amber to red", { options: { limit_style: "lanes" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("five_hour", 38, 0.19)]);
+    const ui = await mountHint($);
+    const lanes = await limitTagOf(ui, "five_hour");
+    expect(lanes.bar).toBe("▀".repeat(10));
+    // The glyph colour is the token lane, the background the time lane.
+    expect(lanes.colors).toEqual([...LIT_5H.slice(0, 4), "#fbbf24", RED, GREY, GREY, GREY, GREY]);
+    expect(lanes.backgrounds).toEqual([...LIT_5H, GREY, GREY]);
+    await ui.unmount();
+  });
 
   // A notch tag's one lane is each cell's background; ▏ in the par colour is the notch, on the left edge of the cell
   // after the par left. On 7 cells, 51% with a third gone leaves par 67%, 4.7 cells, so the notch sits after the 5th:
@@ -622,8 +648,8 @@ describe("cockpit", () => {
     });
 
   // 51% of the 7d with a third gone is over pace with a usable reading; each of these takes the pace away. The usage
-  // left, 49%, lights 3 of 7 cells either way; the lanes' top lane is the time left: none without a reset time, 4
-  // cells with two thirds of the window to go, 6 with 95%.
+  // left, 49%, lights 3 of 7 cells either way, the lanes' token lane on top; their time lane below is the time left: none
+  // without a reset time, 4 cells with two thirds of the window to go, 6 with 95%.
   const DIM = "#6b7280";
   for (const [why, limit, readAgoMs, top] of [
     ["with no reset time", { kind: "seven_day", percentUsed: 51 }, 1_000, 0],
@@ -635,8 +661,8 @@ describe("cockpit", () => {
       await startWithLimits($, on, [limit], readAgoMs);
       const ui = await mountHint($);
       const lanes = await limitTagOf(ui, "seven_day");
-      expect(lanes.colors).toEqual([...Array(top).fill(DIM), ...Array(7 - top).fill(GREY)]);
-      expect(lanes.backgrounds).toEqual([DIM, DIM, DIM, GREY, GREY, GREY, GREY]);
+      expect(lanes.colors).toEqual([DIM, DIM, DIM, GREY, GREY, GREY, GREY]);
+      expect(lanes.backgrounds).toEqual([...Array(top).fill(DIM), ...Array(7 - top).fill(GREY)]);
       await ui.unmount();
     });
     test(`draws the notch style's usage dim with no notch without a pace ${why}`, { options: { limit_style: "notch" } }, async ($, on) => {
@@ -1300,14 +1326,15 @@ describe("cockpit", () => {
   const AMBER = "#fbbf24";
 
   // The par left is what the target leaves by now: at a target of 40% with 60% of the window gone, 76%, 7 of the 10
-  // cells, the usage left lighting the 8th past it in slate. Against 100% the par left would be 40%, 4 cells.
-  test("draws the 5h lanes' par line at the par left of the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
+  // cells of the time lane; the usage, 20%, is 0.4 cells behind the par, 24%, which spares none. Against 100% the par
+  // left would be 40%, 4 cells, and the usage 4 cells behind par would draw 4 spare cells.
+  test("draws the 5h lanes' time lane at the par left of the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
     stubHint(on);
     await fedReadings($, on, [...K_HALF, [20, 2 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     const lanes = await limitTagOf(ui, "five_hour");
-    expect(lanes.colors.filter((c) => c !== GREY)).toHaveLength(7);
-    expect(lanes.backgrounds.indexOf(SLATE)).toBe(7);
+    expect(lanes.backgrounds.filter((c) => c !== GREY)).toHaveLength(7);
+    expect(lanes.colors).not.toContain(SPARE);
     await ui.unmount();
   });
 
@@ -1322,9 +1349,9 @@ describe("cockpit", () => {
   });
 
   // A later 5h window at 37% halfway through, the 7d at 90%: a target of 57%, which 37% is over, r 1.3. Its par left,
-  // 71.5%, is 7 cells (lanes, rounded down) or 7 (notch, rounded); the usage left, 63%, is 6, so the 7th cell is spent
-  // ahead of pace, amber. Against 100% it would be under pace: a par left of 50%, 5 cells, the 6th cell slate.
-  for (const [style, notched] of [["lanes", -1], ["notch", 7]] as const)
+  // 71.5%, is 7 cells (notch, rounded); the usage left, 63%, is 6, so the 7th cell is spent ahead of pace, amber.
+  // Against 100% it would be under pace: a par left of 50%, 5 cells, the 6th cell slate.
+  for (const [style, notched] of [["notch", 7]] as const)
     test(`draws the 5h ${style} over pace, amber, against the target the 7d can still pay for`, { options: { limit_style: style } }, async ($, on) => {
       stubHint(on);
       await fedReadings($, on, [...K_HALF, [37, 2.5 * HOUR, 90, DAYS_3]]);
@@ -1335,6 +1362,21 @@ describe("cockpit", () => {
       expect(tag.bar.indexOf("▏")).toBe(notched);
       await ui.unmount();
     });
+
+  // The same reading on lanes: the par left, 71.5%, lights 7 cells of the time lane. The par is 28.5%, so the usage is
+  // 0.85 cells ahead, which impacts the last of the token lane's 6 cells, amber. Against 100% it would be 1.3 cells
+  // behind, and that cell spare.
+  test("draws the 5h lanes over pace, amber, against the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [37, 2.5 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    const lanes = await limitTagOf(ui, "five_hour");
+    expect(lanes.colors.filter((c) => c !== GREY)).toHaveLength(6);
+    expect(lanes.colors[5]).toBe(AMBER);
+    expect(lanes.backgrounds.filter((c) => c !== GREY)).toHaveLength(7);
+    expect(lanes.colors).not.toContain(SPARE);
+    await ui.unmount();
+  });
 
   // 10% to 24% of the 5h while the 7d goes 80% to 89%: k 9 / 14. The 7d resets in 1 hour, before the 5h window ends in
   // 3, so the 5h's target stays 100%: at 40% of its window 24% is ~40% unused. Bounded, it would be 41%, over pace.
@@ -2891,7 +2933,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("lists the five pace colours under Limit pace in the colours pane, with their defaults", async ($, on) => {
+  test("lists the seven pace colours under Limit pace in the colours pane, with their defaults", async ($, on) => {
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const drawn = await ui.drawn();
@@ -2903,7 +2945,16 @@ describe("cockpit", () => {
       return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
     });
     const at = lines.indexOf("Limit pace");
-    expect(lines.slice(at, at + 6)).toEqual(["Limit pace", "pace.under=#94a3b8", "pace.over.from=#fbbf24", "pace.over.to=#ef4444", "pace.par=#e5e7eb", "pace.none=#6b7280"]);
+    expect(lines.slice(at, at + 8)).toEqual(["Limit pace", "pace.under=#94a3b8", "pace.over.from=#fbbf24", "pace.over.to=#ef4444", "pace.spare=#60a5fa", "pace.severe=#991b1b", "pace.par=#e5e7eb", "pace.none=#6b7280"]);
+    await ui.unmount();
+  });
+
+  test("names the styles each pace colour serves in the colours pane: under pace gauge and notch, spare and deep red lanes", async ($, on) => {
+    on("config.list", () => ({ value: [] }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    expect(await ui.find({ type: "Text", text: "gauge and notch: under pace" })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: "lanes: token cells spare under pace, where spending is welcome" })).toBeDefined();
+    expect(await ui.find({ type: "Text", text: "lanes: the time lane, when more cells are over pace than the token lane holds" })).toBeDefined();
     await ui.unmount();
   });
 
@@ -2912,6 +2963,24 @@ describe("cockpit", () => {
     await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).colors.slice(1, 5)).toEqual(Array(4).fill("#112233"));
+    await ui.unmount();
+  });
+
+  // 10% of the 7d with 60% gone spares the token lane's 4th to 6th cells.
+  test("draws the lanes' spare cells in the colors option's pace.spare", { options: { limit_style: "lanes", colors: "pace.spare=#112233" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "seven_day")).colors.slice(3, 6)).toEqual(Array(3).fill("#112233"));
+    await ui.unmount();
+  });
+
+  // 80% of the 7d with 45% gone impacts more cells than the token lane holds, so the time lane's 3 lit cells draw deep red.
+  test("draws the lanes' deep-red time lane in the colors option's pace.severe", { options: { limit_style: "lanes", colors: "pace.severe=#112233" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 80, 0.45)]);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "seven_day")).backgrounds.slice(0, 3)).toEqual(Array(3).fill("#112233"));
     await ui.unmount();
   });
 
