@@ -467,6 +467,26 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The cells each bar draws, as the ▀ glyphs in its tag, by the limit_7d_length, limit_5h_length and context_length options.
+  for (const [title, options, lengths] of [
+    ["draws the 7d, 5h and context bars 7, 10 and 10 cells long with no length set, as cockpit 1.1.0 did", {}, { "7d": 7, "5h": 10, context: 10 }],
+    ["draws a 14-cell 7d bar at limit_7d_length 14", { limit_7d_length: 14 }, { "7d": 14, "5h": 10, context: 10 }],
+    ["draws a 1-cell context bar at context_length 0, the shortest a bar gets", { context_length: 0 }, { "7d": 7, "5h": 10, context: 1 }],
+    ["draws a 12-cell 5h bar at limit_5h_length 12.7, a fraction rounded down", { limit_5h_length: 12.7 }, { "7d": 7, "5h": 12, context: 10 }],
+  ] satisfies [string, Record<string, number>, { "7d": number; "5h": number; context: number }][])
+    test(title, { options }, async ($, on) => {
+      stubHint(on);
+      const resetsAt = new Date(Date.now() + 9_900_000).toISOString();
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+      const ui = await mountHint($);
+      const length = async (key: string) => elements(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children).filter((cell) => flat(cell) === "▀").length;
+      expect({ "7d": await length("seven_day"), "5h": await length("five_hour"), context: await length("context") }).toEqual(lengths);
+      await ui.unmount();
+    });
+
   // The marks of the turns, costs and subagents' costs chips, in the order the row draws them.
   const SPLIT = [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]] as const;
   for (const [title, options, chips, marks] of [

@@ -227,6 +227,9 @@ Change these in `/config`, under the plugin. Each title there starts with `Cockp
 | Compact when the smart zone is nearly used | `auto_compact` | false | Runs `/compact` as described under [Status row](#status-row). |
 | Offer a compaction when the smart zone is nearly used | `compact_hint` | true | Shows the line with the `Compact` button once the context has used 90% of the smart zone, as described under [Status row](#status-row). |
 | Dismissed offers stay hidden (minutes) | `dismiss_minutes` | 0 | How long the cross on the `Start fresh` and `Compact` lines hides its line. 0 hides it for the rest of the session. |
+| 7d bar › length (cells) | `limit_7d_length` | 7 | The number of cells the 7d limit's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. A fraction is rounded down, and anything under 1 draws 1 cell. |
+| 5h bar › length (cells) | `limit_5h_length` | 10 | The number of cells the 5h limit's bar draws, as `limit_7d_length` does for the 7d bar. |
+| Context bar › length (cells) | `context_length` | 10 | The number of cells the context bar draws, as `limit_7d_length` does for the 7d bar. |
 | Smart zone on the context bar | `smart_zone` | true | Set to false, the context bar drops the smart zone. Each cell becomes a full-height block of the context left before auto-compaction. The glyph becomes a moon that fills across the whole window, and `⊙` past the threshold. |
 | Smart zone (tokens) | `smart_zone_tokens` | 200000 | The size of the smart zone that the context bar's top half shows. 0 draws the bar as if `smart_zone` were off. |
 | Warn when a limit will run out before its reset | `limit_forecast` | true | Shows the line described under [Status row](#status-row) when the 7d or 5h limit would reach 100% before it resets. |

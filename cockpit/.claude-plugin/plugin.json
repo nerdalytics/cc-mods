@@ -82,6 +82,27 @@
       "default": 0,
       "min": 0
     },
+    "limit_7d_length": {
+      "type": "number",
+      "title": "Cockpit: 7d bar › length (cells)",
+      "description": "The number of cells the 7d limit's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. (default: 7)",
+      "default": 7,
+      "min": 0
+    },
+    "limit_5h_length": {
+      "type": "number",
+      "title": "Cockpit: 5h bar › length (cells)",
+      "description": "The number of cells the 5h limit's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. (default: 10)",
+      "default": 10,
+      "min": 0
+    },
+    "context_length": {
+      "type": "number",
+      "title": "Cockpit: Context bar › length (cells)",
+      "description": "The number of cells the context bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. (default: 10)",
+      "default": 10,
+      "min": 0
+    },
     "smart_zone": {
       "type": "boolean",
       "title": "Cockpit: Smart zone on the context bar",

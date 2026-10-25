@@ -311,7 +311,6 @@ const HIGH_STEPS = 3;
 const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: HIGH_STEPS, xhigh: 4, max: 5 };
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
-const CONTEXT_CELLS = 10;
 // A limit is the account's, but a session hears its figure only in its own responses, so the forecast line needs one from
 // this session this recent: the session being prompted is the one that warns, an idle one's figure is stale.
 const FORECAST_FRESH_MS = 10 * 60_000;
@@ -324,10 +323,12 @@ const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
 // A log scale, each step half as far again as the last, so the words move on by a share of the context, not by a fixed
 // count of tokens: on a 200K zone, just into up to 300K, well into up to 450K, deep into up to 675K.
 const DUMB_ZONE_DEPTHS: [number, string][] = [[1.5, "just into"], [2.25, "well into"], [3.375, "deep into"]];
-const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number; segments: number }[] = [
-  { kind: "seven_day", badge: "7d", seconds: 604_800, segments: 7 },
-  { kind: "five_hour", badge: "5h", seconds: 18_000, segments: 10 },
+const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
+  { kind: "seven_day", badge: "7d", seconds: 604_800 },
+  { kind: "five_hour", badge: "5h", seconds: 18_000 },
 ];
+// The cells each bar draws when its length option is unset, as cockpit 1.1.0 drew them.
+const BAR_CELLS = { "7d": 7, "5h": 10, context: 10 };
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
 // its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
@@ -473,6 +474,8 @@ let keepWarm = 0;
 let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
+// The cells each bar draws, from the limit_7d_length, limit_5h_length and context_length options.
+let barCells = BAR_CELLS;
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
 // smart_zone option off.
 let smartZone = 200_000;
@@ -537,6 +540,11 @@ export const register: Register = (on, options) => {
   lists = listsOf(layout, shown, mergeCosts);
   rev = Date.now();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
+  barCells = {
+    "7d": lengthOf(options.limit_7d_length, BAR_CELLS["7d"]),
+    "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
+    context: lengthOf(options.context_length, BAR_CELLS.context),
+  };
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
   on("session.start", async ($, e, next) => {
@@ -1654,16 +1662,17 @@ function requestCost(
 // The countdown to the reset shows only while the limit is hovered, laid over the bar: a keyed Box is the
 // hover scope, and the countdown an absolute Box drawn last, so it paints over the bar without moving anything.
 // Right-aligned, a space short of the bar's end as the chips' values keep one, on the bar's dim grey; the longest
-// countdown (23h59m) and its space are 7 cells, the 7-cell bar's width.
+// countdown (23h59m) and its space are 7 cells, the default 7d bar's width.
 function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, now: number) {
+  const n = barCells[limit.badge];
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - now : undefined;
-  const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, limit.segments);
-  const usageLeft = cells(100 - found.percentUsed, limit.segments);
+  const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, n);
+  const usageLeft = cells(100 - found.percentUsed, n);
   const { from, to } = stops(`limit.${limit.badge}`);
   const empty = color("empty");
   const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
-  for (let i = 0; i < limit.segments; i++) {
-    const lit = lerp(from, to, i, limit.segments);
+  for (let i = 0; i < n; i++) {
+    const lit = lerp(from, to, i, n);
     parts.push(
       Text({
         color: hex(i < timeLeft ? lit : empty),
@@ -1673,9 +1682,9 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
     );
   }
   if (left !== undefined && left > 0) {
-    const shown = `${countdown(left)} `.padStart(limit.segments);
+    const shown = `${countdown(left)} `.padStart(n);
     parts.push(
-      hoverOver(Box, ` ${limit.badge} `.length + limit.segments - [...shown].length, Text({ color: hex(from), backgroundColor: hex(empty), bold: true, children: shown })),
+      hoverOver(Box, ` ${limit.badge} `.length + n - [...shown].length, Text({ color: hex(from), backgroundColor: hex(empty), bold: true, children: shown })),
     );
   }
   return Box({ key: limit.kind, flexDirection: "row", children: parts });
@@ -1854,6 +1863,11 @@ function dollars(s: StatusSpend): string {
   return `${s.unpriced > 0 ? "~" : ""}$${s.usd.toFixed(2)}`;
 }
 
+// A bar's length option in whole cells, at least 1; anything but a number is the default.
+function lengthOf(option: unknown, fallback: number): number {
+  return typeof option === "number" ? Math.max(1, Math.floor(option)) : fallback;
+}
+
 // The whole cells a percentage covers, floored so a bar only reads full at 100%.
 function cells(pct: number, n: number): number {
   return Math.min(Math.max(Math.floor((pct * n) / 100), 0), n);
@@ -1866,25 +1880,26 @@ function cells(pct: number, n: number): number {
 // and the badge is zsh's recall-zone glyph on the colour of the percentage used. Hovered, the tokens left (zsh's ↻).
 function contextParts(Box: Ui["Box"], Text: Ui["Text"], context: StatusUsage["context"], limit: number | undefined, smart: number) {
   if (context.tokens === undefined || context.window <= 0) return [];
+  const n = barCells.context;
   const usable = limit && limit > 0 ? limit : context.window;
   const current = context.tokens;
   const remaining = usable - current;
   const pct = Math.min(Math.floor((current * 100) / usable), 150);
   const overflow = remaining < 0;
-  const bottom = overflow ? Math.min(Math.floor(((pct - 100) * CONTEXT_CELLS) / 25), CONTEXT_CELLS) : cells(100 - pct, CONTEXT_CELLS);
-  const top = smart > 0 ? cells(((smart - Math.min(current, smart)) * 100) / smart, CONTEXT_CELLS) : 0;
+  const bottom = overflow ? Math.min(Math.floor(((pct - 100) * n) / 25), n) : cells(100 - pct, n);
+  const top = smart > 0 ? cells(((smart - Math.min(current, smart)) * 100) / smart, n) : 0;
   const badgeBg = overflow ? color("context.over") : ramp(Math.min(pct, 100));
   const badge = ` ${contextIcon(current, usable, remaining, smart)} `;
   const empty = color("empty");
   const parts = [Text({ color: hex(contrast(badgeBg)), backgroundColor: hex(badgeBg), children: badge })];
-  for (let i = 0; i < CONTEXT_CELLS; i++) {
-    const lit = ramp(Math.trunc(((CONTEXT_CELLS - 1 - i) * 100) / CONTEXT_CELLS));
+  for (let i = 0; i < n; i++) {
+    const lit = ramp(Math.trunc(((n - 1 - i) * 100) / n));
     const under = i < bottom ? (overflow ? color("context.over") : lit) : empty;
     parts.push(Text({ color: hex(smart <= 0 ? under : i < top ? lit : empty), backgroundColor: hex(under), children: "▀" }));
   }
-  const shown = `${formatTokens(remaining)} `.padStart(CONTEXT_CELLS);
+  const shown = `${formatTokens(remaining)} `.padStart(n);
   parts.push(
-    hoverOver(Box, [...badge].length + CONTEXT_CELLS - [...shown].length, Text({ color: hex(badgeBg), backgroundColor: hex(empty), bold: true, children: shown })),
+    hoverOver(Box, [...badge].length + n - [...shown].length, Text({ color: hex(badgeBg), backgroundColor: hex(empty), bold: true, children: shown })),
   );
   return [Box({ key: "context", flexDirection: "row", children: parts })];
 }
