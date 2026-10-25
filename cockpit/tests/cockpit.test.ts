@@ -517,7 +517,7 @@ describe("cockpit", () => {
   // A limit tag as drawn: its badge's text, its bar glyph by glyph (on a gauge █ a full cell, ▐ or ▌ the half on the
   // pipe's side, a space an empty cell, │ the pipe), and each glyph's colour and background.
   const limitTagOf = async (ui: { find: Mounted["find"] }, key: string) => {
-    const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key }), `the ${key} gauge`).children);
+    const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children);
     return { badge: flat(badge), bar: bar.map(flat).join(""), colors: bar.map(({ props }) => props.color), backgrounds: bar.map(({ props }) => props.backgroundColor) };
   };
 

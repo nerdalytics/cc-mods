@@ -76,15 +76,25 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit:
   return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, 100) };
 }
 
-// One limit's bar, none until a reading has it.
+// One limit's tag, none until a reading has it: its badge, then its bar in the limit_style. The gauge's badge also reads
+// the percent used, rounded as the run-out warning rounds it. Hovered, the explanation line shows the countdown.
 function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
   const reading = limitOf(s, badge);
   if (!reading) return [];
   const { limit, found, left, pace } = reading;
-  if (limitStyle === "gauge") return [gaugeParts(Box, Text, limit, found, pace)];
-  if (limitStyle === "lanes") return [lanesParts(Box, Text, limit, found, left, pace)];
-  if (limitStyle === "notch") return [notchParts(Box, Text, limit, found, pace)];
-  return [limitParts(Box, Text, limit, found, left)];
+  const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, barCells[limit.badge]);
+  const bar =
+    limitStyle === "gauge"
+      ? gaugeCells(Text, limit, pace)
+      : limitStyle === "lanes"
+        ? lanesCells(Text, limit, found, timeLeft, pace)
+        : limitStyle === "notch"
+          ? notchCells(Text, limit, found, pace)
+          : classicCells(Text, limit, found, timeLeft);
+  const label = limitStyle === "gauge" ? `${limit.badge} ${Math.round(found.percentUsed)}%` : limit.badge;
+  const { to } = stops(`limit.${limit.badge}`);
+  const children = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${label} ` }), ...bar];
+  return [Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children })];
 }
 
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
@@ -1782,14 +1792,13 @@ function requestCost(
 
 // Two bars stacked in one row, depleting right to left as statusline.zsh's bars did: every cell is ▀,
 // its glyph colour the top half (the window's time left), its background the bottom half (its usage left).
-// A half past its bar's end is dim, so both bars show where 100% is. Hovered, the explanation line shows the countdown.
-function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, left: number | undefined) {
+// A half past its bar's end is dim, so both bars show where 100% is.
+function classicCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, timeLeft: number) {
   const n = barCells[limit.badge];
-  const timeLeft = left === undefined ? 0 : cells((left * 100) / limit.seconds, n);
   const usageLeft = cells(100 - found.percentUsed, n);
   const { from, to } = stops(`limit.${limit.badge}`);
   const empty = color("empty");
-  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
+  const parts = [];
   for (let i = 0; i < n; i++) {
     const lit = lerp(from, to, i, n);
     parts.push(
@@ -1800,61 +1809,56 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
       }),
     );
   }
-  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+  return parts;
 }
 
 // Classic's two lanes with the top one the par left, the share of the window still to go at the reading. Bottom cells
 // lit past the par line are allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace,
 // amber beside the line turning red away from it. Without a pace both lanes are dim, the top one classic's time left.
-function lanesParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, left: number | undefined, pace: { share: number } | undefined) {
+function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, timeLeft: number, pace: { share: number } | undefined) {
   const n = barCells[limit.badge];
-  const par = pace ? cells(100 * (1 - pace.share), n) : left === undefined ? 0 : cells((left * 100) / limit.seconds, n);
+  const par = pace ? cells(100 * (1 - pace.share), n) : timeLeft;
   const usageLeft = cells(100 - found.percentUsed, n);
   const { from, to } = stops(`limit.${limit.badge}`);
-  const over = stops("pace.over");
   const empty = color("empty");
-  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
+  const parts = [];
   for (let i = 0; i < n; i++) {
     const lit = pace ? lerp(from, to, i, n) : color("pace.none");
-    const bottom = i < usageLeft ? (pace && i >= par ? color("pace.under") : lit) : pace && i < par ? lerp(over.from, over.to, par - 1 - i, n) : empty;
+    const bottom = i < usageLeft ? (pace && i >= par ? color("pace.under") : lit) : pace && i < par ? overPace(par - 1 - i, n) : empty;
     parts.push(Text({ color: hex(i < par ? lit : empty), backgroundColor: hex(bottom), children: "▀" }));
   }
-  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+  return parts;
 }
 
 // One full-height lane of the usage left, with a notch on the left edge of the cell after the par left, both rounded
 // to the nearest cell; a par left that fills the lane puts the notch after its last cell. Lit cells past the notch are
 // allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace, amber beside the notch
 // turning red away from it. Without a pace the usage is dim and there is no notch.
-function notchParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { share: number } | undefined) {
+function notchCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { share: number } | undefined) {
   const n = barCells[limit.badge];
   const usageLeft = Math.round(((100 - found.percentUsed) * n) / 100);
   const notch = pace ? Math.min(n, Math.round((1 - pace.share) * n)) : undefined;
   const { from, to } = stops(`limit.${limit.badge}`);
-  const over = stops("pace.over");
   const empty = color("empty");
   const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });
-  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
+  const parts = [];
   for (let i = 0; i < n; i++) {
     const lit = notch === undefined ? color("pace.none") : i < notch ? lerp(from, to, i, n) : color("pace.under");
-    const fill = i < usageLeft ? lit : notch !== undefined && i < notch ? lerp(over.from, over.to, notch - 1 - i, n) : empty;
+    const fill = i < usageLeft ? lit : notch !== undefined && i < notch ? overPace(notch - 1 - i, n) : empty;
     parts.push(i === notch ? mark(fill) : Text({ color: hex(fill), backgroundColor: hex(fill), children: " " }));
   }
   if (notch === n) parts.push(mark(empty));
-  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+  return parts;
 }
 
-// The gauge: the badge reads the limit and its percent used, rounded as the run-out warning rounds it; the bar is the
-// pace, half the length, rounded down, on each side of a centre pipe. Under pace the left side fills outward from the
-// pipe by the share of the target that goes unused, 1 - r; over pace the right side by the share of the window still
-// to go when the limit runs out, 1 - 1/r, from amber at the pipe to red at the far end, so a worse pace reads redder.
-// Each side fills in half cells. Without a pace every cell is blank and the pipe dim.
-function gaugeParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { r: number } | undefined) {
+// The gauge: the pace, half the length, rounded down, on each side of a centre pipe. Under pace the left side fills
+// outward from the pipe by the share of the target that goes unused, 1 - r; over pace the right side by the share of
+// the window still to go when the limit runs out, 1 - 1/r, from amber at the pipe to red at the far end, so a worse
+// pace reads redder. Each side fills in half cells. Without a pace every cell is blank and the pipe dim.
+function gaugeCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], pace: { r: number } | undefined) {
   const side = Math.floor(barCells[limit.badge] / 2);
   const under = pace !== undefined && pace.r < 1;
   const halves = pace === undefined ? 0 : Math.round((under ? 1 - pace.r : 1 - 1 / pace.r) * 2 * side);
-  const { to } = stops(`limit.${limit.badge}`);
-  const over = stops("pace.over");
   const empty = hex(color("empty"));
   // The j-th cell out from the pipe, `filled` halves out: whole, its half on the pipe's side, or blank.
   const cell = (filled: number, j: number, rgb: RGB, half: string) => {
@@ -1862,13 +1866,17 @@ function gaugeParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
     return Text({ color: glyph === " " ? empty : hex(rgb), backgroundColor: empty, children: glyph });
   };
   const out = [...Array(side).keys()];
-  const parts = [
-    Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ${Math.round(found.percentUsed)}% ` }),
+  return [
     ...[...out].reverse().map((j) => cell(under ? halves : 0, j, color("pace.under"), "▐")),
     Text({ color: hex(color(pace ? "pace.par" : "pace.none")), backgroundColor: empty, children: "│" }),
-    ...out.map((j) => cell(under ? 0 : halves, j, lerp(over.from, over.to, j, side), "▌")),
+    ...out.map((j) => cell(under ? 0 : halves, j, overPace(j, side), "▌")),
   ];
-  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+}
+
+// The over-pace colour j cells out from the par line, of n: amber beside it, turning red away from it.
+function overPace(j: number, n: number): RGB {
+  const { from, to } = stops("pace.over");
+  return lerp(from, to, j, n);
 }
 
 // Σ what the main session cost and AGENT_MARK what its subagents did, each a chip; hovered, the explanation line shows
