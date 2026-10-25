@@ -1,0 +1,5 @@
+# Cockpit cannot show the Fable weekly limit
+
+**Status:** needs-info
+
+Claude.ai's usage page shows a separate Fable weekly limit next to the all-models one. On the user's Team account it read 74 % used against 52 % for all models, both resetting Thu 3:00 PM; on their Max 5x account it read 62 % against 100 %, described as "Up to 50% of your weekly limit" (screenshots in session b5de1086, 2026-10-25). In Claude Code 2.1.310 the response schema parses `unifiedWindows` for `five_hour`, `seven_day` and `seven_day_overage_included` only, and `rateLimitType` knows `seven_day_opus` and `seven_day_sonnet` but no Fable window (`strings` of `~/.local/share/mise/installs/claude/2.1.310/claude`). So `session.measure`'s `rateLimits` likely never carries the Fable limit, and cockpit's pace gauge cannot warn when it is the limit that binds, though cockpit already draws any extra window Claude Code reports (`cockpit/hooks/cockpit.ts:55`). Unverified: what the API actually sends for a Fable-heavy session; check `rateLimits` in a live session that uses Fable.
