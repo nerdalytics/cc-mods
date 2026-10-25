@@ -1881,7 +1881,7 @@ function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: Sta
   const ahead = pace ? ((found.percentUsed - 100 * pace.par) * n) / 100 : 0;
   // ε keeps an ahead that floating point puts a hair above a whole number, such as 2.0000000000000004, at that number.
   const moved = ahead > 0 ? Math.ceil(ahead - 1e-9) : Math.floor(-ahead);
-  const k = Math.min(usageLeft, moved);
+  const paced = Math.min(usageLeft, moved);
   // More impacted than the token lane holds, a token lane rounded down to none included, would leave the overspend
   // unshown, so the time lane takes the warning.
   const severe = ahead > 0 && moved > usageLeft;
@@ -1890,7 +1890,7 @@ function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: Sta
   const parts = [];
   for (let i = 0; i < n; i++) {
     const lit = pace ? lerp(from, to, i, n) : color("pace.none");
-    const token = i >= usageLeft ? empty : i < usageLeft - k ? lit : ahead > 0 ? overPace(i - (usageLeft - k), k) : color("pace.spare");
+    const token = i >= usageLeft ? empty : i < usageLeft - paced ? lit : ahead > 0 ? overPace(i - (usageLeft - paced), paced) : color("pace.spare");
     const time = i >= parLeft ? empty : severe ? color("pace.severe") : lit;
     parts.push(Text({ color: hex(token), backgroundColor: hex(time), children: "▀" }));
   }
@@ -1940,7 +1940,8 @@ function gaugeCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], pace: { r:
   ];
 }
 
-// The over-pace colour j cells out from the par line, of n: amber beside it, turning red away from it.
+// The over-pace colour of the j-th of n cells: amber at the first, turning red toward the last. The gauge counts out
+// from its pipe, the notch style back from its notch, and lanes along the impacted cells toward the token lane's end.
 function overPace(j: number, n: number): RGB {
   const { from, to } = stops("pace.over");
   return lerp(from, to, j, n);

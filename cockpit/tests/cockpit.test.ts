@@ -676,6 +676,18 @@ describe("cockpit", () => {
     });
   }
 
+  // 30% of the 7d with no reset time has no pace and no time left: the usage left, 70%, lights the token lane dim to 4
+  // of 7 cells, and the time lane is empty.
+  test("draws the lanes' token lane dim and the time lane empty at 30% with no reset time", { options: { limit_style: "lanes" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 30 }]);
+    const ui = await mountHint($);
+    const lanes = await limitTagOf(ui, "seven_day");
+    expect(lanes.colors).toEqual([DIM, DIM, DIM, DIM, GREY, GREY, GREY]);
+    expect(lanes.backgrounds).toEqual(Array(7).fill(GREY));
+    await ui.unmount();
+  });
+
   // The 7d, 5h and context bars, each with a value to show while hovered.
   const mountBars = async ($: Engine, on: On) => {
     stubHint(on);
