@@ -514,9 +514,9 @@ describe("cockpit", () => {
     const windowMs = kind === "seven_day" ? 604_800_000 : 18_000_000;
     return { kind, percentUsed, resetsAt: new Date(Date.now() + (1 - passed) * windowMs).toISOString() };
   };
-  // A gauge tag as drawn: its badge's text, its bar glyph by glyph (█ a full cell, ▐ or ▌ the half on the pipe's side, a
-  // space an empty cell, │ the pipe), and each glyph's colour and background.
-  const gaugeOf = async (ui: { find: Mounted["find"] }, key: string) => {
+  // A limit tag as drawn: its badge's text, its bar glyph by glyph (on a gauge █ a full cell, ▐ or ▌ the half on the
+  // pipe's side, a space an empty cell, │ the pipe), and each glyph's colour and background.
+  const limitTagOf = async (ui: { find: Mounted["find"] }, key: string) => {
     const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key }), `the ${key} gauge`).children);
     return { badge: flat(badge), bar: bar.map(flat).join(""), colors: bar.map(({ props }) => props.color), backgrounds: bar.map(({ props }) => props.backgroundColor) };
   };
@@ -525,7 +525,7 @@ describe("cockpit", () => {
     stubHint(on);
     await startWithLimits($, on, [reading("seven_day", 50.6, 1 / 3)]);
     const ui = await mountHint($);
-    expect((await gaugeOf(ui, "seven_day")).badge).toBe(" 7d 51% ");
+    expect((await limitTagOf(ui, "seven_day")).badge).toBe(" 7d 51% ");
     await ui.unmount();
   });
 
@@ -534,8 +534,8 @@ describe("cockpit", () => {
     // Too early in either window for a pace, so each side is blank.
     await startWithLimits($, on, [reading("seven_day", 1, 0), reading("five_hour", 1, 0)]);
     const ui = await mountHint($);
-    expect((await gaugeOf(ui, "five_hour")).bar).toBe("     │     ");
-    expect((await gaugeOf(ui, "seven_day")).bar).toBe("   │   ");
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect((await limitTagOf(ui, "seven_day")).bar).toBe("   │   ");
     await ui.unmount();
   });
 
@@ -550,7 +550,7 @@ describe("cockpit", () => {
       stubHint(on);
       await startWithLimits($, on, [reading("seven_day", used, passed)]);
       const ui = await mountHint($);
-      const gauge = await gaugeOf(ui, "seven_day");
+      const gauge = await limitTagOf(ui, "seven_day");
       expect(gauge.bar).toBe(bar);
       // The pipe, at 5, in the par colour.
       expect(colors.map(([i]) => [i, gauge.colors[i]])).toEqual(colors);
@@ -567,7 +567,7 @@ describe("cockpit", () => {
       stubHint(on);
       await startWithLimits($, on, [limit], readAgoMs);
       const ui = await mountHint($);
-      const gauge = await gaugeOf(ui, "seven_day");
+      const gauge = await limitTagOf(ui, "seven_day");
       expect(gauge.badge).toBe(" 7d 51% ");
       expect(gauge.bar).toBe("     │     ");
       // Every cell grey, the pipe dim: no pace colour anywhere.
@@ -575,6 +575,80 @@ describe("cockpit", () => {
       expect(gauge.colors).toEqual([...Array(5).fill("#373a48"), "#6b7280", ...Array(5).fill("#373a48")]);
       await ui.unmount();
     });
+
+  // The 7d's own gradient over 7 cells, #c084fc to #643296 as lerp truncates it, and the grey of an empty half.
+  const LIT_7D = ["#c084fc", "#b277ec", "#a269db", "#925bc9"];
+  const GREY = "#373a48";
+  // On a 7-cell 7d tag, 51% with a third gone is par 33%: the top lane lit to the par left, 67%, 4 cells; the bottom to
+  // the usage left, 49%, 3 cells; the one cell between them over pace, amber beside the par line. 10% with 60% gone
+  // lights the top lane to 2 cells and the bottom to 6, the 4 lit past the par line in slate.
+  for (const [title, used, passed, tops, bottoms] of [
+    ["lights the lanes' gap before the par line amber to red over pace", 51, 1 / 3, [...LIT_7D, GREY, GREY, GREY], [...LIT_7D.slice(0, 3), "#fbbf24", GREY, GREY, GREY]],
+    ["draws the lanes' bottom cells lit past the par line in slate under pace", 10, 0.6, [...LIT_7D.slice(0, 2), GREY, GREY, GREY, GREY, GREY], [...LIT_7D.slice(0, 2), "#94a3b8", "#94a3b8", "#94a3b8", "#94a3b8", GREY]],
+  ] as const)
+    test(title, { options: { limit_style: "lanes" } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [reading("seven_day", used, passed)]);
+      const ui = await mountHint($);
+      const lanes = await limitTagOf(ui, "seven_day");
+      expect(lanes.badge).toBe(" 7d ");
+      expect(lanes.bar).toBe("▀▀▀▀▀▀▀");
+      // The glyph colour is the top lane, the background the bottom.
+      expect(lanes.colors).toEqual([...tops]);
+      expect(lanes.backgrounds).toEqual([...bottoms]);
+      await ui.unmount();
+    });
+
+  // A notch tag's one lane is each cell's background; ▏ in the par colour is the notch, on the left edge of the cell
+  // after the par left. On 7 cells, 51% with a third gone leaves par 67%, 4.7 cells, so the notch sits after the 5th:
+  // the usage left, 3.4 cells, lit to 3, and the 2 empty cells before the notch amber beside it turning red. 10% with
+  // 60% gone leaves par 40%, 2.8 cells, so the notch sits after the 3rd, the 3 lit past it slate. On a 1-cell lane the
+  // par left of 60% rounds to the whole lane, so the notch sits after it.
+  for (const [title, length, used, passed, bar, backgrounds] of [
+    ["notches the lane at the par left and draws the empty cells before it amber to red over pace", 7, 51, 1 / 3, "     ▏ ", [...LIT_7D.slice(0, 3), "#faac29", "#fbbf24", GREY, GREY]],
+    ["notches the lane at the par left and draws the lit cells past it in slate under pace", 7, 10, 0.6, "   ▏   ", [...LIT_7D.slice(0, 3), "#94a3b8", "#94a3b8", "#94a3b8", GREY]],
+    ["notches the lane after its last cell when the par left fills it", 1, 10, 0.4, " ▏", ["#c084fc", GREY]],
+  ] as const)
+    test(title, { options: { limit_style: "notch", limit_7d_length: length } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [reading("seven_day", used, passed)]);
+      const ui = await mountHint($);
+      const notch = await limitTagOf(ui, "seven_day");
+      expect(notch.badge).toBe(" 7d ");
+      expect(notch.bar).toBe(bar);
+      expect(notch.backgrounds).toEqual([...backgrounds]);
+      expect(notch.colors[bar.indexOf("▏")]).toBe("#e5e7eb");
+      await ui.unmount();
+    });
+
+  // 51% of the 7d with a third gone is over pace with a usable reading; each of these takes the pace away. The usage
+  // left, 49%, lights 3 of 7 cells either way; the lanes' top lane is the time left: none without a reset time, 4
+  // cells with two thirds of the window to go, 6 with 95%.
+  const DIM = "#6b7280";
+  for (const [why, limit, readAgoMs, top] of [
+    ["with no reset time", { kind: "seven_day", percentUsed: 51 }, 1_000, 0],
+    ["when this session's last response is 11 minutes old", reading("seven_day", 51, 1 / 3), 11 * 60_000, 4],
+    ["while less than a tenth of the window has passed", reading("seven_day", 51, 0.05), 1_000, 6],
+  ] satisfies [string, SessionRateLimit, number, number][]) {
+    test(`draws both lanes dim without a pace ${why}`, { options: { limit_style: "lanes" } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [limit], readAgoMs);
+      const ui = await mountHint($);
+      const lanes = await limitTagOf(ui, "seven_day");
+      expect(lanes.colors).toEqual([...Array(top).fill(DIM), ...Array(7 - top).fill(GREY)]);
+      expect(lanes.backgrounds).toEqual([DIM, DIM, DIM, GREY, GREY, GREY, GREY]);
+      await ui.unmount();
+    });
+    test(`draws the notch style's usage dim with no notch without a pace ${why}`, { options: { limit_style: "notch" } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [limit], readAgoMs);
+      const ui = await mountHint($);
+      const notch = await limitTagOf(ui, "seven_day");
+      expect(notch.bar).toBe("       ");
+      expect(notch.backgrounds).toEqual([DIM, DIM, DIM, GREY, GREY, GREY, GREY]);
+      await ui.unmount();
+    });
+  }
 
   // The 7d, 5h and context bars, each with a value to show while hovered.
   const mountBars = async ($: Engine, on: On) => {
@@ -1113,8 +1187,7 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  // Over pace with a usable reading: classic draws no pace, so its words say none; lanes, even drawn as classic until
-  // it is built, is a pace style and says it.
+  // Over pace with a usable reading: classic draws no pace, so its words say none; lanes is a pace style and says it.
   for (const [style, shown] of [
     ["classic", /^7d limit: 51% used, resets in \S+\.$/],
     ["lanes", /runs out 2d10h before it resets/],
@@ -1832,7 +1905,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "five_hour" })); i++) await settle();
     // The sample is 20% used halfway through the window: r 0.4, 60% of the target unused, 6 of 10 halves.
-    expect((await gaugeOf(ui, "five_hour")).bar).toBe("  ███│     ");
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("  ███│     ");
     await ui.unmount();
   });
 
@@ -2604,7 +2677,7 @@ describe("cockpit", () => {
     stubHint(on);
     await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
     const ui = await mountHint($);
-    expect((await gaugeOf(ui, "seven_day")).colors.slice(1, 5)).toEqual(Array(4).fill("#112233"));
+    expect((await limitTagOf(ui, "seven_day")).colors.slice(1, 5)).toEqual(Array(4).fill("#112233"));
     await ui.unmount();
   });
 

@@ -80,9 +80,11 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit:
 function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): Parts {
   const reading = limitOf(s, badge);
   if (!reading) return [];
-  const { limit, found } = reading;
-  if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, reading.left)];
-  return [gaugeParts(Box, Text, limit, found, reading.pace)];
+  const { limit, found, left, pace } = reading;
+  if (limitStyle === "gauge") return [gaugeParts(Box, Text, limit, found, pace)];
+  if (limitStyle === "lanes") return [lanesParts(Box, Text, limit, found, left, pace)];
+  if (limitStyle === "notch") return [notchParts(Box, Text, limit, found, pace)];
+  return [limitParts(Box, Text, limit, found, left)];
 }
 
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
@@ -346,7 +348,7 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
   { kind: "seven_day", badge: "7d", seconds: 604_800 },
   { kind: "five_hour", badge: "5h", seconds: 18_000 },
 ];
-// How both limit tags draw, the limit_style option. lanes and notch are read but draw as classic until they are built.
+// How both limit tags draw, the limit_style option.
 const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset, as cockpit 1.1.0 drew them.
@@ -375,8 +377,8 @@ const COLORS = {
   "pace.under": { group: "Limit pace", label: "under pace", rgb: [148, 163, 184] },
   "pace.over.from": { group: "", label: "over pace", rgb: [251, 191, 36] },
   "pace.over.to": { group: "", label: "over pace, much of the window left at run-out", rgb: [239, 68, 68] },
-  "pace.par": { group: "", label: "the gauge's pipe", rgb: [229, 231, 235] },
-  "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe", rgb: [107, 114, 128] },
+  "pace.par": { group: "", label: "the gauge's pipe and the notch", rgb: [229, 231, 235] },
+  "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe, the lanes and the notch's usage", rgb: [107, 114, 128] },
   // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
   // as a band of its own.
   "context.low": { group: "Context bar and badge", label: "plenty left", rgb: [34, 197, 94] },
@@ -1798,6 +1800,47 @@ function limitParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[num
       }),
     );
   }
+  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+}
+
+// Classic's two lanes with the top one the par left, the share of the window still to go at the reading. Bottom cells
+// lit past the par line are allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace,
+// amber beside the line turning red away from it. Without a pace both lanes are dim, the top one classic's time left.
+function lanesParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, left: number | undefined, pace: { share: number } | undefined) {
+  const n = barCells[limit.badge];
+  const par = pace ? cells(100 * (1 - pace.share), n) : left === undefined ? 0 : cells((left * 100) / limit.seconds, n);
+  const usageLeft = cells(100 - found.percentUsed, n);
+  const { from, to } = stops(`limit.${limit.badge}`);
+  const over = stops("pace.over");
+  const empty = color("empty");
+  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
+  for (let i = 0; i < n; i++) {
+    const lit = pace ? lerp(from, to, i, n) : color("pace.none");
+    const bottom = i < usageLeft ? (pace && i >= par ? color("pace.under") : lit) : pace && i < par ? lerp(over.from, over.to, par - 1 - i, n) : empty;
+    parts.push(Text({ color: hex(i < par ? lit : empty), backgroundColor: hex(bottom), children: "▀" }));
+  }
+  return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
+}
+
+// One full-height lane of the usage left, with a notch on the left edge of the cell after the par left, both rounded
+// to the nearest cell; a par left that fills the lane puts the notch after its last cell. Lit cells past the notch are
+// allowance the pace leaves unused, in slate; empty ones before it are spent ahead of pace, amber beside the notch
+// turning red away from it. Without a pace the usage is dim and there is no notch.
+function notchParts(Box: Ui["Box"], Text: Ui["Text"], limit: (typeof LIMITS)[number], found: StatusLimit, pace: { share: number } | undefined) {
+  const n = barCells[limit.badge];
+  const usageLeft = Math.round(((100 - found.percentUsed) * n) / 100);
+  const notch = pace ? Math.min(n, Math.round((1 - pace.share) * n)) : undefined;
+  const { from, to } = stops(`limit.${limit.badge}`);
+  const over = stops("pace.over");
+  const empty = color("empty");
+  const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });
+  const parts = [Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${limit.badge} ` })];
+  for (let i = 0; i < n; i++) {
+    const lit = notch === undefined ? color("pace.none") : i < notch ? lerp(from, to, i, n) : color("pace.under");
+    const fill = i < usageLeft ? lit : notch !== undefined && i < notch ? lerp(over.from, over.to, notch - 1 - i, n) : empty;
+    parts.push(i === notch ? mark(fill) : Text({ color: hex(fill), backgroundColor: hex(fill), children: " " }));
+  }
+  if (notch === n) parts.push(mark(empty));
   return Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children: parts });
 }
 
