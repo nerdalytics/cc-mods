@@ -1800,8 +1800,9 @@ function gitParts({ Box, Text, Link }: Ui, g: StatusGit, pr: StatusPr | null | u
 }
 
 // A value laid over its chip while hovered, `left` columns in: absolute, so it paints over the chip without moving anything.
+// A value wider than a short bar would start left of its chip, over the tag before it, so it starts at the chip's edge.
 function hoverOver(Box: Ui["Box"], left: number, child: ReturnType<Ui["Box"] | Ui["Text"]>) {
-  return Box({ position: "absolute", top: 0, left, display: "none", hover: { display: "flex" }, children: [child] });
+  return Box({ position: "absolute", top: 0, left: Math.max(0, left), display: "none", hover: { display: "flex" }, children: [child] });
 }
 
 type Piece = { text: string; href?: string; color?: RGB };

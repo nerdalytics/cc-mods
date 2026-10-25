@@ -467,6 +467,16 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The 7d, 5h and context bars, each with a value to show while hovered.
+  const mountBars = async ($: Engine, on: On) => {
+    stubHint(on);
+    const resetsAt = new Date(Date.now() + 9_900_000).toISOString();
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    return mountHint($);
+  };
   // The cells each bar draws, as the ▀ glyphs in its tag, by the limit_7d_length, limit_5h_length and context_length options.
   for (const [title, options, lengths] of [
     ["draws the 7d, 5h and context bars 7, 10 and 10 cells long with no length set, as cockpit 1.1.0 did", {}, { "7d": 7, "5h": 10, context: 10 }],
@@ -475,15 +485,19 @@ describe("cockpit", () => {
     ["draws a 12-cell 5h bar at limit_5h_length 12.7, a fraction rounded down", { limit_5h_length: 12.7 }, { "7d": 7, "5h": 12, context: 10 }],
   ] satisfies [string, Record<string, number>, { "7d": number; "5h": number; context: number }][])
     test(title, { options }, async ($, on) => {
-      stubHint(on);
-      const resetsAt = new Date(Date.now() + 9_900_000).toISOString();
-      on("session.start", ($, e) => ({ cwd: e.cwd }));
-      on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
-      on("session.model", () => ({ value: "claude-opus-5-5" }));
-      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-      const ui = await mountHint($);
+      const ui = await mountBars($, on);
       const length = async (key: string) => elements(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children).filter((cell) => flat(cell) === "▀").length;
       expect({ "7d": await length("seven_day"), "5h": await length("five_hour"), context: await length("context") }).toEqual(lengths);
+      await ui.unmount();
+    });
+  // A hovered value wider than its tag's bar starts at the tag's left edge, not over the tag before it.
+  for (const [title, options, key] of [
+    ["starts the 5h countdown at its tag's left edge on a 1-cell bar", { limit_5h_length: 1 }, "five_hour"],
+    ["starts the context's tokens left at its tag's left edge at context_length 0", { context_length: 0 }, "context"],
+  ] satisfies [string, Record<string, number>, string][])
+    test(title, { options }, async ($, on) => {
+      const ui = await mountBars($, on);
+      expect(must(await ui.find({ type: "Box", key }), `the ${key} tag`).children.at(-1)).toMatchObject({ props: { position: "absolute", left: 0 } });
       await ui.unmount();
     });
 
