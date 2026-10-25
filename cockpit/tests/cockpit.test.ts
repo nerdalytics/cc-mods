@@ -1200,6 +1200,120 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // The 5h's coupling to the 7d. Each reading is 5h used, its reset, 7d used and its reset, the resets in ms from the
+  // test's start. The first starts the session, each later one comes in a response, and the last is a second old.
+  type Reading = [five: number, fiveResetsIn: number, seven: number, sevenResetsIn: number];
+  const HOUR = 3_600_000;
+  const DAYS_3 = 72 * HOUR;
+  const fedReadings = async ($: Engine, on: On, readings: Reading[]) => {
+    const start = Date.now();
+    const limitsOf = ([five, fiveIn, seven, sevenIn]: Reading): SessionRateLimit[] => [
+      { kind: "five_hour", percentUsed: five, resetsAt: new Date(start + fiveIn).toISOString() },
+      { kind: "seven_day", percentUsed: seven, resetsAt: new Date(start + sevenIn).toISOString() },
+    ];
+    const [first, ...rest] = readings.map(limitsOf);
+    // One array the session's usage answers from, so a poll between two responses reads the latest of them again.
+    const limits = [...(first ?? [])];
+    // Core echoes what moved.
+    on("session.measure", (_$, e) => ({ changed: e.changed }));
+    await startWithLimits($, on, limits);
+    for (const next of rest) {
+      limits.splice(0, limits.length, ...next);
+      await $.session.measure({ context: { window: 1_000_000 }, rateLimits: next, changed: ["rateLimits"] });
+    }
+  };
+
+  // 10% to 25% of the 5h while the 7d goes 40.0% to 41.5%: k 0.1. A later 5h window at 5% with the 7d at 96% has 4% of
+  // the 7d left, 40 points of 5h at k 0.1: a target of 45%. At 60% of that window, r is 5 / 27, ~81% unused.
+  test("measures k from a 15-point 5h rise within one window and bounds a later window's 5h target by it", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, HOUR, 40, DAYS_3],
+      [25, HOUR, 41.5, DAYS_3],
+      [5, 2 * HOUR, 96, DAYS_3],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~81% unused");
+    await ui.unmount();
+  });
+
+  // 10% to 14% of the 5h is under 10 points, so the 7d's 40% to 45% gives no k: the 5h's target stays 100%, and at 60% of
+  // its window 14% is ~77% unused. Taken as a sample, k 1.25 would make it 58%, ~60% unused.
+  test("leaves k unmeasured by a 5h rise of 4 points", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, 2 * HOUR, 40, DAYS_3],
+      [14, 2 * HOUR, 45, DAYS_3],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~77% unused");
+    await ui.unmount();
+  });
+
+  // 10% to 25% of the 5h while the 7d goes 80% to 92%. With its reset moved 60 seconds the pair gives no k: the 5h's
+  // target stays 100%, and at 60% of its window 25% is ~58% unused. Taken as a sample, k 0.8 would make it 35%, over pace.
+  test("takes no sample of k across a 7d reset that moved by 60 seconds", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, 2 * HOUR, 80, DAYS_3],
+      [25, 2 * HOUR, 92, DAYS_3 + 60_000],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~58% unused");
+    await ui.unmount();
+  });
+
+  // The same pair with the 7d's reset moved 59 seconds is one 7d window: k is 12 / 15, 0.8, which leaves the 5h 8% of the
+  // 7d's worth, 10 points: a target of 35%, which 25% at 60% of its window is over.
+  test("takes a sample of k across a 7d reset that moved by under 60 seconds", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, 2 * HOUR, 80, DAYS_3],
+      [25, 2 * HOUR, 92, DAYS_3 + 59_000],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("runs out 48m before it resets");
+    await ui.unmount();
+  });
+
+  // 10% to 20% of the 5h while the 7d goes 40% to 45%: k 0.5. A later 5h window at 20% with the 7d at 90%, which resets
+  // days after it: 20 + 10 / 0.5, a target of 40%. At 60% of the window r is 20 / 24, under pace with ~17% unused: 2 of
+  // the 10 halves left of the pipe. Against 100% it would be 7.
+  test("draws the 5h gauge against the target the 7d can still pay for", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, HOUR, 40, DAYS_3],
+      [20, HOUR, 45, DAYS_3],
+      [20, 2 * HOUR, 90, DAYS_3],
+    ]);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("    █│     ");
+    await ui.unmount();
+  });
+
+  // 10% to 24% of the 5h while the 7d goes 80% to 89%: k 9 / 14. The 7d resets in 1 hour, before the 5h window ends in
+  // 3, so the 5h's target stays 100%: at 40% of its window 24% is ~40% unused. Bounded, it would be 41%, over pace.
+  test("keeps the 5h target at 100% when the 7d resets before the 5h window ends", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, 3 * HOUR, 80, HOUR],
+      [24, 3 * HOUR, 89, HOUR],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~40% unused");
+    await ui.unmount();
+  });
+
+  // A session's first reading measures no k: with the 7d at 90%, the 5h's target is still 100%, and at 60% of its window
+  // 20% is ~67% unused.
+  test("keeps the 5h target at 100% until this session has measured k", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [[20, 2 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~67% unused");
+    await ui.unmount();
+  });
+
   // A value on the grey says hovering shows more. Every chip has an explanation, so its value stands on the grey while
   // the explanation line can show it, the turns before any subagent and a cold cache included, and never without it.
   const valueBackgrounds = async (ui: { find: Mounted["find"] }, key: string) =>

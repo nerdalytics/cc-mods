@@ -36,6 +36,8 @@ type Snapshot = {
   git?: StatusGit;
   pr?: StatusPr | null;
   rejected?: Record<string, number>;
+  // The 7d percent that 1% of the 5h costs, once this session measured it.
+  k?: number;
   // When this session's last response came, in ms: the limits' reading is as of then.
   readAt: number;
   now: number;
@@ -69,11 +71,19 @@ const SEGMENTS = {
 // reading has it. The tag and its explanation both read the pace here, so they agree.
 function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number } } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
-  const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
+  const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
+  const found = limit && limits.find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
-  // The whole allowance is each window's target.
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, 100) };
+  const target = badge === "5h" ? fiveHourTarget(found, limits.find((r) => r.kind === "seven_day"), s.k) : 100;
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target) };
+}
+
+// The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
+// allowance until this session has measured k, and when the 7d resets before this 5h window ends, refilling it first.
+function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: number | undefined): number {
+  if (k === undefined || !five.resetsAt || !seven?.resetsAt || Date.parse(seven.resetsAt) <= Date.parse(five.resetsAt)) return 100;
+  return Math.min(100, five.percentUsed + (100 - seven.percentUsed) / k);
 }
 
 // One limit's tag, none until a reading has it: its badge, then its bar in the limit_style. The gauge's badge also reads
@@ -292,6 +302,7 @@ function dropped(key: ListKey, list: string[]): { layout: Layout; toggles: Recor
 }
 
 const USAGE = { plugin: "cockpit", key: "usage" } as const;
+const PACE_K = { plugin: "cockpit", key: "paceK" } as const;
 const MODEL = { plugin: "cockpit", key: "model" } as const;
 const TOKENS = { plugin: "cockpit", key: "tokens" } as const;
 const TURNS = { plugin: "cockpit", key: "turns" } as const;
@@ -347,6 +358,12 @@ const STEP_CYCLES_PER_SECOND = 1 / 9;
 const FORECAST_FRESH_MS = 10 * 60_000;
 // Early in a window the pace is noise: no run-out warning until this share of it has gone.
 const FORECAST_FROM = 0.1;
+// The 5h rise, in points, a sample of k needs. A percent used has one decimal, so at k near 0.1 a 10-point rise moves
+// the 7d about 1.0 and its rounding of ±0.05 is about ±5% of k; a 5-point rise would double that.
+const K_MIN_RISE = 10;
+// A reset time counts as moved, a new window, only by this much: nothing shows that a window's resetsAt reads the same
+// in every reading, and two real windows of one limit are at least 5 hours apart.
+const RESET_MOVED_MS = 60_000;
 // The share of the smart zone the context has used when the line offering a compaction appears.
 const COMPACT_HINT_AT = 0.9;
 const SMART_ZONE_URL = "https://www.aihero.dev/ai-coding-dictionary/smart-zone";
@@ -723,7 +740,7 @@ export const register: Register = (on, options) => {
   });
 
   on("session.measure", async ($, e, next) => {
-    await $.state.set(USAGE, { context: e.context, rateLimits: e.rateLimits });
+    await setUsage($, e);
     return next(e);
   });
 
@@ -897,7 +914,8 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: readAt = 0 } = await $.state.get(READ);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, readAt, now: Math.floor(Date.now() / 1000), phase };
+  const { value: { k } = {} } = await $.state.get(PACE_K);
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, k, readAt, now: Math.floor(Date.now() / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -990,7 +1008,7 @@ function poll($: EngineInterface): void {
   void maybeKeepWarm($);
   void maybeHandoff($);
   void maybeCompact($);
-  void $.session.usage().then((u) => $.state.set(USAGE, { context: u.context, rateLimits: u.rateLimits }));
+  void $.session.usage().then((u) => setUsage($, u));
   serial("handoff", () => findHandoff($));
   refreshGit($);
   if (tokensStale) {
@@ -1390,11 +1408,34 @@ async function startSession($: EngineInterface): Promise<void> {
 }
 
 async function refresh($: EngineInterface): Promise<void> {
-  const u = await $.session.usage();
-  await $.state.set(USAGE, { context: u.context, rateLimits: u.rateLimits });
+  await setUsage($, await $.session.usage());
   await $.state.set(MODEL, await $.session.model());
   await readTurns($);
   await readCompactAt($);
+}
+
+// Every usage reading is written here, so each one also measures k.
+async function setUsage($: EngineInterface, { context, rateLimits }: StatusUsage): Promise<void> {
+  await $.state.set(USAGE, { context, rateLimits });
+  await measureK($, rateLimits);
+}
+
+// k, the 7d percent that 1% of the 5h costs, from the 7d's rise over the 5h's since the first reading of this 5h
+// window, the base. A new 5h window, or a 7d reset inside it, starts a new base and takes no sample. The latest sample
+// stands. The reading is the one reported, not limitsOf's: a refusal's made-up reset time would start a new base.
+async function measureK($: EngineInterface, rateLimits: StatusLimit[]): Promise<void> {
+  const five = rateLimits.find((r) => r.kind === "five_hour");
+  const seven = rateLimits.find((r) => r.kind === "seven_day");
+  if (!five?.resetsAt || !seven?.resetsAt) return;
+  const reading = { reset5h: Date.parse(five.resetsAt), reset7d: Date.parse(seven.resetsAt), p5: five.percentUsed, p7: seven.percentUsed };
+  const { value: { k, base } = {} } = await $.state.get(PACE_K);
+  const moved = (a: number, b: number) => Math.abs(a - b) >= RESET_MOVED_MS;
+  if (!base || moved(reading.reset5h, base.reset5h) || moved(reading.reset7d, base.reset7d)) {
+    await $.state.set(PACE_K, { k, base: reading });
+    return;
+  }
+  const sample = (reading.p7 - base.p7) / (reading.p5 - base.p5);
+  if (reading.p5 - base.p5 >= K_MIN_RISE && sample > 0) await $.state.set(PACE_K, { k: sample, base });
 }
 
 // The token count the context runs to before auto-compaction, as Claude Code settles it: its auto-compaction threshold

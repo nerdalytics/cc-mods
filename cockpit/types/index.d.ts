@@ -56,6 +56,9 @@ declare module "claude-code" {
   interface PluginState {
     cockpit: {
       usage: StatusUsage;
+      // k, the 7d percent that 1% of the 5h costs, once measured, and the first reading of the current 5h window it is
+      // measured from: each reset time (ms) and each percent used.
+      paceK: { k?: number; base?: { reset5h: number; reset7d: number; p5: number; p7: number } };
       model: string;
       tokens: StatusTokens;
       git: StatusGit;
