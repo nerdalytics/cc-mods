@@ -65,13 +65,15 @@ const SEGMENTS = {
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
-// A limit tag's window, its reading and the seconds until it resets (none without a reset time), none until a reading
-// has it.
-function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number } | undefined {
+// A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
+// reading has it. The tag and its explanation both read the pace here, so they agree.
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number } } | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const found = limit && limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
-  return { limit, found, left: found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined };
+  const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
+  // The whole allowance is each window's target.
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, 100) };
 }
 
 // One limit's bar, none until a reading has it.
@@ -80,8 +82,7 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   if (!reading) return [];
   const { limit, found } = reading;
   if (limitStyle !== "gauge") return [limitParts(Box, Text, limit, found, reading.left)];
-  // The whole allowance is each window's target.
-  return [gaugeParts(Box, Text, limit, found, paceOf(limit, found, s.readAt, s.now * 1000, 100))];
+  return [gaugeParts(Box, Text, limit, found, reading.pace)];
 }
 
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
@@ -1216,8 +1217,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     const reading = limitOf(s, badge);
     if (!reading) continue;
     const { limit, found, left = 0 } = reading;
-    // The pace the gauge draws, so the words agree with it.
-    const pace = limitStyle === "classic" ? undefined : paceOf(limit, found, s.readAt, s.now * 1000, 100);
+    const pace = limitStyle === "classic" ? undefined : reading.pace;
     // Rounded as the gauge's badge and the run-out warning round it.
     out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.${pace ? ` ${paceWords(limit, pace.r)}` : ""}`;
   }

@@ -1085,16 +1085,20 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // 52% with half the 7d gone is r 1.04, within 0.05 of 1.
-  test("explains a limit within 0.05 of its pace as on pace", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
-    await startWithLimits($, on, [reading("seven_day", 52, 0.5)]);
-    const ui = await mountHint($);
-    const explanation = await explanationOf(ui, "limit_7d");
-    expect(explanation).toContain("on pace");
-    expect(explanation).not.toMatch(/runs out|unused/);
-    await ui.unmount();
-  });
+  // With half the 7d gone, 52% is r 1.04, within 0.05 of 1, and 53% is r 1.06, just past it.
+  for (const [title, used, shown, hidden] of [
+    ["explains a limit within 0.05 of its pace as on pace", 52, /on pace/, /runs out|unused/],
+    ["explains a limit just over 0.05 past its pace as running out, not on pace", 53, /runs out/, /on pace/],
+  ] as const)
+    test(title, { options: { limit_style: "gauge" } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [reading("seven_day", used, 0.5)]);
+      const ui = await mountHint($);
+      const explanation = await explanationOf(ui, "limit_7d");
+      expect(explanation).toMatch(shown);
+      expect(explanation).not.toMatch(hidden);
+      await ui.unmount();
+    });
 
   // 51% with a third of the 7d gone is over pace with a usable reading; each of these takes the pace away.
   for (const [title, limit, readAgoMs] of [
