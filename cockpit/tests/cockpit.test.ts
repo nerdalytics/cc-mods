@@ -134,9 +134,8 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
   return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
 }
 // A session started with these limits, its last response a second old, or `readAgoMs` old. By default the 5h is at 70%
-// with 2 hours to its reset, 3 hours into its 5: at that pace it runs out in 1h17m, 43m before it resets.
-async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[], readAgoMs = 1_000): Promise<void> {
-  const now = Date.now();
+// with 2 hours to its reset, 3 hours into its 5: at that pace it runs out in 1h17m, 42m before it resets.
+async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[], readAgoMs = 1_000, now = Date.now()): Promise<void> {
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: rateLimits ?? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
   on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -1666,9 +1665,9 @@ describe("cockpit", () => {
 
   // The run-out warning reads the limits as the tags do and speaks the explanation's sentence. The warning is what the
   // explanation line shows in its flow, after its sign.
-  const warnedOf = async ($: Engine, on: On, limits: SessionRateLimit[], readAgoMs = 1_000) => {
+  const warnedOf = async ($: Engine, on: On, limits: SessionRateLimit[], readAgoMs = 1_000, now = Date.now()) => {
     stubHint(on);
-    await startWithLimits($, on, limits, readAgoMs);
+    await startWithLimits($, on, limits, readAgoMs, now);
     const ui = await mountHint($);
     const warning = shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"));
     await ui.unmount();
@@ -1700,9 +1699,22 @@ describe("cockpit", () => {
   // warn, in a style that draws the pause and in classic, which does not.
   for (const style of ["classic", "gauge"])
     test(`does not warn of a 5h paused while the 7d is at 100%, at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
-      const fiveAt70 = { kind: "five_hour", percentUsed: 70, resetsAt: new Date(Date.now() + 2 * HOUR).toISOString() } satisfies SessionRateLimit;
-      expect(await warnedOf($, on, [SEVEN_USED_UP, fiveAt70])).toBe("");
+      const now = Date.now();
+      const fiveAt70 = { kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 2 * HOUR).toISOString() } satisfies SessionRateLimit;
+      expect(await warnedOf($, on, [SEVEN_USED_UP, fiveAt70], 1_000, now)).toBe("");
     });
+
+  // Half the 7d gone and 51.4% used is r 1.03: over pace, though the hover reads it as on pace, reaching its target as it
+  // resets. The warning still shows, with the sentence for a limit that runs out.
+  test("warns of a limit just over its pace with the sentence that says it runs out, where the hover says on pace", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [reading("seven_day", 51.4, 0.5)]);
+    const ui = await mountHint($);
+    const [warning, ...overlays] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
+    expect(flat(overlays.find((e) => scopeOf(e) === "explain-limit_7d"))).toMatch(/reaches its target as it resets/);
+    expect(flat(warning)).toMatch(/^\uf071 7d at 51%: at this pace it runs out in /);
+    await ui.unmount();
+  });
 
   // A session refused on the 7d until tomorrow counts as at 100%, though its last reading was 98% and over pace.
   test("does not warn of a 7d another session was refused on, whose last reading is over pace", async ($, on) => {

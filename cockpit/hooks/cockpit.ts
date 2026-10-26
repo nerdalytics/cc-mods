@@ -1280,7 +1280,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    out[tag] = limitWords(reading, s.readAt, s.now * 1000, limitStyle === "classic");
+    out[tag] = limitWords(reading, s.readAt, s.now * 1000, { classic: limitStyle === "classic" });
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
@@ -1312,7 +1312,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
 // The run-out warning asks for the over-pace sentence (`overPace`) on a limit just over its pace too, which a hover reads as on pace.
-function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, classic: boolean, overPace = false): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, { classic = false, overPace = false } = {}): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
@@ -1352,7 +1352,7 @@ function runOutWarning(ui: Ui, s: Snapshot | undefined) {
     return reading && hitIn !== undefined ? [{ reading, hitIn }] : [];
   }).sort((a, b) => a.hitIn - b.hitIn);
   if (!first) return undefined;
-  return notice(ui, WARN_MARK, color("notice"), [ui.Text({ dimColor: true, children: ` ${limitWords(first.reading, s.readAt, now, false, true)}` })]);
+  return notice(ui, WARN_MARK, color("notice"), [ui.Text({ dimColor: true, children: ` ${limitWords(first.reading, s.readAt, now, { overPace: true })}` })]);
 }
 
 // Whether the person dismissed this offer, and the dismissal still holds: for the rest of the session, or dismissFor ms.
