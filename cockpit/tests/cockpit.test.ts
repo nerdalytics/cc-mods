@@ -245,9 +245,9 @@ describe("cockpit", () => {
 
     // The model name is one Text per glyph, so only its first glyph is matchable here.
     expect(await ui.find({ type: "Text", text: "O" })).toBeDefined();
-    // Hovered, each limit's countdown to its reset.
-    expect(await explanationOf(ui, "limit_7d")).toMatch(/1d1h/);
-    expect(await explanationOf(ui, "limit_5h")).toMatch(/2h5[56]m/);
+    // Hovered, each limit's reset by its clock time.
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 20%: it resets at ${CLOCK}\\.$`));
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 40%: it resets at ${CLOCK}\\.$`));
     // A window the mod has no bar for shows as its name and percentage.
     expect(await ui.find({ type: "Text", text: "seven_day_fable 86%" })).toBeDefined();
     // The context bar against the 900,000-token compaction threshold: 797,100 used is 88%, so 1 of 10 cells of window
@@ -485,9 +485,9 @@ describe("cockpit", () => {
     // A dim half is #373a48: the glyph colour is the top half, the background the bottom.
     const cells = litCells(await ui.findAll({ type: "Text", text: "▀" }));
     expect(cells).toBe("BBUUU__BBTTT_____");
-    // Hovered, each limit's countdown to its reset.
-    expect(await explanationOf(ui, "limit_7d")).toContain("2d12h");
-    expect(await explanationOf(ui, "limit_5h")).toContain("2h4");
+    // Hovered, each limit's reset by its clock time.
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 15%: it resets at ${CLOCK}\\.$`));
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 72%: it resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
@@ -514,6 +514,17 @@ describe("cockpit", () => {
     const windowMs = kind === "seven_day" ? 604_800_000 : 18_000_000;
     return { kind, percentUsed, resetsAt: new Date(Date.now() + (1 - passed) * windowMs).toISOString() };
   };
+  // A reset built from local parts, as the person's clock reads it: `days` from today at hour:minute:second. The mod reads
+  // the clock itself, so a test chooses the reset from today's date and not from a pinned `now`.
+  const localAt = (days: number, hour: number, minute = 0, second = 0): Date => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate() + days, hour, minute, second);
+  };
+  const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  // Any reset clock, for a reset a test cannot pin to the minute: `3 PM`, `Thu 3:30 PM`, `next Thu 9 AM`.
+  const CLOCK = "(?:(?:next )?(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) )?(?:1[0-2]|[1-9])(?::[0-5]\\d)? [AP]M";
+  // A 7d reading at `percentUsed` that resets at `resetsAt`.
+  const sevenResettingAt = (percentUsed: number, resetsAt: Date): SessionRateLimit => ({ kind: "seven_day", percentUsed, resetsAt: resetsAt.toISOString() });
   // A limit tag as drawn: its badge's text, its bar glyph by glyph (on a gauge █ a full cell, ▐ or ▌ the half on the
   // pipe's side, a space an empty cell, │ the pipe), and each glyph's colour and background.
   const limitTagOf = async (ui: { find: Mounted["find"] }, key: string) => {
@@ -1161,12 +1172,16 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  // The 5h at 70% resets in 2 hours (1h59m once a second passes), the 7d at 20% in 1d1h.
-  for (const [style, said] of [["classic", ""], ["gauge", " on the gauge too"]] as const)
-    test(`explains each limit tag with its badge, its percent used and the time until it resets${said}`, { options: { limit_style: style } }, async ($, on) => {
+  // The 5h at 70% resets in 2 hours, the 7d at 20% in 1d1h. Classic says the reset alone; the gauge's 5h is over pace, 1h17m
+  // from running out, and its 7d under it with ~76% unused.
+  for (const [style, said, five, seven] of [
+    ["classic", "", `it resets at ${CLOCK}`, `it resets at ${CLOCK}`],
+    ["gauge", " on the gauge too", `at this pace it runs out in 1h1[67]m, 4[234]m before it resets at ${CLOCK}`, `at this pace it resets at ${CLOCK} with ~7[67]% unused`],
+  ] as const)
+    test(`explains each limit tag with its badge, its percent used and its reset by the clock${said}`, { options: { limit_style: style } }, async ($, on) => {
       const ui = await explained($, on);
-      expect(await explanationOf(ui, "limit_5h")).toMatch(/5h.* 70%.* (1h59m|2h0m)/);
-      expect(await explanationOf(ui, "limit_7d")).toMatch(/7d.* 20%.* 1d1h/);
+      expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 70%: ${five}\\.$`));
+      expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 20%: ${seven}\\.$`));
       await ui.unmount();
     });
 
@@ -1178,13 +1193,119 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // 51% with a third of the 7d gone is r 1.53: it runs out with 1 - 1/1.53 of the window, 2d10h, still to go, and it
-  // resets in two thirds of it, 4d16h, less the seconds the test takes.
-  test("explains an over-pace limit with how long before its reset it runs out", { options: { limit_style: "gauge" } }, async ($, on) => {
+  // 89% of the 7d, its reset 3 days out at 3 PM local: 63 to 87 hours away, so over half the window has passed and 89% is
+  // over pace. How long it runs out in, and how long before the reset, depend on the time of day, so the sentence's shape is
+  // pinned and not its numbers.
+  test("explains an over-pace limit with how long from now it runs out and how long before its reset that is", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
-    await startWithLimits($, on, [reading("seven_day", 51, 1 / 3)]);
+    const resetsAt = localAt(3, 15);
+    await startWithLimits($, on, [sevenResettingAt(89, resetsAt)]);
     const ui = await mountHint($);
-    expect(await explanationOf(ui, "limit_7d")).toMatch(/7d.* 51%.* 4d1[56]h.*runs out 2d10h before it resets/);
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 89%: at this pace it runs out in \\d+h\\d+m, \\d+d\\d+h before it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM\\.$`));
+    await ui.unmount();
+  });
+
+  // A reset 3 days out at 3 PM local, on the 7d: 48% to 63% of its window has passed. Under pace at 10%, over it at 100%.
+  const SEVEN_DAYS = 604_800_000;
+  const explainedAt = async ($: Engine, on: On, limit: SessionRateLimit, readAgoMs = 1_000) => {
+    stubHint(on);
+    await startWithLimits($, on, [limit], readAgoMs);
+    const ui = await mountHint($);
+    const text = await explanationOf(ui, "limit_7d");
+    await ui.unmount();
+    return text;
+  };
+
+  test("explains an under-pace limit with the share of its target unused when it resets at the clock", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(3, 15);
+    expect(await explainedAt($, on, sevenResettingAt(10, resetsAt))).toMatch(new RegExp(`^7d at 10%: at this pace it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM with ~(7[89]|8\\d)% unused\\.$`));
+  });
+
+  // A third of the window passed, its reset 5 days out at 3 PM local: used set to the share passed, so r is within 0.05 of 1.
+  test("explains a limit on pace as reaching its target as it resets at the clock", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(5, 15);
+    const share = 1 - (resetsAt.getTime() - Date.now()) / SEVEN_DAYS;
+    const used = Math.round(share * 100);
+    expect(await explainedAt($, on, sevenResettingAt(used, resetsAt))).toBe(`7d at ${used}%: at this pace it reaches its target as it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
+  });
+
+  // Over pace with its run-out already due: at 100% a reading is out of the run-out warning's reach, and one at 99.99%
+  // read 9 minutes ago ran out under a minute after it.
+  for (const [title, used, readAgoMs] of [
+    ["a reading at 100%", 100, 1_000],
+    ["a reading at 99.99% that ran out under a minute after it, read 9 minutes ago", 99.99, 9 * 60_000],
+  ] as const)
+    test(`explains ${title} as running out any moment, the time to its reset before it`, { options: { limit_style: "gauge" } }, async ($, on) => {
+      const resetsAt = localAt(3, 15);
+      expect(await explainedAt($, on, sevenResettingAt(used, resetsAt), readAgoMs)).toMatch(new RegExp(`^7d at 100%: at this pace it runs out any moment, \\d+d\\d+h before it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM\\.$`));
+    });
+
+  // Each gives the 7d no pace: a reading 11 minutes old, and one with under a tenth of its window passed, its reset 7 days
+  // out and a few hours, so the share is 0 or less.
+  test("explains a stale reading with its reset by the clock and no pace", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(3, 15);
+    expect(await explainedAt($, on, sevenResettingAt(30, resetsAt), 11 * 60_000)).toBe(`7d at 30%: it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
+  });
+
+  test("explains a reading too early in its window with its reset by the clock and no pace", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(7, 15);
+    expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at next ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
+  });
+
+  test("explains a classic reading with its reset by the clock whatever its pace", { options: { limit_style: "classic" } }, async ($, on) => {
+    const resetsAt = localAt(3, 15);
+    expect(await explainedAt($, on, sevenResettingAt(89, resetsAt))).toBe(`7d at 89%: it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
+  });
+
+  test("explains a reading without a reset time with its percent used alone", { options: { limit_style: "gauge" } }, async ($, on) => {
+    expect(await explainedAt($, on, { kind: "seven_day", percentUsed: 30 })).toBe("7d at 30%.");
+  });
+
+  test("explains a reading whose reset has already passed as one without a reset time", { options: { limit_style: "gauge" } }, async ($, on) => {
+    expect(await explainedAt($, on, sevenResettingAt(30, new Date(Date.now() - 3_600_000)))).toBe("7d at 30%.");
+  });
+
+  // The reset clock, on a limit with no pace so that only the clock varies. A reset later today is chosen from the hour
+  // now: the next full hour, or past midnight in the last hour of the day, which names tomorrow.
+  const HOURS = ["12 AM", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM", "7 AM", "8 AM", "9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM", "6 PM", "7 PM", "8 PM", "9 PM", "10 PM", "11 PM"];
+  const nextHour = new Date().getHours() + 1;
+  const later: [Date, string] = nextHour < 24 ? [localAt(0, nextHour), HOURS[nextHour] ?? ""] : [localAt(1, 0), `${WEEKDAYS[localAt(1, 0).getDay()]} 12 AM`];
+  const midnight = localAt(3, 0);
+  for (const [title, resetsAt, clock] of [
+    ["later today as the clock alone", ...later],
+    ["on another day with its weekday", localAt(2, 15), `${WEEKDAYS[localAt(2, 15).getDay()]} 3 PM`],
+    ["off the hour with its minutes", localAt(2, 15, 30), `${WEEKDAYS[localAt(2, 15).getDay()]} 3:30 PM`],
+    ["at noon as 12 PM", localAt(2, 12), `${WEEKDAYS[localAt(2, 12).getDay()]} 12 PM`],
+    ["at midnight as 12 AM", midnight, `${WEEKDAYS[midnight.getDay()]} 12 AM`],
+    ["at 14:59:59 rounded up to 3 PM", localAt(2, 14, 59, 59), `${WEEKDAYS[localAt(2, 15).getDay()]} 3 PM`],
+    ["at 23:59:40 rounded to the next day's 12 AM", localAt(2, 23, 59, 40), `${WEEKDAYS[localAt(3, 0).getDay()]} 12 AM`],
+    ["on today's weekday a week out with next", localAt(7, 9), `next ${WEEKDAYS[localAt(7, 9).getDay()]} 9 AM`],
+  ] as const)
+    test(`names a reset ${title}`, { options: { limit_style: "classic" } }, async ($, on) => {
+      expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at ${clock}.`);
+    });
+
+  test("names a reset at 23:59:40 today as the next day's 12 AM, not today's", { options: { limit_style: "classic" } }, async ($, on) => {
+    const tomorrow = localAt(1, 0);
+    expect(await explainedAt($, on, sevenResettingAt(30, localAt(0, 23, 59, 40)))).toBe(`7d at 30%: it resets at ${WEEKDAYS[tomorrow.getDay()]} 12 AM.`);
+  });
+
+  // The 7d at 100% pauses the 5h: its sentence names the 7d's reset, or none when the 7d has no reset time.
+  const FIVE_AT_40: SessionRateLimit = { kind: "five_hour", percentUsed: 40, resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString() };
+  test("explains the 5h paused until the 7d resets at its clock time", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const resetsAt = localAt(2, 15);
+    await startWithLimits($, on, [sevenResettingAt(100, resetsAt), FIVE_AT_40]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it is paused until the 7d resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
+    await ui.unmount();
+  });
+
+  test("explains the 5h paused without a clock when the 7d has no reset time", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }, FIVE_AT_40]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe("5h at 40%: it is paused until the 7d resets.");
     await ui.unmount();
   });
 
@@ -1199,7 +1320,7 @@ describe("cockpit", () => {
 
   // With half the 7d gone, 52% is r 1.04, within 0.05 of 1, and 53% is r 1.06, just past it.
   for (const [title, used, shown, hidden] of [
-    ["explains a limit within 0.05 of its pace as on pace", 52, /on pace/, /runs out|unused/],
+    ["explains a limit within 0.05 of its pace as reaching its target as it resets", 52, /reaches its target as it resets/, /runs out|unused/],
     ["explains a limit just over 0.05 past its pace as running out, not on pace", 53, /runs out/, /on pace/],
   ] as const)
     test(title, { options: { limit_style: "gauge" } }, async ($, on) => {
@@ -1221,14 +1342,14 @@ describe("cockpit", () => {
       stubHint(on);
       await startWithLimits($, on, [limit], readAgoMs);
       const ui = await mountHint($);
-      expect(await explanationOf(ui, "limit_7d")).toMatch(/^7d limit: 51% used, resets in \S+\.$/);
+      expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 51%: it resets at ${CLOCK}\\.$`));
       await ui.unmount();
     });
 
   // Over pace with a usable reading: classic draws no pace, so its words say none; lanes is a pace style and says it.
   for (const [style, shown] of [
-    ["classic", /^7d limit: 51% used, resets in \S+\.$/],
-    ["lanes", /runs out 2d10h before it resets/],
+    ["classic", new RegExp(`^7d at 51%: it resets at ${CLOCK}\\.$`)],
+    ["lanes", new RegExp(`^7d at 51%: at this pace it runs out in \\d+d\\d+h, 2d10h before it resets at ${CLOCK}\\.$`)],
   ] as const)
     test(`explains an over-pace limit ${style === "classic" ? "with no pace words" : "with its pace"} at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
       stubHint(on);
@@ -1310,7 +1431,7 @@ describe("cockpit", () => {
       [25, 2 * HOUR, 92, DAYS_3 + 59_000],
     ]);
     const ui = await mountHint($);
-    expect(await explanationOf(ui, "limit_5h")).toContain("runs out 48m before it resets");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/runs out in \d+h\d+m, 4[78]m before it resets/);
     await ui.unmount();
   });
 
@@ -1414,7 +1535,7 @@ describe("cockpit", () => {
   });
 
   // While the 7d is used up the 5h cannot be spent. 10% of the 5h with 60% of its window gone would fill 8 halves left of
-  // the pipe; paused it draws as a gauge without a pace. The 7d resets in 52.5 hours, 2d4h as the countdown rounds down.
+  // the pipe; paused it draws as a gauge without a pace. The 7d resets in 52.5 hours.
   const SEVEN_USED_UP = { kind: "seven_day", percentUsed: 100, resetsAt: new Date(Date.now() + 52.5 * HOUR).toISOString() } satisfies SessionRateLimit;
   test("draws the 5h gauge paused, empty with its pipe dim, while the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
@@ -1424,12 +1545,12 @@ describe("cockpit", () => {
     expect(gauge.badge).toBe(" 5h 10% ");
     expect(gauge.bar).toBe("     │     ");
     expect(gauge.colors).toEqual([...Array(5).fill(GREY), DIM, ...Array(5).fill(GREY)]);
-    expect(await explanationOf(ui, "limit_5h")).toMatch(/^5h limit: 10% used, resets in \S+\. It is paused until the 7d resets in 2d4h\.$/);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
   // With k measured and the 7d at 100%, the 5h's target is its own percent used: at 0% its pace would be 0 / 0. Paused,
-  // it draws none, so no NaN reaches the gauge or the words. The 7d resets in 3 days, 2d23h once a second passes.
+  // it draws none, so no NaN reaches the gauge or the words. The 7d resets in 3 days.
   test("draws the 5h at 0% paused with no NaN once k is measured and the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
     await fedReadings($, on, [...K_HALF, [0, 2 * HOUR, 100, DAYS_3]]);
@@ -1439,7 +1560,7 @@ describe("cockpit", () => {
     expect(gauge.colors).toEqual([...Array(5).fill(GREY), DIM, ...Array(5).fill(GREY)]);
     const explanation = await explanationOf(ui, "limit_5h");
     expect(explanation).not.toContain("NaN");
-    expect(explanation).toMatch(/^5h limit: 0% used, resets in \S+\. It is paused until the 7d resets in (3d0h|2d23h)\.$/);
+    expect(explanation).toMatch(new RegExp(`^5h at 0%: it is paused until the 7d resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
@@ -1462,7 +1583,7 @@ describe("cockpit", () => {
     await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.55)]);
     const ui = await mountHint($);
     expect(litCells(elements(must(await ui.find({ type: "Box", key: "five_hour" }), "the 5h tag").children).slice(1))).toBe("BBBBUUUUU_");
-    expect(await explanationOf(ui, "limit_5h")).toMatch(/^5h limit: 10% used, resets in \S+\.$/);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
@@ -1484,7 +1605,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     for (let i = 0; i < 50 && (await limitTagOf(ui, "five_hour")).bar !== "     │     "; i++) await settle();
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
-    expect(await explanationOf(ui, "limit_5h")).toMatch(/It is paused until the 7d resets in 2d4h\.$/);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 

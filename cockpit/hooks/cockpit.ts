@@ -67,20 +67,30 @@ const SEGMENTS = {
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
+// What limitOf finds for one limit tag. `resetsAtMs` is the reset its words name: its own, or the 7d's while it is paused.
+type LimitReading = {
+  limit: (typeof LIMITS)[number];
+  found: StatusLimit;
+  left?: number;
+  pace?: { r: number; share: number; par: number; target: number };
+  paused?: number;
+  resetsAtMs?: number;
+};
+
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
 // reading has it. Every pace style's tag and the explanation read the pace here, the gauge and the words its r against
 // the target, lanes and notch its par, so they agree. While the 7d is used up, a refusal still in force included, the 5h
 // cannot be spent: it is paused, with no pace, and `paused` holds the seconds until the 7d resets (0 without a reset time).
-function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): { limit: (typeof LIMITS)[number]; found: StatusLimit; left?: number; pace?: { r: number; share: number; par: number }; paused?: number } | undefined {
+function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitReading | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
   const found = limit && limits.find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
   const seven = limits.find((r) => r.kind === "seven_day");
-  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: seven.resetsAt ? Math.floor(Date.parse(seven.resetsAt) / 1000) - s.now : 0 };
+  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: seven.resetsAt ? Math.floor(Date.parse(seven.resetsAt) / 1000) - s.now : 0, resetsAtMs: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined };
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target) };
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs: found.resetsAt ? Date.parse(found.resetsAt) : undefined };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -1225,12 +1235,12 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
 // allowance, what the target would have used by now; at a target of 100% it is the share passed. Both windows begin at
 // their reset time minus their length, the share counting nights and idle hours alike. None on the run-out warning's
 // terms: no reset time, a stale reading, or too early in the window.
-function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number } | undefined {
+function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number; target: number } | undefined {
   if (!found.resetsAt || now - readAt > FORECAST_FRESH_MS) return undefined;
   const share = 1 - (Date.parse(found.resetsAt) - readAt) / 1000 / limit.seconds;
   if (!(share >= FORECAST_FROM)) return undefined;
   // target / 100 first: at 100 that is exactly 1, so the par is exactly the share and the lanes and notch draw as before.
-  return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
+  return { r: found.percentUsed / (share * target), share, par: share * (target / 100), target };
 }
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
@@ -1259,11 +1269,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    const { limit, found, left = 0, paused } = reading;
-    const pace = limitStyle === "classic" ? undefined : reading.pace;
-    const pause = limitStyle === "classic" || paused === undefined ? "" : ` It is paused until the 7d resets${paused > 0 ? ` in ${countdown(paused)}` : ""}.`;
-    // Rounded as the gauge's badge and the run-out warning round it.
-    out[tag] = `${badge} limit: ${Math.round(found.percentUsed)}% used${left > 0 ? `, resets in ${countdown(left)}` : ""}.${pace ? ` ${paceWords(limit, pace.r)}` : ""}${pause}`;
+    out[tag] = limitWords(limitStyle === "classic" ? { ...reading, pace: undefined, paused: undefined } : reading, s.readAt, s.now * 1000);
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
@@ -1289,12 +1295,22 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   return out;
 }
 
-// What a limit's pace r means: within 0.05 of 1 on pace; under it 1 - r of the target goes unused; over it the limit
-// runs out with 1 - 1/r of the window to go, the run-out warning's time before the reset.
-function paceWords(limit: (typeof LIMITS)[number], r: number): string {
-  if (Math.abs(r - 1) <= 0.05) return "It is on pace to reach its target as it resets.";
-  if (r < 1) return `At this pace it resets with ~${Math.round((1 - r) * 100)}% unused.`;
-  return `At this pace it runs out ${countdown((1 - 1 / r) * limit.seconds)} before it resets.`;
+// A limit tag's explanation: its badge and percent used, rounded as the gauge's badge and the run-out warning round it,
+// then one sentence that names the reset by its clock time. Only a run-out is counted as a time from now: it is the target
+// less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
+// due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
+function limitWords({ limit, found, pace, paused, resetsAtMs }: LimitReading, readAt: number, now: number): string {
+  const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
+  const reset = resetsAtMs !== undefined && resetsAtMs > now ? resetClock(resetsAtMs, now) : undefined;
+  if (paused !== undefined) return `${head}: it is paused until the 7d resets${reset ? ` at ${reset}` : ""}.`;
+  if (!reset || resetsAtMs === undefined) return `${head}.`;
+  if (!pace) return `${head}: it resets at ${reset}.`;
+  if (Math.abs(pace.r - 1) <= 0.05) return `${head}: at this pace it reaches its target as it resets at ${reset}.`;
+  if (pace.r < 1) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - pace.r) * 100)}% unused.`;
+  const left = (resetsAtMs - now) / 1000;
+  const hitIn = (pace.share * limit.seconds * (pace.target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
+  const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
+  return `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
 }
 
 // The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,
@@ -2228,6 +2244,20 @@ function countdown(left: number): string {
   if (days > 0) return `${days}d${hrs}h`;
   if (hrs > 0) return `${hrs}h${mins}m`;
   return `${mins}m`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// A reset by its local clock time, rounded to the nearest minute first so 14:59:59 reads 3 PM and 23:59:40 the next
+// day's 12 AM: `3 PM` on today's date, else the weekday before it, and `next` before today's own weekday, which then
+// is a week out. Local Date methods, not Intl, which the hooks' host may lack.
+function resetClock(resetMs: number, nowMs: number): string {
+  const at = new Date(Math.round(resetMs / 60_000) * 60_000);
+  const today = new Date(nowMs);
+  const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate();
+  const day = sameDay ? "" : `${at.getDay() === today.getDay() ? "next " : ""}${WEEKDAYS[at.getDay()]} `;
+  const mins = at.getMinutes();
+  return `${day}${at.getHours() % 12 || 12}${mins > 0 ? `:${String(mins).padStart(2, "0")}` : ""} ${at.getHours() < 12 ? "AM" : "PM"}`;
 }
 
 function formatTokens(n: number): string {
