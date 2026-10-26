@@ -996,7 +996,7 @@ describe("cockpit", () => {
     await below.unmount();
   });
 
-  // The 5h window is 300 minutes long. 70% used with 2h left is 3h in: at that pace 100% comes 1h17m from now, 43m before the reset.
+  // The 5h window is 300 minutes long. 70% used with 2h left is 3h in: at that pace 100% comes 1h17m from now, 42m before the reset.
   // The reading's time is the last response of this session, which the test stands in for with its age in minutes.
   for (const [title, used, resetsInMin, readAgoMin, options, shown] of [
     ["warns when a limit runs out before it resets at the pace so far", 70, 120, 0, {}, true],
@@ -1026,7 +1026,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
     // The warning sign, then the sentence; blank when the warning does not apply.
-    expect(shownIn(explain)).toMatch(shown ? /^\uf071 5h at 70%: at this pace it runs out in 1h17m, 4[23]m before it resets\.$/ : /^$/);
+    expect(shownIn(explain)).toMatch(shown ? new RegExp(`^\\uf071 5h at 70%: at this pace it runs out in 1h17m, 42m before it resets at ${CLOCK}\\.$`) : /^$/);
     await ui.unmount();
   });
 
@@ -1551,6 +1551,16 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The same reading warns: the bounded 5h reaches its 40% target in 1 hour, 3 before it resets, and the warning names the 7d.
+  test("warns of a bounded 5h that reaches its target before it resets with the sentence that names the 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [20, 4 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
+    expect(shownIn(explain)).toMatch(new RegExp(`^\\uf071 5h at 20%: at this 5h pace the 7d runs out in (?:1h0m|59m), (?:3h0m|2h59m) before the 5h resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
   // 10% with half the window gone is 20% at the reset, 10 points of 5h that cost the 7d 5: 5% of it is left.
   test("explains the bounded 5h under its target with the share of the 7d left when it resets", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
@@ -1651,6 +1661,68 @@ describe("cockpit", () => {
     for (let i = 0; i < 50 && (await limitTagOf(ui, "five_hour")).bar !== "     │     "; i++) await settle();
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // The run-out warning reads the limits as the tags do and speaks the explanation's sentence. The warning is what the
+  // explanation line shows in its flow, after its sign.
+  const warnedOf = async ($: Engine, on: On, limits: SessionRateLimit[], readAgoMs = 1_000) => {
+    stubHint(on);
+    await startWithLimits($, on, limits, readAgoMs);
+    const ui = await mountHint($);
+    const warning = shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"));
+    await ui.unmount();
+    return warning;
+  };
+
+  // The 7d at 89% with its reset 3 days out at 3 PM local is over pace by more than 0.05 whatever the time of day, so the
+  // warning shows for it, and the hover on the 7d tag reveals what it says. Both are read from one drawing of the line.
+  for (const style of ["gauge", "lanes", "notch"])
+    test(`says in the warning what the hovered 7d explanation says, at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
+      stubHint(on);
+      await startWithLimits($, on, [sevenResettingAt(89, localAt(3, 15))]);
+      const ui = await mountHint($);
+      const [warning, ...overlays] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
+      const hovered = flat(overlays.find((e) => scopeOf(e) === "explain-limit_7d"));
+      expect(flat(warning)).toBe(`\uf071 ${hovered}`);
+      expect(hovered).toMatch(/^7d at 89%: at this pace it runs out in /);
+      await ui.unmount();
+    });
+
+  // The 7d at 99.99% read 9 minutes ago, about 105 hours of its window passed: it ran out under a minute after the
+  // reading, so the run-out time has passed.
+  test("warns of a limit whose run-out time has passed as running out any moment", async ($, on) => {
+    const resetsAt = localAt(3, 15);
+    expect(await warnedOf($, on, [sevenResettingAt(99.99, resetsAt)], 9 * 60_000)).toMatch(new RegExp(`^\\uf071 7d at 100%: at this pace it runs out any moment, \\d+d\\d+h before it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM\\.$`));
+  });
+
+  // The 7d at 100% pauses the 5h, which is at 70% with 2 hours to its reset, over pace and freshly read: it does not
+  // warn, in a style that draws the pause and in classic, which does not.
+  for (const style of ["classic", "gauge"])
+    test(`does not warn of a 5h paused while the 7d is at 100%, at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
+      const fiveAt70 = { kind: "five_hour", percentUsed: 70, resetsAt: new Date(Date.now() + 2 * HOUR).toISOString() } satisfies SessionRateLimit;
+      expect(await warnedOf($, on, [SEVEN_USED_UP, fiveAt70])).toBe("");
+    });
+
+  // A session refused on the 7d until tomorrow counts as at 100%, though its last reading was 98% and over pace.
+  test("does not warn of a 7d another session was refused on, whose last reading is over pace", async ($, on) => {
+    stubHint(on);
+    const refusal = JSON.stringify({
+      type: "assistant",
+      error: "rate_limit",
+      apiError: "usage_limit_reached",
+      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((Date.now() + 24 * HOUR) / 1000) },
+    });
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("process.run", (_$, e) => ({
+      value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false },
+    }));
+    await startWithLimits($, on, [sevenResettingAt(98, localAt(3, 15))]);
+    const ui = await mountHint($);
+    // Until the refusal is read the 98% warns, so wait for it: the 7d's explanation then reads it at 100%.
+    for (let i = 0; i < 50 && !(await explanationOf(ui, "limit_7d")).startsWith("7d at 100%"); i++) await settle();
+    expect(await explanationOf(ui, "limit_7d")).toMatch(/^7d at 100%/);
+    expect(shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"))).toBe("");
     await ui.unmount();
   });
 

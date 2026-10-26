@@ -126,7 +126,7 @@
     "limit_forecast": {
       "type": "boolean",
       "title": "Cockpit: Warn when a limit will run out before its reset",
-      "description": "The run-out warning in the explanation line, explain in the layout: shown when, at the pace this window has run at so far, the 7d or 5h limit reaches 100% before it resets. Off, the explanation line shows no warning. It needs a response of this session from the last 10 minutes, since a session hears the account's figure only in its own responses. true (default) / false",
+      "description": "The run-out warning in the explanation line, explain in the layout: shown when, at the pace this window has run at so far, the 7d or 5h limit reaches its target before it resets. A limit your account refused and a 5h paused while the 7d is used up do not warn. Off, the explanation line shows no warning. It needs a response of this session from the last 10 minutes, since a session hears the account's figure only in its own responses. true (default) / false",
       "default": true
     },
     "explain_row": {

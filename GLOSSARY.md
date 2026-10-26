@@ -65,5 +65,5 @@ The sentence a tag reveals in the explanation line while it is hovered.
 _Avoid_: hover value, tooltip
 
 **Run-out warning**:
-The text in the explanation line saying a limit reaches 100 % before its reset at the pace so far.
+The text in the explanation line saying a limit reaches its target before its reset at the pace so far, in the words its explanation uses. A refused limit and a paused 5h do not get one.
 _Avoid_: forecast

@@ -1224,16 +1224,18 @@ async function compactLine($: EngineInterface, ui: Ui) {
   ]);
 }
 
-// At the pace the window has run at since it began, as of the response that reported it: seconds from now until it
-// reaches 100%, and until it resets. Nothing while it is on track, out already, early in its window, or its reading old.
-function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number): { hitIn: number; left: number } | undefined {
-  if (!found.resetsAt || found.percentUsed <= 0 || found.percentUsed >= 100) return undefined;
-  const pace = paceOf(limit, found, readAt, now, 100);
-  if (!pace) return undefined;
-  const elapsed = pace.share * limit.seconds;
-  const hitIn = (elapsed * (100 - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
-  const left = (Date.parse(found.resetsAt) - now) / 1000;
-  return hitIn > 0 && hitIn < left ? { hitIn, left } : undefined;
+// Seconds from now until a limit at `used` percent reaches `target`, at the rate its window has run at since it began
+// (`share` of it passed as of `readAt`); less the time since that reading. Zero or less is already due.
+function hitInOf(limit: (typeof LIMITS)[number], used: number, share: number, target: number, readAt: number, now: number): number {
+  return (share * limit.seconds * (target - used)) / used - (now - readAt) / 1000;
+}
+
+// Seconds from now until a limit reaches its target, when that comes before it resets, even if it is already due: the
+// run-out warning's condition. Nothing for a limit without a pace, without a reset still to come, or at 0% or 100%.
+function forecastOf({ limit, found, pace, resetsAtMs, target }: LimitReading, readAt: number, now: number): number | undefined {
+  if (!pace || resetsAtMs === undefined || resetsAtMs <= now || found.percentUsed <= 0 || found.percentUsed >= 100) return undefined;
+  const hitIn = hitInOf(limit, found.percentUsed, pace.share, target, readAt, now);
+  return hitIn < (resetsAtMs - now) / 1000 ? hitIn : undefined;
 }
 
 // A limit's pace as of the response that reported it: r is the percent used over the share of the window passed times
@@ -1253,8 +1255,11 @@ function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: numb
 // that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it. Over it, hidden
 // until its tag's hover scope is hovered, each shown tag's explanation.
 async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
-  const shown = (await runOutWarning($, ui)) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
-  const s = await snapshotOf($, ordering);
+  // One live reading for the warning and the explanations, so they agree to the second; the order pane's samples reach
+  // the explanations only.
+  const live = await snapshotOf($, false);
+  const s = live && ordering ? withSamples(live) : live;
+  const shown = runOutWarning(ui, live) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
   const texts = s ? explanations(s) : {};
   // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it: at
   // least as tall as the line, so every row of a wrapped warning, while a longer explanation runs on over what lies below.
@@ -1306,7 +1311,8 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
-function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, classic: boolean): string {
+// The run-out warning asks for the over-pace sentence (`overPace`) on a limit just over its pace too, which a hover reads as on pace.
+function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, classic: boolean, overPace = false): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
@@ -1321,35 +1327,32 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: L
   if (!shownPace) return `${head}: it resets at ${reset}.`;
   // A bounded 5h names the 7d, which its target is the 7d's worth of: at the 5h's pace the 7d runs out when the 5h reaches
   // its target, and what the 5h would still use by the reset costs the 7d k per point.
-  if (Math.abs(shownPace.r - 1) <= 0.05) return bound ? `${head}: at this 5h pace the 7d runs out as the 5h resets at ${reset}.` : `${head}: at this pace it reaches its target as it resets at ${reset}.`;
+  if (!overPace && Math.abs(shownPace.r - 1) <= 0.05) return bound ? `${head}: at this 5h pace the 7d runs out as the 5h resets at ${reset}.` : `${head}: at this pace it reaches its target as it resets at ${reset}.`;
   if (shownPace.r < 1) {
     if (!bound) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - shownPace.r) * 100)}% unused.`;
     const sevenLeft = 100 - bound.sevenUsed - bound.k * (found.percentUsed / shownPace.share - found.percentUsed);
     return `${head}: at this 5h pace the 7d still has ~${Math.round(sevenLeft)}% left when the 5h resets at ${reset}.`;
   }
   const left = (until - now) / 1000;
-  const hitIn = (shownPace.share * limit.seconds * (target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
+  const hitIn = hitInOf(limit, found.percentUsed, shownPace.share, target, readAt, now);
   const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
   return bound ? `${head}: at this 5h pace the 7d ${runsOut} before the 5h resets at ${reset}.` : `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
 }
 
-// The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,
-// idle nights included, so it is the one to plan by, not a burst's. Shown only while the session's reading is fresh.
-async function runOutWarning($: EngineInterface, ui: Ui) {
-  if (!limitForecast) return undefined;
-  const { value: usage } = await $.state.get(USAGE);
-  const { value: readAt = 0 } = await $.state.get(READ);
-  const now = Date.now();
-  const [first] = LIMITS.flatMap((limit) => {
-    const found = usage?.rateLimits.find((r) => r.kind === limit.kind);
-    const hit = found ? forecastOf(limit, found, readAt, now) : undefined;
-    return found && hit ? [{ limit, found, hit }] : [];
-  }).sort((a, b) => a.hit.hitIn - b.hit.hitIn);
+// The run-out warning, for the limit that reaches its target soonest before it resets: the pace is the whole window's so
+// far, idle nights included, so it is the one to plan by, not a burst's. Shown only while the session's reading is fresh.
+// It reads each limit as its tag does, so a refused limit, at 100%, and a paused 5h, with no pace, never warn, and says
+// what the limit's explanation says.
+function runOutWarning(ui: Ui, s: Snapshot | undefined) {
+  if (!limitForecast || !s) return undefined;
+  const now = s.now * 1000;
+  const [first] = LIMITS.flatMap(({ badge }) => {
+    const reading = limitOf(s, badge);
+    const hitIn = reading && forecastOf(reading, s.readAt, now);
+    return reading && hitIn !== undefined ? [{ reading, hitIn }] : [];
+  }).sort((a, b) => a.hitIn - b.hitIn);
   if (!first) return undefined;
-  const { limit, found, hit } = first;
-  return notice(ui, WARN_MARK, color("notice"), [
-    ui.Text({ dimColor: true, children: ` ${limit.badge} at ${Math.round(found.percentUsed)}%: at this pace it runs out in ${countdown(hit.hitIn)}, ${countdown(hit.left - hit.hitIn)} before it resets.` }),
-  ]);
+  return notice(ui, WARN_MARK, color("notice"), [ui.Text({ dimColor: true, children: ` ${limitWords(first.reading, s.readAt, now, false, true)}` })]);
 }
 
 // Whether the person dismissed this offer, and the dismissal still holds: for the rest of the session, or dismissFor ms.
