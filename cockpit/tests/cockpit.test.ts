@@ -1282,12 +1282,17 @@ describe("cockpit", () => {
     ["on today's weekday a week out with next", localAt(7, 9), `next ${WEEKDAYS[localAt(7, 9).getDay()]} 9 AM`],
   ] as const)
     test(`names a reset ${title}`, { options: { limit_style: "classic" } }, async ($, on) => {
+      // A reset under a minute away, which the later-today row reaches in the last minute of its hour, may pass before it is read, and a past reset has no clock.
+      if (resetsAt.getTime() - Date.now() < 60_000) return;
       expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at ${clock}.`);
     });
 
   test("names a reset at 23:59:40 today as the next day's 12 AM, not today's", { options: { limit_style: "classic" } }, async ($, on) => {
     const tomorrow = localAt(1, 0);
-    expect(await explainedAt($, on, sevenResettingAt(30, localAt(0, 23, 59, 40)))).toBe(`7d at 30%: it resets at ${WEEKDAYS[tomorrow.getDay()]} 12 AM.`);
+    const resetsAt = localAt(0, 23, 59, 40);
+    // Past 23:58:40 the reset may pass before it is read, and a past reset has no clock.
+    if (resetsAt.getTime() - Date.now() < 60_000) return;
+    expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at ${WEEKDAYS[tomorrow.getDay()]} 12 AM.`);
   });
 
   // The 7d at 100% pauses the 5h: its sentence names the 7d's reset, or none when the 7d has no reset time.

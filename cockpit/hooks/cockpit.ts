@@ -1301,13 +1301,14 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
 function limitWords({ limit, found, pace, paused, resetsAtMs }: LimitReading, readAt: number, now: number): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
-  const reset = resetsAtMs !== undefined && resetsAtMs > now ? resetClock(resetsAtMs, now) : undefined;
-  if (paused !== undefined) return `${head}: it is paused until the 7d resets${reset ? ` at ${reset}` : ""}.`;
-  if (!reset || resetsAtMs === undefined) return `${head}.`;
+  const until = resetsAtMs !== undefined && resetsAtMs > now ? resetsAtMs : undefined;
+  if (paused !== undefined) return `${head}: it is paused until the 7d resets${until !== undefined ? ` at ${resetClock(until, now)}` : ""}.`;
+  if (until === undefined) return `${head}.`;
+  const reset = resetClock(until, now);
   if (!pace) return `${head}: it resets at ${reset}.`;
   if (Math.abs(pace.r - 1) <= 0.05) return `${head}: at this pace it reaches its target as it resets at ${reset}.`;
   if (pace.r < 1) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - pace.r) * 100)}% unused.`;
-  const left = (resetsAtMs - now) / 1000;
+  const left = (until - now) / 1000;
   const hitIn = (pace.share * limit.seconds * (pace.target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
   const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
   return `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
