@@ -68,13 +68,15 @@ const SEGMENTS = {
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
+// `target` is the percent the limit is paced against.
 type LimitReading = {
   limit: (typeof LIMITS)[number];
   found: StatusLimit;
   left?: number;
-  pace?: { r: number; share: number; par: number; target: number };
+  pace?: { r: number; share: number; par: number };
   paused?: { until?: number };
   resetsAtMs?: number;
+  target: number;
 };
 
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
@@ -86,12 +88,12 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
   const found = limit && limits.find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
-  const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
   const resetsAtMs = found.resetsAt ? Date.parse(found.resetsAt) : undefined;
+  const left = resetsAtMs === undefined ? undefined : Math.floor(resetsAtMs / 1000) - s.now;
   const seven = limits.find((r) => r.kind === "seven_day");
-  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs };
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs };
+  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs, target };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -1236,12 +1238,12 @@ function forecastOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: 
 // allowance, what the target would have used by now; at a target of 100% it is the share passed. Both windows begin at
 // their reset time minus their length, the share counting nights and idle hours alike. None on the run-out warning's
 // terms: no reset time, a stale reading, or too early in the window.
-function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number; target: number } | undefined {
+function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number } | undefined {
   if (!found.resetsAt || now - readAt > FORECAST_FRESH_MS) return undefined;
   const share = 1 - (Date.parse(found.resetsAt) - readAt) / 1000 / limit.seconds;
   if (!(share >= FORECAST_FROM)) return undefined;
   // target / 100 first: at 100 that is exactly 1, so the par is exactly the share and the lanes and notch draw as before.
-  return { r: found.percentUsed / (share * target), share, par: share * (target / 100), target };
+  return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
 }
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
@@ -1301,23 +1303,23 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
-function limitWords({ limit, found, pace: paced, paused: pausedBy, resetsAtMs }: LimitReading, readAt: number, now: number, classic: boolean): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, target }: LimitReading, readAt: number, now: number, classic: boolean): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
-  const pace = classic ? undefined : paced;
-  const paused = classic ? undefined : pausedBy;
+  const shownPace = classic ? undefined : pace;
+  const shownPause = classic ? undefined : paused;
   const ahead = (ms: number | undefined) => (ms !== undefined && ms > now ? ms : undefined);
-  if (paused) {
-    const sevenResets = ahead(paused.until);
+  if (shownPause) {
+    const sevenResets = ahead(shownPause.until);
     return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}.`;
   }
   const until = ahead(resetsAtMs);
   if (until === undefined) return `${head}.`;
   const reset = resetClock(until, now);
-  if (!pace) return `${head}: it resets at ${reset}.`;
-  if (Math.abs(pace.r - 1) <= 0.05) return `${head}: at this pace it reaches its target as it resets at ${reset}.`;
-  if (pace.r < 1) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - pace.r) * 100)}% unused.`;
+  if (!shownPace) return `${head}: it resets at ${reset}.`;
+  if (Math.abs(shownPace.r - 1) <= 0.05) return `${head}: at this pace it reaches its target as it resets at ${reset}.`;
+  if (shownPace.r < 1) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - shownPace.r) * 100)}% unused.`;
   const left = (until - now) / 1000;
-  const hitIn = (pace.share * limit.seconds * (pace.target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
+  const hitIn = (shownPace.share * limit.seconds * (target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
   const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
   return `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
 }
