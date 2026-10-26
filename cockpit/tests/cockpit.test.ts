@@ -1592,6 +1592,16 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The 5h names its own reset, tomorrow at 3 PM, and not the used-up 7d's, in 3 days at 9 AM.
+  test("names the classic 5h's own reset, not the 7d's, while the 7d is at 100%", async ($, on) => {
+    stubHint(on);
+    const fiveResetsAt = localAt(1, 15);
+    await startWithLimits($, on, [sevenResettingAt(100, localAt(3, 9)), { kind: "five_hour", percentUsed: 10, resetsAt: fiveResetsAt.toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 10%: it resets at ${WEEKDAYS[fiveResetsAt.getDay()]} 3 PM.`);
+    await ui.unmount();
+  });
+
   // This session last heard the 7d at 80%, but another session's transcript has its refusal on the 7d, resetting in 52.5
   // hours: the 7d is used up all the same.
   test("draws the 5h gauge paused while a refusal on the 7d is in force below 100%", { options: { limit_style: "gauge" } }, async ($, on) => {

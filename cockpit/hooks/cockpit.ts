@@ -67,30 +67,31 @@ const SEGMENTS = {
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
 } satisfies Record<string, Segment>;
 
-// What limitOf finds for one limit tag. `resetsAtMs` is the reset its words name: its own, or the 7d's while it is paused.
+// What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
 type LimitReading = {
   limit: (typeof LIMITS)[number];
   found: StatusLimit;
   left?: number;
   pace?: { r: number; share: number; par: number; target: number };
-  paused?: number;
+  paused?: { until?: number };
   resetsAtMs?: number;
 };
 
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
 // reading has it. Every pace style's tag and the explanation read the pace here, the gauge and the words its r against
 // the target, lanes and notch its par, so they agree. While the 7d is used up, a refusal still in force included, the 5h
-// cannot be spent: it is paused, with no pace, and `paused` holds the seconds until the 7d resets (0 without a reset time).
+// cannot be spent: it is paused, with no pace, and `paused.until` holds the 7d's reset in ms (none without a reset time).
 function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitReading | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
   const found = limit && limits.find((r) => r.kind === limit.kind);
   if (!limit || !found) return undefined;
   const left = found.resetsAt ? Math.floor(Date.parse(found.resetsAt) / 1000) - s.now : undefined;
+  const resetsAtMs = found.resetsAt ? Date.parse(found.resetsAt) : undefined;
   const seven = limits.find((r) => r.kind === "seven_day");
-  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: seven.resetsAt ? Math.floor(Date.parse(seven.resetsAt) / 1000) - s.now : 0, resetsAtMs: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined };
+  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs };
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs: found.resetsAt ? Date.parse(found.resetsAt) : undefined };
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -1269,7 +1270,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    out[tag] = limitWords(limitStyle === "classic" ? { ...reading, pace: undefined, paused: undefined } : reading, s.readAt, s.now * 1000);
+    out[tag] = limitWords(reading, s.readAt, s.now * 1000, limitStyle === "classic");
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
@@ -1299,10 +1300,17 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // then one sentence that names the reset by its clock time. Only a run-out is counted as a time from now: it is the target
 // less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
-function limitWords({ limit, found, pace, paused, resetsAtMs }: LimitReading, readAt: number, now: number): string {
+// `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
+function limitWords({ limit, found, pace: paced, paused: pausedBy, resetsAtMs }: LimitReading, readAt: number, now: number, classic: boolean): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
-  const until = resetsAtMs !== undefined && resetsAtMs > now ? resetsAtMs : undefined;
-  if (paused !== undefined) return `${head}: it is paused until the 7d resets${until !== undefined ? ` at ${resetClock(until, now)}` : ""}.`;
+  const pace = classic ? undefined : paced;
+  const paused = classic ? undefined : pausedBy;
+  const ahead = (ms: number | undefined) => (ms !== undefined && ms > now ? ms : undefined);
+  if (paused) {
+    const sevenResets = ahead(paused.until);
+    return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}.`;
+  }
+  const until = ahead(resetsAtMs);
   if (until === undefined) return `${head}.`;
   const reset = resetClock(until, now);
   if (!pace) return `${head}: it resets at ${reset}.`;
