@@ -49,5 +49,5 @@ Today the 7d and 5h tags show how much of each limit is used and how much time i
 - `cockpit/README.md`: the status row, hovering, forecast, order pane, colours, options, Upgrading and Needs.
 - `cockpit/types/index.d.ts`: the new `paceK` state key.
 - `cockpit/tests/cockpit.test.ts`: the forecast cases and the hover assertions.
-- Engine API: `hover.scope` on `Box` (`cockpit/.claude-plugin/types/claude-code/index.d.ts:898`). Local types show it in Claude Code 2.1.307 and 2.1.310. The README's minimum is 2.1.287, and support at that version is unconfirmed.
+- Engine API: `hover.scope` on `Box` (`cockpit/.claude-plugin/types/claude-code/index.d.ts:898`). The bundled types, written by Claude Code 2.1.303, carry it. The README's minimum is 2.1.287, and support at that version is unconfirmed.
 - Out of scope: the separate Fable weekly limit (`.do/inbox/2026-10-25-fable-weekly-limit.md`).

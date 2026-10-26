@@ -1,0 +1,5 @@
+# A resting metric in cockpit's explanation line
+
+**Status:** needs-triage
+
+The explanation line (limit-pace-gauge, ticket 02) must stay drawn for the tags' hover scopes to have somewhere to reveal their explanations, so most of the time it is a blank line. The user's idea is to show a metric there that cockpit does not show yet, as text, which a hovered tag's explanation replaces and which comes back when the pointer leaves. The metric is not chosen. Candidates from data the mod already receives: the 7d budget left per day until its reset (`rateLimits[].percentUsed` and `resetsAt`), the session's cost per hour since it started (`SessionUsage.startedAt` and `cost`), the last turn's duration and cost (a turn event's `durationMs`), and the measured 5h-to-7d coupling k once ticket 07 has it. Open points: whether the run-out warning outranks the resting metric when both apply, and that the "replaced on hover" behaviour depends on how ticket 03 reveals explanations (an absolute overlay covers what is beneath it; a reveal in the flow cannot hide it).

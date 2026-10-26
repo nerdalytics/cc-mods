@@ -18,7 +18,7 @@ The mod SHALL read a `limit_style` option that sets how both limit tags draw. It
 - **THEN** both limit tags draw as `classic`
 
 ### Requirement: Pace ratio
-For a non-classic style, a limit's pace SHALL be r = percent used / (share of the window passed × target / 100).
+For a non-classic style, a limit's pace SHALL be r = percent used / (share of the window passed × target), with the share passed measured at the time of the reading.
 - r < 1: a share (1 − r) of the target goes unused.
 - r > 1: the limit runs out with a share (1 − 1/r) of the window still to go.
 - r within 0.05 of 1: on pace.
@@ -37,7 +37,10 @@ A non-classic style SHALL draw no pace in any of these cases:
 - this session's last response is more than 10 minutes old;
 - less than a tenth of the window has passed.
 
-Without a pace, the tag SHALL draw its usage in a neutral dim colour, with no par mark and no pace colours.
+Without a pace, the tag SHALL draw no pace colours:
+- `gauge` keeps its percent used in the badge, leaves every cell empty and draws its pipe dim;
+- `lanes` draws both lanes in the neutral dim colour, the top lane to the par left and the bottom lane to the usage left;
+- `notch` draws its usage in the neutral dim colour, with no notch.
 
 #### Scenario: Early in a window
 - **WHEN** 5 % of the 5h window has passed
@@ -62,7 +65,7 @@ With `limit_style` `lanes`, a tag SHALL draw two lanes of ▀ cells. The top lan
 - **THEN** the bottom lane is lit to 3 cells, and the cells between 3 and the par line at 4 draw amber to red
 
 ### Requirement: Gauge style
-With `limit_style` `gauge`, the badge SHALL read the limit and its percent used, such as `7d 51%`. The bar SHALL be floor(length / 2) cells on each side of a centre pipe. Under pace fills the left side outward from the pipe in the limit's colours. Over pace fills the right side outward in amber to red. Each side fills in half-cell steps, to share × 2 × floor(length / 2) halves, rounded.
+With `limit_style` `gauge`, the badge SHALL read the limit and its percent used, such as `7d 51%`. The bar SHALL be floor(length / 2) cells on each side of a centre pipe. Under pace fills the left side outward from the pipe in slate. Over pace fills the right side outward in amber to red. Each side fills in half-cell steps, to f × 2 × floor(length / 2) halves, rounded, where f is (1 − r) under pace and (1 − 1/r) over pace.
 
 #### Scenario: Gauge width
 - **WHEN** the 5h length is 10
@@ -77,7 +80,7 @@ With `limit_style` `notch`, a tag SHALL draw one full-height lane of the usage l
 
 #### Scenario: Notch at par
 - **WHEN** the 7d tag has 7 cells and its par left is 67 %
-- **THEN** the notch sits at cell 5
+- **THEN** the notch sits after the 5th cell
 
 ### Requirement: 7d target and par
 The 7d target SHALL be 100 %. Its share of the window passed SHALL be computed from calendar time since the window began, nights and idle stretches included. The window begins at its reset time minus 7 days.
@@ -113,6 +116,8 @@ The mod SHALL measure k, the 7d percent that 1 % of 5h costs, from the readings 
 - the 5h rose by at least 10 points;
 - both 7d readings share one reset time.
 
+A reset time counts as changed only when it moves by 60 seconds or more.
+
 The latest such sample stands until a newer one replaces it.
 
 #### Scenario: Sample taken
@@ -128,7 +133,7 @@ The latest such sample stands until a newer one replaces it.
 - **THEN** that pair yields no sample
 
 ### Requirement: 5h paused while the 7d is used up
-While the 7d is at 100 %, or a session was refused on it and the refusal has not reset, the 5h tag SHALL draw as paused in every non-classic style: all cells empty, with no pace. Its explanation SHALL say it is paused until the 7d resets, with the time left until then.
+While the 7d is at 100 %, or a session was refused on it and the refusal has not reset, the 5h tag SHALL draw as paused in every non-classic style: all cells empty, with no pace; the gauge keeps its percent used in the badge and draws its pipe dim. Its explanation SHALL say it is paused until the 7d resets, with the time left until then.
 
 #### Scenario: 7d used up
 - **WHEN** the 7d is at 100 %, resets in 2 days 4 hours, and `limit_style` is `gauge`

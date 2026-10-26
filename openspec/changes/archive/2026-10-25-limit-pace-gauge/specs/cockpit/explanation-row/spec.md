@@ -28,16 +28,16 @@ A boolean option `explain_row`, true by default, SHALL switch the explanation li
 - **WHEN** the person drops the explanation line under hidden in `/cockpit:order`
 - **THEN** `explain_row` is written false, and the line no longer draws
 
-### Requirement: The line keeps its place
-While `explain_row` is on, the explanation line SHALL take exactly one line, whether anything is shown in it or not, so that a hover never moves the lines around it. Text longer than the line SHALL be cut at its end rather than wrapped.
+### Requirement: The line is always there
+While `explain_row` is on, the explanation line SHALL take at least one line, whether anything is shown in it or not. Text longer than the line SHALL wrap between words onto further lines, as the run-out warning does today.
 
 #### Scenario: Nothing to show
 - **WHEN** nothing is hovered and no limit runs out before its reset
 - **THEN** the explanation line draws as one blank line
 
 #### Scenario: Long text
-- **WHEN** an explanation is wider than the window
-- **THEN** it draws on one line, cut at the window's edge
+- **WHEN** an explanation or the run-out warning is wider than the window
+- **THEN** it wraps between words onto further lines; a hovered explanation's further lines draw over what lies below the line rather than moving it
 
 ### Requirement: Hovering a tag shows its explanation
 Hovering any of these tags SHALL reveal that tag's explanation in the explanation line: `limit_7d`, `limit_5h`, `context`, `turns`, `tokens`, `agents` and `cache`. A revealed explanation SHALL cover anything shown in the line beneath it. The tags SHALL no longer lay a hover value over themselves. While `explain_row` is on, a tag with an explanation SHALL keep its value on the grey background. While it is off, no value SHALL stand on the grey.
@@ -55,9 +55,9 @@ Hovering any of these tags SHALL reveal that tag's explanation in the explanatio
 - **THEN** hovering the context tag still reveals its explanation in that line
 
 ### Requirement: Explanations carry today's hover values
-Each tag's explanation SHALL contain at least what its hover showed before this change:
+Each of the seven tags SHALL always have an explanation, including the turns tag before any subagent has run and the cache tag while cold. Each tag's explanation SHALL contain at least what its hover showed before this change, and where it had no hover, what the tag shows:
 - context: the tokens left;
-- turns: the subagents' count and requests;
+- turns: the subagents' count and requests, once a subagent has run;
 - tokens: the main session's tokens, or with `merge_costs` on, the tokens of the main session and its subagents together;
 - agents: the subagents' tokens;
 - cache: while warm, what the prompt costs once the cache is cold.
