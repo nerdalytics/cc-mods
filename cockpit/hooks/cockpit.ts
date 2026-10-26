@@ -68,7 +68,8 @@ const SEGMENTS = {
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
-// `target` is the percent the limit is paced against.
+// `target` is the percent the limit is paced against. `bound` is set while the 7d bounds the 5h's target below 100%: the
+// 7d's percent used and k, which the 5h's sentence reads the 7d's run-out and what it has left from.
 type LimitReading = {
   limit: (typeof LIMITS)[number];
   found: StatusLimit;
@@ -77,6 +78,7 @@ type LimitReading = {
   paused?: { until?: number };
   resetsAtMs?: number;
   target: number;
+  bound?: { sevenUsed: number; k: number };
 };
 
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
@@ -93,7 +95,8 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const seven = limits.find((r) => r.kind === "seven_day");
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
   if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs, target };
+  const bound = badge === "5h" && seven && s.k !== undefined && target < 100 ? { sevenUsed: seven.percentUsed, k: s.k } : undefined;
+  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs, target, bound };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -1303,7 +1306,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
 // due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
-function limitWords({ limit, found, pace, paused, resetsAtMs, target }: LimitReading, readAt: number, now: number, classic: boolean): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, classic: boolean): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
@@ -1316,12 +1319,18 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, target }: LimitRea
   if (until === undefined) return `${head}.`;
   const reset = resetClock(until, now);
   if (!shownPace) return `${head}: it resets at ${reset}.`;
-  if (Math.abs(shownPace.r - 1) <= 0.05) return `${head}: at this pace it reaches its target as it resets at ${reset}.`;
-  if (shownPace.r < 1) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - shownPace.r) * 100)}% unused.`;
+  // A bounded 5h names the 7d, which its target is the 7d's worth of: at the 5h's pace the 7d runs out when the 5h reaches
+  // its target, and what the 5h would still use by the reset costs the 7d k per point.
+  if (Math.abs(shownPace.r - 1) <= 0.05) return bound ? `${head}: at this 5h pace the 7d runs out as the 5h resets at ${reset}.` : `${head}: at this pace it reaches its target as it resets at ${reset}.`;
+  if (shownPace.r < 1) {
+    if (!bound) return `${head}: at this pace it resets at ${reset} with ~${Math.round((1 - shownPace.r) * 100)}% unused.`;
+    const sevenLeft = 100 - bound.sevenUsed - bound.k * (found.percentUsed / shownPace.share - found.percentUsed);
+    return `${head}: at this 5h pace the 7d still has ~${Math.round(sevenLeft)}% left when the 5h resets at ${reset}.`;
+  }
   const left = (until - now) / 1000;
   const hitIn = (shownPace.share * limit.seconds * (target - found.percentUsed)) / found.percentUsed - (now - readAt) / 1000;
   const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
-  return `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
+  return bound ? `${head}: at this 5h pace the 7d ${runsOut} before the 5h resets at ${reset}.` : `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
 }
 
 // The run-out warning, for the limit that runs out soonest before it resets: the pace is the whole window's so far,

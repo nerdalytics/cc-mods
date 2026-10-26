@@ -1388,7 +1388,8 @@ describe("cockpit", () => {
   };
 
   // 10% to 25% of the 5h while the 7d goes 40.0% to 41.5%: k 0.1. A later 5h window at 5% with the 7d at 96% has 4% of
-  // the 7d left, 40 points of 5h at k 0.1: a target of 45%. At 60% of that window, r is 5 / 27, ~81% unused.
+  // the 7d left, 40 points of 5h at k 0.1: a target of 45%. At 60% of that window, r is 5 / 27, under pace: 5% reaches
+  // 8.3% by the reset, which costs the 7d 0.3 of its 4%, ~4% left.
   test("measures k from a 15-point 5h rise within one window and bounds a later window's 5h target by it", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
     await fedReadings($, on, [
@@ -1397,7 +1398,7 @@ describe("cockpit", () => {
       [5, 2 * HOUR, 96, DAYS_3],
     ]);
     const ui = await mountHint($);
-    expect(await explanationOf(ui, "limit_5h")).toContain("~81% unused");
+    expect(await explanationOf(ui, "limit_5h")).toContain("the 7d still has ~4% left when the 5h resets");
     await ui.unmount();
   });
 
@@ -1436,7 +1437,7 @@ describe("cockpit", () => {
       [25, 2 * HOUR, 92, DAYS_3 + 59_000],
     ]);
     const ui = await mountHint($);
-    expect(await explanationOf(ui, "limit_5h")).toMatch(/runs out in \d+h\d+m, 4[78]m before it resets/);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(/the 7d runs out in \d+h\d+m, 4[78]m before the 5h resets/);
     await ui.unmount();
   });
 
@@ -1536,6 +1537,35 @@ describe("cockpit", () => {
     await fedReadings($, on, [[20, 2 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toContain("~67% unused");
+    await ui.unmount();
+  });
+
+  // k 0.5 and the 7d at 90%, resetting days after the 5h window: the 5h's target is 40% at 20%, 30% at 10%. The sentence
+  // names the 7d at the 5h's pace. The clock decides a minute of a time counted from now, so `1h0m` may read `59m`.
+  // 20% with 1 hour of the 5h's 5 gone reaches 40% 1 hour from now, 3 before it resets.
+  test("explains the bounded 5h over its target with when the 7d runs out and how long before the 5h resets that is", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [20, 4 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this 5h pace the 7d runs out in (?:1h0m|59m), (?:3h0m|2h59m) before the 5h resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // 10% with half the window gone is 20% at the reset, 10 points of 5h that cost the 7d 5: 5% of it is left.
+  test("explains the bounded 5h under its target with the share of the 7d left when it resets", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [10, 2.5 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this 5h pace the 7d still has ~5% left when the 5h resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // 20% with half the window gone reaches 40% as it resets: r is 1.
+  test("explains the bounded 5h on its target as the 7d running out as the 5h resets", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [...K_HALF, [20, 2.5 * HOUR, 90, DAYS_3]]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this 5h pace the 7d runs out as the 5h resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
