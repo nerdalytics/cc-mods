@@ -1,0 +1,62 @@
+# Review package: ticket 04, 496eb96..143efdd31b90c513e1f79aa0771749c601379ccf
+
+## Commits
+### 143efdd
+Release cockpit 1.5.0
+
+### a3783f8
+Say what cockpit 1.5.0 changes in the limit texts and why it is a minor release
+
+
+## Files changed
+ cockpit/.claude-plugin/plugin.json | 2 +-
+ cockpit/README.md                  | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/cockpit/.claude-plugin/plugin.json b/cockpit/.claude-plugin/plugin.json
+index c2034ad..4687f74 100644
+--- a/cockpit/.claude-plugin/plugin.json
++++ b/cockpit/.claude-plugin/plugin.json
+@@ -1,14 +1,14 @@
+ {
+   "name": "cockpit",
+   "displayName": "Cockpit",
+-  "version": "1.4.0",
++  "version": "1.5.0",
+   "description": "Live gauges around the prompt: model, 7d and 5h limits, prompts and requests, main and subagent costs, the prompt cache's time left, and the project's git and pull request state; plus /cockpit:handoff, which writes a handoff document before the cache goes cold.",
+   "author": {
+     "name": "nerdalytics"
+   },
+   "homepage": "https://github.com/nerdalytics/cc-mods/tree/trunk/cockpit",
+   "repository": "https://github.com/nerdalytics/cc-mods",
+   "license": "MIT",
+   "keywords": [
+     "cockpit",
+     "statusline",
+diff --git a/cockpit/README.md b/cockpit/README.md
+index 797ee9b..a4c0b94 100644
+--- a/cockpit/README.md
++++ b/cockpit/README.md
+@@ -208,20 +208,21 @@ A row starts at the left edge unless it has spacers. Inside a tag the spacing st
+ | `model,gap-1,tokens,spacer,spacer,limit_7d,gap-1,limit_5h,spacer,turns,spacer,spacer,cache,gap-1,context` | Model and costs at the left, cache and context at the right, limits and turns between them. The free columns split 2 : 1 : 2. |
+ 
+ A tag that has nothing to show, such as the costs before the first token count, folds away with the gaps around it, and its spacers meet. Between two tags that draw, the widest of the gaps it stood between stays, so `turns,gap-1,tokens,gap-1,cache` with no costs yet leaves one column between turns and cache. Next to a spacer or the edge of the row, none stays. Gaps after the last tag of a row are dropped. A row too wide for the window wraps between its tags either way, and each wrapped line shares out its own free columns. The lines of the cold cache and the smart zone, and the run-out warning, always start at the left, because they read as sentences, and wrap between words in a narrow window, a button moving whole to the next line.
+ 
+ Under the prompt, Claude Code does not tell the mod how many rows are left for its lines. With a pane open above the prompt, such as `/cockpit:order` in a narrow window, or a prompt of several lines, a row's wrapped line can go missing, and then the whole row. Close the pane, widen the window, or move the row above the prompt, where Claude Code says how many rows the mod has and scrolls a taller drawing.
+ 
+ ## Upgrading
+ 
+ The mod no longer reads a removed option, so its value is not carried over to what replaced it.
+ 
++- **1.5.0** rewrites the limit texts on the status row. The explanation you see when you hover the 7d or 5h tag and the run-out warning now share one frame, `<tag> at <N>%: …`. Both count forward from now, saying how long until the limit runs out and how long that is before it resets, and both name the reset by its local clock time, such as `3 PM`, `Thu 3 PM` or `next Thu 9 AM`. A 5h that the 7d bounds below 100% names the 7d in its sentence, at the 5h's own pace, such as `5h at 20%: at this 5h pace the 7d runs out in 1h0m, 3h0m before the 5h resets at 3 PM.` The warning counts that 5h to its target, not to 100%, and warns of a run-out already due as `runs out any moment`. It no longer warns of a limit your account refused or of a 5h paused while the 7d is used up. The release changes no option. Changing what documented texts say would make this a major release under the repository's versioning rule, but it ships as a minor release by choice.
+ - **1.4.0** changes how `limit_style` `lanes` draws the 7d and 5h tags. The token lane, the usage left, now draws on top, and the time lane, the par left, below it. Where `lanes` coloured the gap between the usage left and the par line, it now colours the cells the pace moved at the token lane's end: impacted cells amber turning red ahead of par, and spare cells blue behind it. The release adds two colours to the limit pace group: `pace.spare` for the spare cells, and `pace.severe` for the deep red of the time lane when more cells are impacted than the token lane has lit. Changing how a documented style draws would make this a major release under the repository's versioning rule, but it ships as a minor release by choice.
+ - **1.2.0** removes the `forecast` line from `layout`. The run-out warning now shows in the explanation line, `explain`, which a layout that leaves it out draws last. A saved `forecast` line stays as an empty row, which draws nothing, and `/cockpit:order` lists it as `▤ row N: empty`, so you can drop it under hidden. The hover texts moved to the explanation line too: hovering a tag shows its explanation there, and with `explain_row` off a hover shows nothing. The release also adds `limit_style`, `explain_row` and the bar lengths `limit_7d_length`, `limit_5h_length` and `context_length`. Dropping a layout name and moving the hover texts would make this a major release under the repository's versioning rule, but it ships as a minor release by choice.
+ - **1.0.0** renames the mod from statusline (last released as 0.22.3) to cockpit and starts its versions over, as it does more than draw a status line. Claude Code sees a new plugin, so install `cockpit` and run `/plugin uninstall statusline@cc-mods`, which also deletes the old options. The options start from their defaults: set them again in `/config`, `/cockpit:order` and `/cockpit:colors`. The commands are now `/cockpit:order`, `/cockpit:colors` and `/cockpit:handoff`.
+ - **statusline 0.22.0** replaces the git row's and the status row's options with `layout`: `row_git`, `row_git_position`, `git_order`, the `git_<name>` toggles, `row_status`, `row_status_position`, `segment_order`, the `segment_<name>` toggles, `line_order`, and the offers' `fresh_start_position`, `compact_hint_position` and `limit_forecast_position`. `layout` starts with the arrangement earlier versions drew by default, the git row above the prompt and the status row and the offers under it. If you had changed any of those, set them again with `/cockpit:order`. The offers' `fresh_start`, `compact_hint` and `limit_forecast` toggles stay.
+ - **statusline 0.19.0** replaces the `density` option with gaps. An order saved before 0.19.0 has no gaps, so its tags touch until you drag gaps in with `/cockpit:order`. `standard` density was `gap-1` between each pair of tags, `roomy` was `gap-2`.
+ - **statusline 0.18.0** splits the `limits` tag into `limit_7d` and `limit_5h`, and the git row's `path` into `folders`, `branch` and `worktree`. The pull request's review and comments, once part of `pr`, are now `review` and `comments`. An order saved before keeps the new parts where the old tag stood, with the review and comments after the pull request. Their toggles start on: if you had switched off `segment_limits` or `git_path`, or `git_pr` and want its review and comments off too, drag those parts under hidden again.
+ - **statusline 0.17.0** replaces the `row_git_align` and `row_status_align` options with spacers. If you had a row set to `right`, drag a spacer to the top of that row's list.
+ 
+ ## Options
+ 

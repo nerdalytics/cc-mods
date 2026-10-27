@@ -2,7 +2,7 @@
 
 **Category:** enhancement
 **Status:** ready-for-agent
-**Change:** `openspec/changes/limit-texts-count-forward/`
+**Change:** limit-texts-count-forward
 
 The user wants the forecast texts of the 7d and 5h limits reworked: counting backwards is not helpful. In a live session on 2026-10-26 (screenshot in the do-it session that ran `/do:apply do-folder-lifecycle`), hovering the 7d tag showed "7d limit: 89% used, resets in 3d3h. At this pace it runs out 2d15h before it resets." That second sentence comes from `paceWords` in `cockpit/hooks/cockpit.ts:1294-1298`, which states the time left in the window when the limit runs out (`(1 - 1/r) * limit.seconds`), so the reader has to subtract it from the reset countdown to learn when the limit actually runs out. From the same numbers and formula, the 7d runs out in about 11h (89% over the 93h elapsed leaves 11% for about 11.5h), 2d15h before its reset in 3d3h. The run-out warning at `cockpit/hooks/cockpit.ts:1315` already leads with "runs out in <time>" and then adds "<time> before it resets", so it carries the same backward figure second. The user has not said which wording they want instead; to decide: whether both texts lead with the time until the limit runs out, whether the backward figure goes entirely, and whether the under-pace sentence ("resets with ~N% unused") changes with them.
 
