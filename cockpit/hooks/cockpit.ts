@@ -43,6 +43,10 @@ type Snapshot = {
   sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
   k?: number;
+  // The intervals a window read 100%, and when the latest main-session request with a reply was sent: coverOf reads them.
+  usedUp?: { from: number; to?: number }[];
+  answeredAt?: number;
+  refusals?: Record<string, { at: number }>;
   now: number;
   phase: number;
 };
@@ -72,8 +76,9 @@ const SEGMENTS = {
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
-// `target` is the percent the limit is paced against. `bound` is set while the 7d bounds the 5h's target below 100%: the
-// 7d's percent used and k, which the 5h's sentence reads the 7d's run-out and what it has left from.
+// `cover` is set while work goes on past a used-up 7d. `endsAt` is the latest reset among the windows at 100%, in ms: the
+// one that ends the block. `target` is the percent the limit is paced against. `bound` is set while the 7d bounds the 5h's
+// target below 100%: the 7d's percent used and k, which the 5h's sentence reads the 7d's run-out and what it has left from.
 type LimitReading = {
   limit: (typeof LIMITS)[number];
   found: StatusLimit;
@@ -81,6 +86,8 @@ type LimitReading = {
   pace?: { r: number; share: number; par: number };
   paused?: { until?: number };
   resetsAtMs?: number;
+  cover?: Cover;
+  endsAt?: number;
   target: number;
   bound?: { sevenUsed: number; k: number };
 };
@@ -97,17 +104,34 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const resetsAtMs = found.resetsAt ? Date.parse(found.resetsAt) : undefined;
   const left = resetsAtMs === undefined ? undefined : Math.floor(resetsAtMs / 1000) - s.now;
   const seven = limits.find((r) => r.kind === "seven_day");
-  const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
-  if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
+  const cover = coverOf(s);
+  const endsAt = Math.max(0, ...usedUpWindows(limits, undefined, s.now * 1000).flatMap((r) => (r.resetsAt && Date.parse(r.resetsAt) > s.now * 1000 ? [Date.parse(r.resetsAt)] : []))) || undefined;
+  const target = badge === "5h" ? fiveHourTarget(found, seven, s.k, cover) : 100;
+  if (badge === "5h" && seven && seven.percentUsed >= 100 && !cover) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
   const bound = badge === "5h" && seven && s.k !== undefined && target < 100 ? { sevenUsed: seven.percentUsed, k: s.k } : undefined;
-  return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, target, bound };
+  return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, cover, endsAt, target, bound };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
-// allowance until this session has measured k, and when the 7d resets before this 5h window ends, refilling it first.
-function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: number | undefined): number {
-  if (k === undefined || !five.resetsAt || !seven?.resetsAt || Date.parse(seven.resetsAt) <= Date.parse(five.resetsAt)) return 100;
+// allowance until this session has measured k, when the 7d resets before this 5h window ends, refilling it first, and
+// while work goes on past a used-up 7d, which then bounds nothing.
+function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: number | undefined, cover: Cover | undefined): number {
+  if (cover || k === undefined || !five.resetsAt || !seven?.resetsAt || Date.parse(seven.resetsAt) <= Date.parse(five.resetsAt)) return 100;
   return Math.min(100, five.percentUsed + (100 - seven.percentUsed) / k);
+}
+
+// How a used-up 7d is covered, "went-on" when work went on past it with no lookup to say so: a main-session request got a reply
+// after the interval opened, that reply still read the 7d at 100%, and no refusal on the 7d is newer than it. A lookup that
+// answered stands in the way of this guess, so with one it is nothing. The reading is the one reported, not limitsOf's, as
+// a refusal's made-up 100% is not a reply's.
+type Cover = "went-on";
+function coverOf(s: Snapshot): Cover | undefined {
+  if (usageLookup && s.credits) return undefined;
+  const open = s.usedUp?.at(-1);
+  const seven = s.usage.rateLimits.find((r) => r.kind === "seven_day");
+  const reads100 = seven !== undefined && seven.percentUsed >= 100 && (!seven.resetsAt || Date.parse(seven.resetsAt) > s.now * 1000);
+  const refusedSince = (s.refusals?.seven_day?.at ?? 0) > (s.answeredAt ?? 0);
+  return open && open.to === undefined && reads100 && s.answeredAt !== undefined && s.answeredAt > open.from && !refusedSince ? "went-on" : undefined;
 }
 
 // One limit's tag, none until a reading has it: its badge, then its bar in the limit_style. The gauge's badge also reads
@@ -396,6 +420,10 @@ const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
 const CREDITS = { plugin: "cockpit", key: "credits" } as const;
 const BILLING = { plugin: "cockpit", key: "billing" } as const;
 const LOOKUP_PACE = { plugin: "cockpit", key: "lookupPace" } as const;
+const USED_UP = { plugin: "cockpit", key: "usedUp" } as const;
+const SEEN_AT = { plugin: "cockpit", key: "seenAt" } as const;
+const ANSWERED_AT = { plugin: "cockpit", key: "answeredAt" } as const;
+const REFUSALS = { plugin: "cockpit", key: "refusals" } as const;
 const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
 const TICK = { plugin: "cockpit", key: "tick" } as const;
 const LOAD = { plugin: "cockpit", key: "load" } as const;
@@ -811,6 +839,7 @@ export const register: Register = (on, options) => {
 
   on("turn.step", async function* ($, e, next) {
     const { value: before = 0 } = await $.state.get(SENT);
+    const sentAt = await $.clock.now();
     if (!e.agentId) {
       busy = true;
       effort = e.effort ?? "none";
@@ -820,6 +849,9 @@ export const register: Register = (on, options) => {
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
+    // The request's time, not the reply's: a reply's limits may be written before this hook resumes, and a reply stamped
+    // after them would count as coming after the interval it opened.
+    if (!e.agentId && response.usage) await $.state.set(ANSWERED_AT, sentAt);
     tokensStale = true;
     return response;
   });
@@ -1004,7 +1036,10 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: credits } = await $.state.get(CREDITS);
   const { value: billing } = await $.state.get(BILLING);
   const { value: { k } = {} } = await $.state.get(PACE_K);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, now: Math.floor((await $.clock.now()) / 1000), phase };
+  const { value: usedUp } = await $.state.get(USED_UP);
+  const { value: answeredAt } = await $.state.get(ANSWERED_AT);
+  const { value: refusals } = await $.state.get(REFUSALS);
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -1223,13 +1258,23 @@ function refreshRejected($: EngineInterface): void {
     const tails = `find "$1" -name '*.jsonl' -mmin -300 -exec sh -c 'for f; do tail -c 262144 "$f"; echo; done' sh {} + | grep -F '"apiError":"usage_limit_reached"'`;
     const { stdout } = await $.process.run(["sh", "-c", tails, "sh", `${await configDir($)}/projects`], { timeoutMs: 10_000 });
     const rejected: Record<string, number> = {};
+    const refusals: Record<string, { at: number; overageStatus?: string; overageDisabledReason?: string }> = {};
     for (const line of stdout.split("\n")) {
       const row = parseJson(line);
       const hit = isRecord(row) && row.apiError === "usage_limit_reached" ? (row.quotaLimits ?? (isRecord(row.apiErrorParams) ? row.apiErrorParams.rate_limit_info : undefined)) : undefined;
       if (!isRecord(hit) || typeof hit.rateLimitType !== "string" || typeof hit.resetsAt !== "number") continue;
       rejected[hit.rateLimitType] = Math.max(rejected[hit.rateLimitType] ?? 0, hit.resetsAt * 1000);
+      // A row without a readable time says nothing of when the refusal came.
+      const at = Date.parse(isRecord(row) && typeof row.timestamp === "string" ? row.timestamp : "");
+      if (Number.isNaN(at) || at <= (refusals[hit.rateLimitType]?.at ?? 0)) continue;
+      refusals[hit.rateLimitType] = {
+        at,
+        ...(typeof hit.overageStatus === "string" ? { overageStatus: hit.overageStatus } : {}),
+        ...(typeof hit.overageDisabledReason === "string" ? { overageDisabledReason: hit.overageDisabledReason } : {}),
+      };
     }
     await $.state.set(REJECTED, rejected);
+    await $.state.set(REFUSALS, refusals);
   });
 }
 
@@ -1380,11 +1425,17 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // out "any moment" and the whole time to the reset precedes it: a countdown would read it as 0m.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
 // The run-out warning asks for the over-pace sentence (`overPace`) on a limit just over its pace too, which a hover reads as on pace.
-function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, now: number, { classic = false, overPace = false } = {}): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, cover, endsAt, target, bound }: LimitReading, now: number, { classic = false, overPace = false } = {}): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
   const ahead = (ms: number | undefined) => (ms !== undefined && ms > now ? ms : undefined);
+  // The 7d at 100% is used up, and so is the 5h, which classic does not pause and reads as it would anywhere. Both name the
+  // reset that ends the block: the latest of the resets of the windows at 100%, their own only when it is that one.
+  if (cover === "went-on" && found.percentUsed >= 100 && (limit.badge === "7d" || !classic)) {
+    const ends = ahead(endsAt);
+    return `${head}: used up, work goes on${ends === undefined ? "" : ` until it resets at ${resetClock(ends, now)}`}.`;
+  }
   if (shownPause) {
     const sevenResets = ahead(shownPause.until);
     return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}.`;
@@ -1497,6 +1548,8 @@ async function configDir($: EngineInterface): Promise<string> {
 async function startSession($: EngineInterface): Promise<void> {
   const { value: stretch } = await $.state.get(STRETCH);
   ({ promptAt, handoffAt, compactedAt } = stretch ?? { promptAt: 0, handoffAt: 0, compactedAt: 0 });
+  // A reload of the module finds the time already in the state, and keeps it.
+  if ((await $.state.get(SEEN_AT)).value === undefined) await $.state.set(SEEN_AT, await $.clock.now());
   tick?.cancel();
   phase = 0;
   frames = 0;
@@ -1536,8 +1589,36 @@ async function refresh($: EngineInterface): Promise<void> {
 
 // Every usage reading is written here, so each one also measures k.
 async function setUsage($: EngineInterface, { context, rateLimits }: StatusUsage): Promise<void> {
+  const { value: before } = await $.state.get(USAGE);
   await $.state.set(USAGE, { context, rateLimits });
   await measureK($, rateLimits);
+  await recordUsedUp($, before?.rateLimits, rateLimits);
+}
+
+// A poll and a response can both write a reading at once; one at a time keeps them from opening the same interval twice.
+let recording: Promise<void> = Promise.resolve();
+
+// The intervals in which a 5h or 7d window read 100%, a refusal that has not reset included, each at the clock time of the
+// reading it was seen in. A window whose reset has passed no longer reads 100%, though the last response still says so:
+// the session hears its figures only in its responses. An interval stays open while any window reads 100%, and closes at
+// the reset after which none does, or at the first reading in which none does, whichever comes first.
+function recordUsedUp($: EngineInterface, previous: StatusLimit[] | undefined, rateLimits: StatusLimit[]): Promise<void> {
+  const job = async () => {
+    const now = await $.clock.now();
+    const { value: rejected } = await $.state.get(REJECTED);
+    const { value: intervals = [] } = await $.state.get(USED_UP);
+    const open = intervals.at(-1)?.to === undefined ? intervals.at(-1) : undefined;
+    const reading = usedUpWindows(rateLimits, rejected, now).filter((w) => !w.resetsAt || Date.parse(w.resetsAt) > now);
+    if (reading.length > 0) {
+      if (!open) await $.state.set(USED_UP, [...intervals, { from: now }]);
+      return;
+    }
+    if (!open) return;
+    // The windows at 100% in the reading before: the interval ends at the latest of their resets, when that is past.
+    const resets = usedUpWindows(previous ?? [], rejected, open.from).map((w) => (w.resetsAt ? Date.parse(w.resetsAt) : Infinity));
+    await $.state.set(USED_UP, [...intervals.slice(0, -1), { from: open.from, to: resets.length > 0 ? Math.min(now, Math.max(...resets)) : now }]);
+  };
+  return (recording = recording.catch(() => {}).then(job));
 }
 
 // k, the 7d percent that 1% of the 5h costs, from the 7d's rise over the 5h's since the first reading of this 5h
@@ -1662,7 +1743,12 @@ async function lookupCredits($: EngineInterface): Promise<void> {
 
 // A 5h or 7d window at 100%, a refusal that has not reset included.
 function windowUsedUp(limits: StatusLimit[], rejected: Record<string, number> | undefined, nowMs: number): boolean {
-  return limitsOf(limits, rejected, nowMs).some((r) => r.percentUsed >= 100 && LIMITS.some((l) => l.kind === r.kind));
+  return usedUpWindows(limits, rejected, nowMs).length > 0;
+}
+
+// The 5h and 7d windows at 100%, a refusal that has not reset included.
+function usedUpWindows(limits: StatusLimit[], rejected: Record<string, number> | undefined, nowMs: number): StatusLimit[] {
+  return limitsOf(limits, rejected, nowMs).filter((r) => r.percentUsed >= 100 && LIMITS.some((l) => l.kind === r.kind));
 }
 
 // extra_usage, the only part of the usage response read, or none when it does not read. With extra usage off the amounts
