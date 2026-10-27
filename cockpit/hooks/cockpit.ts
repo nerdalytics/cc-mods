@@ -43,8 +43,6 @@ type Snapshot = {
   sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
   k?: number;
-  // When this session's last response came, in ms: the limits' reading is as of then.
-  readAt: number;
   now: number;
   phase: number;
 };
@@ -102,7 +100,7 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k) : 100;
   if (badge === "5h" && seven && seven.percentUsed >= 100) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
   const bound = badge === "5h" && seven && s.k !== undefined && target < 100 ? { sevenUsed: seven.percentUsed, k: s.k } : undefined;
-  return { limit, found, left, pace: paceOf(limit, found, s.readAt, s.now * 1000, target), resetsAtMs, target, bound };
+  return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, target, bound };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -392,7 +390,6 @@ const COMPACT_AT = { plugin: "cockpit", key: "compactAt" } as const;
 type Offer = "fresh" | "compact";
 const DISMISSED = { plugin: "cockpit", key: "dismissed" } as const;
 const SENT = { plugin: "cockpit", key: "sent" } as const;
-const READ = { plugin: "cockpit", key: "readAt" } as const;
 const GIT = { plugin: "cockpit", key: "git" } as const;
 const PR = { plugin: "cockpit", key: "pr" } as const;
 const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
@@ -438,14 +435,6 @@ const HIGH_STEPS = 3;
 const EFFORT_STEPS: Record<string, number> = { none: 0, low: 1, medium: 2, high: HIGH_STEPS, xhigh: 4, max: 5 };
 const STEP_CYCLES_PER_SECOND = 1 / 9;
 
-// A limit is the account's, but a session hears its figure only in its own responses, so the run-out warning needs one
-// from this session this recent: the session being prompted is the one that warns, an idle one's figure is stale.
-const FORECAST_FRESH_MS = 10 * 60_000;
-// Early in a window the pace is noise: no run-out warning until this share of it has gone.
-const FORECAST_FROM = 0.1;
-// The 5h rise, in points, a sample of k needs. A percent used has one decimal, so at k near 0.1 a 10-point rise moves
-// the 7d about 1.0 and its rounding of ±0.05 is about ±5% of k; a 5-point rise would double that.
-const K_MIN_RISE = 10;
 // A reset time counts as moved, a new window, only by this much: nothing shows that a window's resetsAt reads the same
 // in every reading, and two real windows of one limit are at least 5 hours apart.
 const RESET_MOVED_MS = 60_000;
@@ -831,8 +820,6 @@ export const register: Register = (on, options) => {
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
-    // ponytail: only the main conversation's response stamps the reading; whether a subagent's updates the limits is unchecked.
-    if (!e.agentId && response.usage) void $.state.set(READ, Date.now());
     tokensStale = true;
     return response;
   });
@@ -1016,15 +1003,14 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: credits } = await $.state.get(CREDITS);
   const { value: billing } = await $.state.get(BILLING);
-  const { value: readAt = 0 } = await $.state.get(READ);
   const { value: { k } = {} } = await $.state.get(PACE_K);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, readAt, now: Math.floor(Date.now() / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, now: Math.floor(Date.now() / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
 // turns up during work: the limits, context, turns, costs and cache; a branch, worktree, commits ahead and behind, conflict and
-// changes; a pull request with its review, comments and checks. The readings count as read now, so the limits show a pace.
+// changes; a pull request with its review, comments and checks. The limits' resets are set from now, so they show a pace.
 function withSamples(s: Snapshot): Snapshot {
   const kinds = s.usage.rateLimits.map((r) => r.kind);
   const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
@@ -1042,7 +1028,6 @@ function withSamples(s: Snapshot): Snapshot {
     ...s,
     sampled: true,
     credits: s.credits?.enabled ? s.credits : { at: s.now * 1000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null },
-    readAt: s.now * 1000,
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
     tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 } },
@@ -1303,28 +1288,28 @@ async function compactLine($: EngineInterface, ui: Ui) {
 }
 
 // Seconds from now until a limit at `used` percent reaches `target`, at the rate its window has run at since it began
-// (`share` of it passed as of `readAt`); less the time since that reading. Zero or less is already due.
-function hitInOf(limit: (typeof LIMITS)[number], used: number, share: number, target: number, readAt: number, now: number): number {
-  return (share * limit.seconds * (target - used)) / used - (now - readAt) / 1000;
+// (`share` of it passed as of now). Zero or less is already due.
+function hitInOf(limit: (typeof LIMITS)[number], used: number, share: number, target: number): number {
+  return (share * limit.seconds * (target - used)) / used;
 }
 
 // Seconds from now until a limit reaches its target, when that comes before it resets, even if it is already due: the
 // run-out warning's condition. Nothing for a limit without a pace, without a reset still to come, or at 0% or 100%.
-function forecastOf({ limit, found, pace, resetsAtMs, target }: LimitReading, readAt: number, now: number): number | undefined {
+function forecastOf({ limit, found, pace, resetsAtMs, target }: LimitReading, now: number): number | undefined {
   if (!pace || resetsAtMs === undefined || resetsAtMs <= now || found.percentUsed <= 0 || found.percentUsed >= 100) return undefined;
-  const hitIn = hitInOf(limit, found.percentUsed, pace.share, target, readAt, now);
+  const hitIn = hitInOf(limit, found.percentUsed, pace.share, target);
   return hitIn < (resetsAtMs - now) / 1000 ? hitIn : undefined;
 }
 
-// A limit's pace as of the response that reported it: r is the percent used over the share of the window passed times
-// the target, 1 when the use reaches the target just as the window resets. `par` is that product as a share of the
-// allowance, what the target would have used by now; at a target of 100% it is the share passed. Both windows begin at
-// their reset time minus their length, the share counting nights and idle hours alike. None on the run-out warning's
-// terms: no reset time, a stale reading, or too early in the window.
-function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, readAt: number, now: number, target: number): { r: number; share: number; par: number } | undefined {
-  if (!found.resetsAt || now - readAt > FORECAST_FRESH_MS) return undefined;
-  const share = 1 - (Date.parse(found.resetsAt) - readAt) / 1000 / limit.seconds;
-  if (!(share >= FORECAST_FROM)) return undefined;
+// A limit's pace at `now`: r is the percent used over the share of the window passed times the target, 1 when the use
+// reaches the target just as the window resets. `par` is that product as a share of the allowance, what the target would
+// have used by now; at a target of 100% it is the share passed. Both windows begin at their reset time minus their
+// length, the share counting nights and idle hours alike. None without a reset time, with the reset not ahead of now, or
+// with a share passed outside (0, 1]: a window not begun.
+function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, now: number, target: number): { r: number; share: number; par: number } | undefined {
+  if (!found.resetsAt || Date.parse(found.resetsAt) <= now) return undefined;
+  const share = 1 - (Date.parse(found.resetsAt) - now) / 1000 / limit.seconds;
+  if (!(share > 0 && share <= 1)) return undefined;
   // target / 100 first: at 100 that is exactly 1, so the par is exactly the share and the lanes and notch draw as before.
   return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
 }
@@ -1358,7 +1343,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   for (const [tag, badge] of [["limit_7d", "7d"], ["limit_5h", "5h"]] as const) {
     const reading = limitOf(s, badge);
     if (!reading) continue;
-    out[tag] = limitWords(reading, s.readAt, s.now * 1000, { classic: limitStyle === "classic" });
+    out[tag] = limitWords(reading, s.now * 1000, { classic: limitStyle === "classic" });
   }
   const credits = creditsShown(s);
   if (credits) {
@@ -1391,11 +1376,11 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 
 // A limit tag's explanation: its badge and percent used, rounded as the gauge's badge and the run-out warning round it,
 // then one sentence that names the reset by its clock time. Only a run-out is counted as a time from now: it is the target
-// less the percent used, at the rate the window has run at so far, less the seconds since that reading. A run-out already
-// due, possible only within the reading's fresh minutes, runs out "any moment" and the whole time to the reset precedes it.
+// less the percent used, at the rate the window has run at so far. A run-out under a minute from now, or already due, runs
+// out "any moment" and the whole time to the reset precedes it: a countdown would read it as 0m.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
 // The run-out warning asks for the over-pace sentence (`overPace`) on a limit just over its pace too, which a hover reads as on pace.
-function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, readAt: number, now: number, { classic = false, overPace = false } = {}): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: LimitReading, now: number, { classic = false, overPace = false } = {}): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
@@ -1417,25 +1402,24 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, target, bound }: L
     return `${head}: at this 5h pace the 7d still has ~${Math.round(sevenLeft)}% left when the 5h resets at ${reset}.`;
   }
   const left = (until - now) / 1000;
-  const hitIn = hitInOf(limit, found.percentUsed, shownPace.share, target, readAt, now);
-  const runsOut = hitIn > 0 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
+  const hitIn = hitInOf(limit, found.percentUsed, shownPace.share, target);
+  const runsOut = hitIn >= 60 ? `runs out in ${countdown(hitIn)}, ${countdown(left - hitIn)}` : `runs out any moment, ${countdown(left)}`;
   return bound ? `${head}: at this 5h pace the 7d ${runsOut} before the 5h resets at ${reset}.` : `${head}: at this pace it ${runsOut} before it resets at ${reset}.`;
 }
 
 // The run-out warning, for the limit that reaches its target soonest before it resets: the pace is the whole window's so
-// far, idle nights included, so it is the one to plan by, not a burst's. Shown only while the session's reading is fresh.
-// It reads each limit as its tag does, so a refused limit, at 100%, and a paused 5h, with no pace, never warn, and says
-// what the limit's explanation says.
+// far, idle nights included, so it is the one to plan by, not a burst's. It reads each limit as its tag does, so a refused
+// limit, at 100%, and a paused 5h, with no pace, never warn, and says what the limit's explanation says.
 function runOutWarning(ui: Ui, s: Snapshot | undefined) {
   if (!limitForecast || !s) return undefined;
   const now = s.now * 1000;
   const [first] = LIMITS.flatMap(({ badge }) => {
     const reading = limitOf(s, badge);
-    const hitIn = reading && forecastOf(reading, s.readAt, now);
+    const hitIn = reading && forecastOf(reading, now);
     return reading && hitIn !== undefined ? [{ reading, hitIn }] : [];
   }).sort((a, b) => a.hitIn - b.hitIn);
   if (!first) return undefined;
-  return notice(ui, WARN_MARK, color("notice"), [ui.Text({ dimColor: true, children: ` ${limitWords(first.reading, s.readAt, now, { overPace: true })}` })]);
+  return notice(ui, WARN_MARK, color("notice"), [ui.Text({ dimColor: true, children: ` ${limitWords(first.reading, now, { overPace: true })}` })]);
 }
 
 // Whether the person dismissed this offer, and the dismissal still holds: for the rest of the session, or dismissFor ms.
@@ -1570,8 +1554,8 @@ async function measureK($: EngineInterface, rateLimits: StatusLimit[]): Promise<
     await $.state.set(PACE_K, { k, base: reading });
     return;
   }
-  const sample = (reading.p7 - base.p7) / (reading.p5 - base.p5);
-  if (reading.p5 - base.p5 >= K_MIN_RISE && sample > 0) await $.state.set(PACE_K, { k: sample, base });
+  // The division needs a positive 5h rise. A percent used has one decimal, so a small rise gives a noisy sample.
+  if (reading.p5 - base.p5 > 0) await $.state.set(PACE_K, { k: (reading.p7 - base.p7) / (reading.p5 - base.p5), base });
 }
 
 // The token count the context runs to before auto-compaction, as Claude Code settles it: its auto-compaction threshold
