@@ -3978,6 +3978,7 @@ describe("cockpit", () => {
 
   // The limits are read at the start, a reply comes a second later, and the same limits are read again: work went on.
   const afterWorkWentOn = async ($: Engine, on: On, limits: SessionRateLimit[]) => {
+    clockOn(on, NOON);
     stubHint(on);
     answering(on);
     const run = await usedUpTest($, on, limits, clockOn(on).now());
@@ -3986,7 +3987,10 @@ describe("cockpit", () => {
     await run.hear(limits);
     return mountHint($);
   };
-  const dayAt = (days: number, hour: number) => localAt(days, hour);
+  // The tests below name resets by the day: both their dates and the mod's clock are pinned to noon on a fixed local date,
+  // so a run that crosses midnight cannot move "tomorrow".
+  const NOON = new Date(2026, 9, 14, 12).getTime();
+  const dayAt = (days: number, hour: number) => new Date(2026, 9, 14 + days, hour);
   const named = (at: Date, hour: string) => `${WEEKDAYS[at.getDay()]} ${hour}`;
 
   test("explains the 7d at 100% as used up with work going on, without naming credits, when no lookup says so", async ($, on) => {
@@ -4027,6 +4031,7 @@ describe("cockpit", () => {
 
   // The paused 5h at 100% too names the latest reset of the limits at 100%: the 5h's own when it is the latest, and says so.
   test("names the 5h's later reset when the paused 5h at 100% resets after the 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
+    clockOn(on, NOON);
     stubHint(on);
     const fiveResetsAt = dayAt(1, 15);
     await startWithLimits($, on, [sevenResettingAt(100, dayAt(1, 10)), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
@@ -4036,6 +4041,7 @@ describe("cockpit", () => {
   });
 
   test("names the 7d's later reset when the 7d resets after the paused 5h at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    clockOn(on, NOON);
     stubHint(on);
     const sevenResetsAt = dayAt(1, 16);
     await startWithLimits($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: dayAt(1, 10).toISOString() }]);
