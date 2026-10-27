@@ -1,5 +1,5 @@
 import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
-import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test as kitTest, type TestRest } from "claude-code/testing";
+import { describe, type Engine, expect, type FoundElement, type Mounted, type MockClock, mock, test as kitTest, type TestRest } from "claude-code/testing";
 import type { StatusCredits } from "../types";
 
 // The host has a console too, which the API's globals leave out.
@@ -124,10 +124,22 @@ const md = [
   "| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |",
 ].join("\n");
 
+// The clock a test's `on` answers the mod's time from. The kit takes one registration per test, so the first call makes it, at
+// `now` (the real time when not given), and every later call returns that same clock.
+const clocks = new WeakMap<On, MockClock>();
+function clockOn(on: On, now = Date.now()): MockClock {
+  let clock = clocks.get(on);
+  if (!clock) {
+    clock = mock.clock(on, { now });
+    clocks.set(on, clock);
+  }
+  return clock;
+}
 // The status row draws under the prompt, below the engine's hint line, which a test stands in for: before its first
 // call of $, as the kit requires.
 // The band above the prompt draws nothing of its own until the mod's git row has something to show.
 function stubHint(on: On): void {
+  clockOn(on);
   on("ui.render", { component: "PromptHint" }, ($, e) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
   on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
@@ -137,6 +149,7 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 // A session started with these limits. By default the 5h is at 70% with 2 hours to its reset, 3 hours into its 5: at that
 // pace it runs out in 1h17m, 42m before it resets.
 async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[], now = Date.now()): Promise<void> {
+  clockOn(on, now);
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: rateLimits ?? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
   on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -149,7 +162,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   stubHint(on);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
-  const clock = mock.clock(on);
+  const clock = clockOn(on);
   const ran: string[] = [];
   // "5m-held": written for five minutes, yet read back whole after ten idle ones, 57 minutes ago: it outlived its label.
   const written = { ephemeral_5m_input_tokens: ttl === "5m" || ttl === "5m-late" ? 1_000_000 : 0, ephemeral_1h_input_tokens: ttl === "1h" ? 1_000_000 : 0 };
@@ -1333,6 +1346,24 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // One reading, the 7d at 10% resetting 40% of a window after a fixed start, drawn with the clock at two times: at 60% of
+  // the window passed r is 0.17, 83% unused, and at 61% passed, 1h41m later, r is 0.16, 84% unused. The percent used stays
+  // at the reading's 10%, so only the clock moves the pace.
+  const T0 = Date.parse("2026-10-27T12:00:00Z");
+  for (const [clockAt, unused] of [
+    [T0, 83],
+    [T0 + 0.01 * SEVEN_DAYS, 84],
+  ] as const)
+    test(`draws the same 7d reading at the clock's time as ${unused}% unused`, { options: { limit_style: "gauge" } }, async ($, on) => {
+      const resetsAt = new Date(T0 + 0.4 * SEVEN_DAYS);
+      clockOn(on, clockAt);
+      stubHint(on);
+      await startWithLimits($, on, [sevenResettingAt(10, resetsAt)], T0);
+      const ui = await mountHint($);
+      expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 10%: at this pace it resets at ${CLOCK} with ~${unused}% unused\\.$`));
+      await ui.unmount();
+    });
+
   // With half the 7d gone, 52% is r 1.04, within 0.05 of 1, and 53% is r 1.06, just past it.
   for (const [title, used, shown, hidden] of [
     ["explains a limit within 0.05 of its pace as reaching its target as it resets", 52, /reaches its target as it resets/, /runs out|unused/],
@@ -1433,6 +1464,21 @@ describe("cockpit", () => {
     ]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this 5h pace the 7d still has ~3% left when the 5h resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // k 0.1 from the first two readings. The third has the 5h 15 points above the window's first 10%, and the 7d 2 points below
+  // its first 40%: a sample of -2 / 15 would make k negative, and the 5h's target below its use. No sample is taken, so k
+  // stays 0.1, the target stays 100%, and at 60% of the window 25% is ~58% unused.
+  test("leaves k unchanged by a 7d drop during a 5h rise", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    await fedReadings($, on, [
+      [10, 2 * HOUR, 40, DAYS_3],
+      [25, 2 * HOUR, 41.5, DAYS_3],
+      [25, 2 * HOUR, 38, DAYS_3],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toContain("~58% unused");
     await ui.unmount();
   });
 
@@ -1812,7 +1858,7 @@ describe("cockpit", () => {
     // The session's first request had a 20,000-token prompt; its last, two hours ago, wrote 1,000,000 for an hour: cold,
     // and $8.00 to write again on Opus 5.5. The 0900 file is from before this session started, the 1200 one (40,000
     // bytes, about 10,000 tokens) after: fresh from it is 30,000 tokens at the same rate, $0.24.
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     const written = (tokens: number) => ({ input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: tokens } });
     const row = (id: string, minutesAgo: number, tokens: number) =>
       JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
@@ -1895,7 +1941,7 @@ describe("cockpit", () => {
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     const ran: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
@@ -1948,7 +1994,7 @@ describe("cockpit", () => {
   // A session nearly out of its smart zone, its compaction offer drawn; `offer` finds the offer's button.
   const offered = async ($: Engine, on: On) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2035,7 +2081,7 @@ describe("cockpit", () => {
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2078,7 +2124,7 @@ describe("cockpit", () => {
   ] as const)
   test(title, { options }, async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     const ran: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
@@ -2378,7 +2424,7 @@ describe("cockpit", () => {
   // While the order pane shows, a part with nothing to show draws a made-up value, so it can be placed.
   test("draws every git part while the order pane shows, and only what there is once it closes", async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
         "/r/cc-mods/.git\n/r/cc-mods/.git\n/r/cc-mods\ntrunk\n",
@@ -2419,7 +2465,7 @@ describe("cockpit", () => {
 
   test("draws every status tag while the order pane shows, and an offer that does not hold as a dim line naming it", async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2455,7 +2501,7 @@ describe("cockpit", () => {
   // No response has come in this session: the samples' resets are set from now, so the pace shows with no reading at all.
   test("draws the 5h sample's pace on a gauge while the order pane shows", { options: { limit_style: "gauge" } }, async ($, on) => {
     stubHint(on);
-    mock.clock(on);
+    clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2471,7 +2517,7 @@ describe("cockpit", () => {
   // A /clear fires no session.start; the mod's hook on the command starts the readings and the tick over.
   test("draws the status row in a session a /clear started", async ($, on) => {
     stubHint(on);
-    mock.clock(on);
+    clockOn(on);
     on("command.run", () => ({ text: "" }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2485,7 +2531,7 @@ describe("cockpit", () => {
 
   test("draws the branch's pull request from gh: number, draft, review, comments, conflict and checks", async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     // Checks: one passed, one failed, one running, one commit status passed.
     const pr = {
       number: 42,
@@ -2578,7 +2624,7 @@ describe("cockpit", () => {
   for (const { name, colour, state, draft, shown, hidden, checks } of prStates) {
     test(`draws ${name} pull request's number whole in ${colour}, with${checks ? "" : "out"} its glyphs`, async ($, on) => {
       stubHint(on);
-      mock.clock(on);
+      clockOn(on);
       const pr = {
         number: 7,
         url: "https://github.com/o/r/pull/7",
@@ -2641,7 +2687,7 @@ describe("cockpit", () => {
   ] as { name: string; status: string; calls: number; options?: Record<string, string> }[]) {
     test(`asks gh ${calls} times in 12 s for ${name}`, { options }, async ($, on) => {
       stubHint(on);
-      const clock = mock.clock(on);
+      const clock = clockOn(on);
       const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
       const out: Record<string, string> = {
         "git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -2696,33 +2742,33 @@ describe("cockpit", () => {
   const RATES: [number, string][] = [[7_000, "1.0K"], [700, "100"], [14_500 * 1_000, "2.07M"], [7_000_000, "1.00M"], [6_999, "999"]];
   for (const [tokens, rate] of RATES) {
     test(`draws ${rate} tok/s in the closing line for ${tokens} output tokens over 7 s`, async ($, on) => {
-      mock.clock(on);
+      clockOn(on);
       const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(tokens) });
       expect(drawn).toBe(`Cooked at ${rate} tok/s for 7s`);
     });
   }
 
   test("counts only the output tokens: the input, the cache read and the cache write are not tokens generated", async ($, on) => {
-    mock.clock(on);
+    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(350, 1_000_000) });
     expect(drawn).toBe("Cooked at 50 tok/s for 7s");
   });
 
   test("draws no rate when the person turned turn_rate off", { options: { turn_rate: false } }, async ($, on) => {
-    mock.clock(on);
+    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(7_000) });
     expect(drawn).toBe("Cooked for 7s");
   });
 
   test("gives a closing line of another length none: it is an older turn's", async ($, on) => {
-    mock.clock(on);
+    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 30_000 }, { durationMs: 7_000, usage: used(7_000) });
     expect(drawn).toBe("Cooked for 7s");
   });
 
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     let branch = "feat-a";
     let used = 0;
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -2813,7 +2859,7 @@ describe("cockpit", () => {
   test("colours the model by family, Mythos bold", async ($, on) => {
     stubHint(on);
     // A held clock draws no frames, so the sweep stays at its start: a name's first glyph shows its window's first colour.
-    mock.clock(on);
+    clockOn(on);
     let model = "";
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -2840,7 +2886,7 @@ describe("cockpit", () => {
 
   test("shows a model switch within a frame, before any turn ends", async ($, on) => {
     stubHint(on);
-    const clock = mock.clock(on);
+    const clock = clockOn(on);
     let model = "claude-haiku-5-5";
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -3338,7 +3384,7 @@ describe("cockpit", () => {
   const lookupWorld = (on: On, { auth = { handle: "handle-1", kind: "bearer" }, usage = () => ({ status: 200, text: extraUsage() }), profile = () => ({ status: 200, text: JSON.stringify({ organization: { subscription_created_at: "2024-07-17T23:34:49Z" } }) }) }: { auth?: Auth; usage?: () => Answer; profile?: () => Answer } = {}) => {
     const asked: { url: string; auth?: string; beta?: string }[] = [];
     // The mod times its lookups by the engine's clock, which a test moves.
-    const clock = mock.clock(on, { now: 5_000_000 });
+    const clock = clockOn(on);
     on("session.authorize", () => ({ value: auth }));
     on("http.fetch", (_$, e) => {
       if (!e.url.startsWith("https://api.anthropic.com/")) return { value: { status: 200, ok: true, headers: {}, text: md } };
@@ -3406,11 +3452,11 @@ describe("cockpit", () => {
       stubHint(on);
       on("turn.complete", (_$, e) => ({ text: e.answer }));
       const kept = creditsKept(on);
-      const { asked } = lookupWorld(on, { usage: () => ({ status: 200, text: extraUsage({ spend_limit_reached: true, disabled_reason: "out_of_credits" }) }) });
+      const { asked, clock } = lookupWorld(on, { usage: () => ({ status: 200, text: extraUsage({ spend_limit_reached: true, disabled_reason: "out_of_credits" }) }) });
       await startWithLimits($, on, limits());
       await endTurn($, () => kept.length > 0);
       expect(asked.filter((r) => r.url === USAGE_URL)).toHaveLength(1);
-      expect(kept).toEqual([{ at: 5_000_000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: true, reason: "out_of_credits" }]);
+      expect(kept).toEqual([{ at: clock.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: true, reason: "out_of_credits" }]);
     });
 
   test("calls no endpoint at the end of a turn with neither the 5h nor the 7d at 100%", { options: { usage_lookup: true } }, async ($, on) => {
@@ -3457,7 +3503,7 @@ describe("cockpit", () => {
   // every tag and explanation reads as it did before the option.
   test("never mentions the usage_lookup option outside /config", async ($, on) => {
     stubHint(on);
-    mock.clock(on);
+    clockOn(on);
     on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: Date.now() + 3_600_000 }, version: 1 } }));
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
@@ -3487,7 +3533,7 @@ describe("cockpit", () => {
 
   test("draws a sample credits tag while the order pane shows and no credits state exists", async ($, on) => {
     stubHint(on);
-    mock.clock(on);
+    clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -3621,16 +3667,17 @@ describe("cockpit", () => {
       paced.push(e.value);
       return next(e);
     });
-    const { asked } = lookupWorld(on, { usage: () => ({ status: 500, text: "" }) });
+    const { asked, clock } = lookupWorld(on, { usage: () => ({ status: 500, text: "" }) });
     await startWithLimits($, on, sevenUsedUp());
     await endTurn($, () => asked.length >= 1);
-    expect(paced.at(-1)).toEqual({ notBefore: 5_000_000 + MINUTE, failures: 1 });
+    expect(paced.at(-1)).toEqual({ notBefore: clock.now() + MINUTE, failures: 1 });
   });
 
   test("makes no lookup within the wait a reloaded module finds in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
     stubHint(on);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
-    on("state.get", PACE, () => ({ value: { value: { notBefore: 5_000_000 + 30_000, failures: 0 }, version: 1 } }));
+    const notBefore = clockOn(on).now() + 30_000;
+    on("state.get", PACE, () => ({ value: { value: { notBefore, failures: 0 }, version: 1 } }));
     const { asked, clock } = lookupWorld(on);
     await startWithLimits($, on, sevenUsedUp());
     await endTurn($);
@@ -3643,7 +3690,7 @@ describe("cockpit", () => {
   // A session whose state already holds a lookup's credits, and the billing day; its limits are what the test starts with.
   const creditsOf = (extra: Partial<StatusCredits> = {}): StatusCredits => ({ at: Date.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null, ...extra });
   const holding = (on: On, credits: StatusCredits, billing?: number, rejected?: Record<string, number>) => {
-    mock.clock(on, { now: Date.now() });
+    clockOn(on);
     on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
     if (billing !== undefined) on("state.get", { plugin: "cockpit", key: "billing" }, () => ({ value: { value: billing, version: 1 } }));
     if (rejected) on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: rejected, version: 1 } }));

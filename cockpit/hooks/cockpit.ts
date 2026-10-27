@@ -1004,7 +1004,7 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: credits } = await $.state.get(CREDITS);
   const { value: billing } = await $.state.get(BILLING);
   const { value: { k } = {} } = await $.state.get(PACE_K);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, now: Math.floor(Date.now() / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -1554,8 +1554,10 @@ async function measureK($: EngineInterface, rateLimits: StatusLimit[]): Promise<
     await $.state.set(PACE_K, { k, base: reading });
     return;
   }
-  // The division needs a positive 5h rise. A percent used has one decimal, so a small rise gives a noisy sample.
-  if (reading.p5 - base.p5 > 0) await $.state.set(PACE_K, { k: (reading.p7 - base.p7) / (reading.p5 - base.p5), base });
+  // The division needs a positive 5h rise. A percent used has one decimal, so a small rise gives a noisy sample. A negative
+  // sample, the 7d down from its base, would make k negative, which turns the 5h target below its use.
+  const sample = (reading.p7 - base.p7) / (reading.p5 - base.p5);
+  if (reading.p5 - base.p5 > 0 && sample > 0) await $.state.set(PACE_K, { k: sample, base });
 }
 
 // The token count the context runs to before auto-compaction, as Claude Code settles it: its auto-compaction threshold
