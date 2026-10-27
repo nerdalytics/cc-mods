@@ -3543,12 +3543,12 @@ describe("cockpit", () => {
   // failure in a row to an hour; a success ends the wait.
   const MINUTE = 60_000;
   // Turns end `gaps` apart (ms), the first at once; each answers the way `answers` has it, the last one repeating.
-  const turnsAt = async ($: Engine, on: On, gaps: number[], answers: ("ok" | "fail")[], usedUp = sevenUsedUp()) => {
+  const turnsAt = async ($: Engine, on: On, gaps: number[], answers: ("ok" | "fail")[], { profileFails = false } = {}) => {
     stubHint(on);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     let turn = 0;
-    const { asked, clock } = lookupWorld(on, { usage: () => (answers[Math.min(turn, answers.length - 1)] === "ok" ? { status: 200, text: extraUsage() } : { status: 500, text: "" }) });
-    await startWithLimits($, on, usedUp);
+    const { asked, clock } = lookupWorld(on, { usage: () => (answers[Math.min(turn, answers.length - 1)] === "ok" ? { status: 200, text: extraUsage() } : { status: 500, text: "" }), ...(profileFails ? { profile: () => ({ status: 500, text: "" }) } : {}) });
+    await startWithLimits($, on, sevenUsedUp());
     const calls: number[] = [];
     for (const gap of gaps) {
       await clock.advance(gap);
@@ -3583,6 +3583,41 @@ describe("cockpit", () => {
     // Fail at 0, fail at 1 min (a 2 min wait), succeed at 3 min, fail at 4 min (a 1 min wait again, not 4), then call at 5 min.
     const gaps = [0, MINUTE, 2 * MINUTE, MINUTE, MINUTE - 100, 100];
     expect((await turnsAt($, on, gaps, ["fail", "fail", "ok", "fail", "fail", "fail"])).calls).toEqual([0, 1, 2, 3, 5]);
+  });
+
+  test("ends the wait at a usage success even when the profile call then fails: the next wait is a minute", { options: { usage_lookup: true } }, async ($, on) => {
+    // Fail at 0, then a usage success at 1 min whose profile call fails: a 1 min wait, not the 2 min of a second failure in a row.
+    const { calls } = await turnsAt($, on, [0, MINUTE, MINUTE], ["fail", "ok", "ok"], { profileFails: true });
+    expect(calls).toEqual([0, 1, 2]);
+  });
+
+  // The pacing is the session's state, so a reload of the module keeps it. The test's clock starts at 5,000,000 ms.
+  const PACE = { plugin: "cockpit", key: "lookupPace" } as const;
+  test("keeps the lookup pacing in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const paced: unknown[] = [];
+    on("state.set", PACE, ($, e, next) => {
+      paced.push(e.value);
+      return next(e);
+    });
+    const { asked } = lookupWorld(on, { usage: () => ({ status: 500, text: "" }) });
+    await startWithLimits($, on, sevenUsedUp());
+    await endTurn($, () => asked.length >= 1);
+    expect(paced.at(-1)).toEqual({ notBefore: 5_000_000 + MINUTE, failures: 1 });
+  });
+
+  test("makes no lookup within the wait a reloaded module finds in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    on("state.get", PACE, () => ({ value: { value: { notBefore: 5_000_000 + 30_000, failures: 0 }, version: 1 } }));
+    const { asked, clock } = lookupWorld(on);
+    await startWithLimits($, on, sevenUsedUp());
+    await endTurn($);
+    expect(asked).toEqual([]);
+    await clock.advance(30_000);
+    await endTurn($, () => asked.length >= 1);
+    expect(asked[0]?.url).toBe(USAGE_URL);
   });
 
   // A session whose state already holds a lookup's credits, and the billing day; its limits are what the test starts with.
@@ -3641,7 +3676,7 @@ describe("cockpit", () => {
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
     expect((await creditsTag(ui))?.badge).toBe(" CHF ");
-    expect(await explanationOf(ui, "credits")).toMatch(/^CHF at 67%: CHF ?10\.11 of CHF ?15\.00 spent/);
+    expect(await explanationOf(ui, "credits")).toBe("CHF at 67%: CHF 10.11 of CHF 15.00 spent.");
     await ui.unmount();
   });
 

@@ -144,7 +144,7 @@
     "usage_lookup": {
       "type": "boolean",
       "title": "Cockpit: Usage credits › look up",
-      "description": "Lets the credits tag look up your usage credits. At the end of a turn, while the 5h or 7d limit reads 100%, cockpit asks Claude Code to attach its own login credential to two requests, which go only to api.anthropic.com: /api/oauth/usage and /api/oauth/profile. The credential is Claude Code's own: cockpit never sees, shows, logs or stores it. From the usage response it reads only the extra usage figures (whether it is on, the credits spent, the monthly cap, the currency). From the profile it reads only the date your subscription started, for the billing day. Anthropic's API reference does not list these two endpoints, so they can change without notice. The credits tag uses this, and the Fable weekly limit will later. Off by default. true / false (default)",
+      "description": "Lets the credits tag look up your usage credits. At the end of a turn, while the 5h or 7d limit reads 100%, cockpit asks Claude Code to attach its own login credential to two requests, which go only to api.anthropic.com: /api/oauth/usage and /api/oauth/profile. The credential is Claude Code's own: cockpit never sees, shows, logs or stores it. From the usage response it reads only the extra usage fields: is_enabled, used_credits, monthly_limit, decimal_places, currency, spend_limit_reached and disabled_reason. From the profile it reads only the date your subscription started, for the billing day. Anthropic's API reference does not list these two endpoints, so they can change without notice. The credits tag uses this, and the Fable weekly limit will later. Off by default. true / false (default)",
       "default": false
     }
   }

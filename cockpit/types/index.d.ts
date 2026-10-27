@@ -90,6 +90,8 @@ declare module "claude-code" {
       // The latest usage lookup's extra_usage, and the billing day: the day of the month, in UTC, of the account's subscription start.
       credits: StatusCredits;
       billing: number;
+      // The usage lookup's pacing, kept so a reload of the module keeps it: the time (ms) before which no lookup runs, and the failures in a row so far.
+      lookupPace: { notBefore: number; failures: number };
     };
   }
 }

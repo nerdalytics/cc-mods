@@ -64,7 +64,7 @@ const SEGMENTS = {
       .filter((r) => !LIMITS.some((l) => l.kind === r.kind))
       .map((r) => ui.Text({ children: `${r.kind} ${r.percentUsed}%` })),
   ],
-  credits: (ui, s) => creditsSegment(ui, s),
+  credits: creditsSegment,
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
   // The main conversation's costs, and its subagents' as a tag of their own; merged, both in the first.
@@ -152,7 +152,7 @@ function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
     const rgb = hex(i < lit ? spent : color("empty"));
     return Text({ color: rgb, backgroundColor: rgb, children: "▀" });
   });
-  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${CURRENCY_SYMBOLS[credits.currency] ?? credits.currency} ` });
+  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${badgeOf(credits)} ` });
   return [Box({ key: "credits", flexDirection: "row", hover: { scope: explainScope("credits") }, children: [badge, ...bar] })];
 }
 
@@ -161,6 +161,9 @@ const creditsShare = ({ spent, cap }: StatusCredits) => (cap > 0 ? (spent * 100)
 
 // The currencies with a symbol; any other shows its code.
 const CURRENCY_SYMBOLS: Record<string, string> = { EUR: "€", USD: "$", GBP: "£" };
+
+// The tag's badge: the currency's symbol, or its code where there is none.
+const badgeOf = ({ currency }: StatusCredits) => CURRENCY_SYMBOLS[currency] ?? currency;
 
 // An amount from the lookup, in minor units: `€10.11`, or `CHF 10.11` where the currency has no symbol.
 function amountOf(minor: number, { decimals, currency }: StatusCredits): string {
@@ -171,9 +174,8 @@ function amountOf(minor: number, { decimals, currency }: StatusCredits): string 
 // The credits tag's explanation: its badge and the share spent, rounded, the amounts against the cap, and when the cap
 // resets, as a date and a clock, when that is known.
 function creditsWords(credits: StatusCredits, resetsAtMs: number | undefined): string {
-  const badge = CURRENCY_SYMBOLS[credits.currency] ?? credits.currency;
   const spent = `${amountOf(credits.spent, credits)} of ${amountOf(credits.cap, credits)} spent`;
-  return `${badge} at ${Math.round(creditsShare(credits))}%: ${spent}${resetsAtMs === undefined ? "" : `, it resets on ${dateClock(resetsAtMs)}`}.`;
+  return `${badgeOf(credits)} at ${Math.round(creditsShare(credits))}%: ${spent}${resetsAtMs === undefined ? "" : `, it resets on ${dateClock(resetsAtMs)}`}.`;
 }
 
 // When the credit cap next resets: the next billing day at the 7d reading's local time of day, as nothing reports the
@@ -396,6 +398,7 @@ const PR = { plugin: "cockpit", key: "pr" } as const;
 const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
 const CREDITS = { plugin: "cockpit", key: "credits" } as const;
 const BILLING = { plugin: "cockpit", key: "billing" } as const;
+const LOOKUP_PACE = { plugin: "cockpit", key: "lookupPace" } as const;
 const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
 const TICK = { plugin: "cockpit", key: "tick" } as const;
 const LOAD = { plugin: "cockpit", key: "load" } as const;
@@ -666,11 +669,9 @@ let explainRow = false;
 // The usage_lookup option: the credits tag's calls to Anthropic's usage and profile endpoints, off unless the person allows them.
 let usageLookup = false;
 // The lookup pacing: one lookup a minute at most, a wait after a failed one that doubles with each failure in a row. The
-// time before which none runs, by the engine's clock, and the failures in a row so far; a session's start clears both.
+// time before which none runs, by the engine's clock, and the failures in a row so far are the session's state, LOOKUP_PACE.
 const LOOKUP_GAP_MS = 60_000;
 const LOOKUP_WAIT_MAX_MS = 3_600_000;
-let lookupNotBefore = 0;
-let lookupFailures = 0;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
 
@@ -1516,8 +1517,6 @@ async function startSession($: EngineInterface): Promise<void> {
   phase = 0;
   frames = 0;
   prFor = undefined;
-  lookupNotBefore = 0;
-  lookupFailures = 0;
   // A copy of this module loaded before a /reload-plugins kept its tick running in the same session, and wrote its
   // own (older) state shapes over this one's. The latest load stands in the state: an older copy's tick stops itself.
   const load = Date.now() + Math.random();
@@ -1642,12 +1641,14 @@ async function lookupCredits($: EngineInterface): Promise<void> {
   // No first-party login, or a key rather than a login: no request.
   if (auth?.kind !== "bearer") return;
   const now = await $.clock.now();
-  if (now < lookupNotBefore) return;
-  lookupNotBefore = now + LOOKUP_GAP_MS;
+  const { value: pace = { notBefore: 0, failures: 0 } } = await $.state.get(LOOKUP_PACE);
+  if (now < pace.notBefore) return;
+  let failures = pace.failures;
+  await $.state.set(LOOKUP_PACE, { notBefore: now + LOOKUP_GAP_MS, failures });
   // A failed call of either endpoint waits a minute, and each further one in a row twice as long as the last, up to an hour.
-  const failed = () => {
-    lookupFailures++;
-    lookupNotBefore = now + Math.min(LOOKUP_GAP_MS * 2 ** (lookupFailures - 1), LOOKUP_WAIT_MAX_MS);
+  const failed = async () => {
+    failures++;
+    await $.state.set(LOOKUP_PACE, { notBefore: now + Math.min(LOOKUP_GAP_MS * 2 ** (failures - 1), LOOKUP_WAIT_MAX_MS), failures });
   };
   const get = async (path: string): Promise<unknown> => {
     try {
@@ -1661,13 +1662,14 @@ async function lookupCredits($: EngineInterface): Promise<void> {
   const credits = parseCredits(await get("/api/oauth/usage"), now);
   if (!credits) return failed();
   await $.state.set(CREDITS, credits);
+  // A successful call ends the wait, so a profile call that fails after it starts the waits over at a minute.
+  failures = 0;
+  await $.state.set(LOOKUP_PACE, { notBefore: now + LOOKUP_GAP_MS, failures });
   const { value: known } = await $.state.get(BILLING);
-  if (known === undefined) {
-    const day = billingDayOf(await get("/api/oauth/profile"));
-    if (day === undefined) return failed();
-    await $.state.set(BILLING, day);
-  }
-  lookupFailures = 0;
+  if (known !== undefined) return;
+  const day = billingDayOf(await get("/api/oauth/profile"));
+  if (day === undefined) return failed();
+  await $.state.set(BILLING, day);
 }
 
 // A 5h or 7d window at 100%, a refusal that has not reset included.
