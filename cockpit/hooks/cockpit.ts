@@ -1,6 +1,6 @@
 // Much of this ports statusline.zsh, the shell status line it replaces: https://github.com/nerdalytics/claude-statusline
 import type { Elements, EngineInterface, Register } from "claude-code";
-import type { StatusCache, StatusGit, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
+import type { StatusCache, StatusCredits, StatusGit, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
 
 type Ui = Elements["terminal"];
 
@@ -36,6 +36,11 @@ type Snapshot = {
   git?: StatusGit;
   pr?: StatusPr | null;
   rejected?: Record<string, number>;
+  // The latest usage lookup, and the billing day it and the profile gave.
+  credits?: StatusCredits;
+  billing?: number;
+  // The order pane's made-up values stand in for the readings: the credits tag draws whatever the limits say.
+  sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
   k?: number;
   // When this session's last response came, in ms: the limits' reading is as of then.
@@ -59,6 +64,7 @@ const SEGMENTS = {
       .filter((r) => !LIMITS.some((l) => l.kind === r.kind))
       .map((r) => ui.Text({ children: `${r.kind} ${r.percentUsed}%` })),
   ],
+  credits: (ui, s) => creditsSegment(ui, s),
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
   turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
   // The main conversation's costs, and its subagents' as a tag of their own; merged, both in the first.
@@ -130,6 +136,56 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   return [Box({ key: limit.kind, flexDirection: "row", hover: { scope: explainScope(`limit_${limit.badge}`) }, children })];
 }
 
+// The lookup's credits while the tag draws: extra usage enabled and a limit window at 100%, the usage_lookup option on.
+function creditsShown(s: Snapshot): StatusCredits | undefined {
+  return s.sampled || (usageLookup && s.credits?.enabled && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000)) ? s.credits : undefined;
+}
+
+// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent as cells in
+// the 7d bar's length. Classic's form, with no pace: a spent cell lights both halves of its ▀, the rest are empty.
+function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
+  const credits = creditsShown(s);
+  if (!credits) return [];
+  const spent = color("credits.spent");
+  const lit = cells(creditsShare(credits), barCells["7d"]);
+  const bar = [...Array(barCells["7d"]).keys()].map((i) => {
+    const rgb = hex(i < lit ? spent : color("empty"));
+    return Text({ color: rgb, backgroundColor: rgb, children: "▀" });
+  });
+  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${CURRENCY_SYMBOLS[credits.currency] ?? credits.currency} ` });
+  return [Box({ key: "credits", flexDirection: "row", hover: { scope: explainScope("credits") }, children: [badge, ...bar] })];
+}
+
+// The share of the cap spent, in percent; none of it with no cap.
+const creditsShare = ({ spent, cap }: StatusCredits) => (cap > 0 ? (spent * 100) / cap : 0);
+
+// The currencies with a symbol; any other shows its code.
+const CURRENCY_SYMBOLS: Record<string, string> = { EUR: "€", USD: "$", GBP: "£" };
+
+// An amount from the lookup, in minor units: `€10.11`, or `CHF 10.11` where the currency has no symbol.
+function amountOf(minor: number, { decimals, currency }: StatusCredits): string {
+  const symbol = CURRENCY_SYMBOLS[currency];
+  return `${symbol ?? `${currency} `}${(minor / 10 ** decimals).toFixed(decimals)}`;
+}
+
+// The credits tag's explanation: its badge and the share spent, rounded, the amounts against the cap, and when the cap
+// resets, as a date and a clock, when that is known.
+function creditsWords(credits: StatusCredits, resetsAtMs: number | undefined): string {
+  const badge = CURRENCY_SYMBOLS[credits.currency] ?? credits.currency;
+  const spent = `${amountOf(credits.spent, credits)} of ${amountOf(credits.cap, credits)} spent`;
+  return `${badge} at ${Math.round(creditsShare(credits))}%: ${spent}${resetsAtMs === undefined ? "" : `, it resets on ${dateClock(resetsAtMs)}`}.`;
+}
+
+// When the credit cap next resets: the next billing day at the 7d reading's local time of day, as nothing reports the
+// cap's own. A month shorter than the billing day ends on its last day. None without a billing day or a 7d reset time.
+function creditsReset(billing: number | undefined, seven: StatusLimit | undefined, nowMs: number): number | undefined {
+  const time = seven?.resetsAt ? new Date(seven.resetsAt) : undefined;
+  if (billing === undefined || time === undefined || Number.isNaN(time.getTime())) return undefined;
+  const today = new Date(nowMs);
+  const reset = (month: number) => new Date(today.getFullYear(), today.getMonth() + month, Math.min(billing, new Date(today.getFullYear(), today.getMonth() + month + 1, 0).getDate()), time.getHours(), time.getMinutes()).getTime();
+  return reset(0) > nowMs ? reset(0) : reset(1);
+}
+
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
 // the explanation line, which its /config toggle switches on. Lines before `prompt` draw above the prompt, the rest under it below the engine's
 // hint line. A row holds any tags, the git ones and the status ones alike; the tags after a `hidden` line are off.
@@ -145,7 +201,7 @@ type Gap = (typeof GAPS)[number];
 const isGap = (name: string): name is Gap => GAPS.some((gap) => gap === name);
 type Filler = Spacer | Gap;
 const isFiller = (name: string): name is Filler => isSpacer(name) || isGap(name);
-const STATUS_ROW = ["model", "limit_7d", "limit_5h", "context", "turns", "tokens", "agents", "cache"] as const;
+const STATUS_ROW = ["model", "limit_7d", "limit_5h", "credits", "context", "turns", "tokens", "agents", "cache"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
@@ -219,6 +275,7 @@ const LABELS: Record<string, string> = {
   model: "model",
   limit_7d: "7d limit",
   limit_5h: "5h limit",
+  credits: "usage credits",
   context: "context",
   turns: "turns",
   tokens: "main session costs",
@@ -337,6 +394,8 @@ const READ = { plugin: "cockpit", key: "readAt" } as const;
 const GIT = { plugin: "cockpit", key: "git" } as const;
 const PR = { plugin: "cockpit", key: "pr" } as const;
 const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
+const CREDITS = { plugin: "cockpit", key: "credits" } as const;
+const BILLING = { plugin: "cockpit", key: "billing" } as const;
 const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
 const TICK = { plugin: "cockpit", key: "tick" } as const;
 const LOAD = { plugin: "cockpit", key: "load" } as const;
@@ -433,6 +492,8 @@ const COLORS = {
   "pace.severe": { group: "", label: "lanes: the time lane, when more cells are over pace than the token lane holds", rgb: [153, 27, 27] },
   "pace.par": { group: "", label: "the gauge's pipe and the notch", rgb: [229, 231, 235] },
   "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe, the lanes and the notch's usage", rgb: [107, 114, 128] },
+  // The credits tag's spent cells, a muted rose apart from the amber-to-red over-pace ramp; its badge sits on it.
+  "credits.spent": { group: "Usage credits bar and badge", label: "the usage credits spent", rgb: [184, 122, 140] },
   // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
   // as a band of its own.
   "context.low": { group: "Context bar and badge", label: "plenty left", rgb: [34, 197, 94] },
@@ -602,6 +663,14 @@ let mergeCosts = false;
 let limitForecast = false;
 // The explain_row option: the explanation line, where hovering a tag shows its explanation.
 let explainRow = false;
+// The usage_lookup option: the credits tag's calls to Anthropic's usage and profile endpoints, off unless the person allows them.
+let usageLookup = false;
+// The lookup pacing: one lookup a minute at most, a wait after a failed one that doubles with each failure in a row. The
+// time before which none runs, by the engine's clock, and the failures in a row so far; a session's start clears both.
+const LOOKUP_GAP_MS = 60_000;
+const LOOKUP_WAIT_MAX_MS = 3_600_000;
+let lookupNotBefore = 0;
+let lookupFailures = 0;
 let lastTurn: { tokens: number; durationMs: number; at: number } | undefined;
 const turnRates = new Map<string, string>();
 
@@ -617,6 +686,7 @@ export const register: Register = (on, options) => {
   mergeCosts = options.merge_costs === true;
   limitForecast = options.limit_forecast === true;
   explainRow = options.explain_row === true;
+  usageLookup = options.usage_lookup === true;
   // Each line on its side of the prompt, an offer only while its toggle is on.
   layout = layoutOf(options.layout);
   const shown = (line: Line) => options[LINE_TOGGLES[line]] === true;
@@ -808,7 +878,10 @@ export const register: Register = (on, options) => {
       // The closing line may have drawn before this event: draw it again, now its tokens are known.
       $.ui.invalidate("ui.render");
     }
-    if (!e.agentId) await refresh($);
+    if (!e.agentId) {
+      await refresh($);
+      refreshCredits($);
+    }
     // A subagent's turn ends too, so its tokens and its edits show while the main turn still runs.
     refreshTokens($);
     refreshGit($);
@@ -940,9 +1013,11 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: git } = await $.state.get(GIT);
   const { value: pr } = await $.state.get(PR);
   const { value: rejected } = await $.state.get(REJECTED);
+  const { value: credits } = await $.state.get(CREDITS);
+  const { value: billing } = await $.state.get(BILLING);
   const { value: readAt = 0 } = await $.state.get(READ);
   const { value: { k } = {} } = await $.state.get(PACE_K);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, k, readAt, now: Math.floor(Date.now() / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, readAt, now: Math.floor(Date.now() / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -964,6 +1039,8 @@ function withSamples(s: Snapshot): Snapshot {
   const checked = pr.checks.pending + pr.checks.failure + pr.checks.success > 0;
   return {
     ...s,
+    sampled: true,
+    credits: s.credits?.enabled ? s.credits : { at: s.now * 1000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null },
     readAt: s.now * 1000,
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
@@ -1282,6 +1359,11 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     if (!reading) continue;
     out[tag] = limitWords(reading, s.readAt, s.now * 1000, { classic: limitStyle === "classic" });
   }
+  const credits = creditsShown(s);
+  if (credits) {
+    const seven = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === "seven_day");
+    out.credits = creditsWords(credits, creditsReset(s.billing, seven, s.now * 1000));
+  }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
     out.context = `Context: ${formatTokens(usable - context.tokens)} tokens left of ${formatTokens(usable)}.`;
@@ -1434,6 +1516,8 @@ async function startSession($: EngineInterface): Promise<void> {
   phase = 0;
   frames = 0;
   prFor = undefined;
+  lookupNotBefore = 0;
+  lookupFailures = 0;
   // A copy of this module loaded before a /reload-plugins kept its tick running in the same session, and wrote its
   // own (older) state shapes over this one's. The latest load stands in the state: an older copy's tick stops itself.
   const load = Date.now() + Math.random();
@@ -1539,6 +1623,83 @@ function traceHandoff($: EngineInterface, msg: string): void {
   if (msg === lastHandoffTrace) return;
   lastHandoffTrace = msg;
   void $.state.get(HANDOFF_TRACE).then(({ value = [] }) => $.state.set(HANDOFF_TRACE, [...value, `${new Date().toTimeString().slice(0, 8)} ${msg}`].slice(-200)));
+}
+
+// The usage lookup at a main turn's end: Anthropic's usage and account profile endpoints, called with the session's own
+// credential, which the engine holds and attaches: the mod only ever has the handle `authorize` answers.
+const ANTHROPIC_API = "https://api.anthropic.com";
+function refreshCredits($: EngineInterface): void {
+  if (usageLookup) serial("credits", () => lookupCredits($));
+}
+
+// Looks up the usage endpoint while the 5h or the 7d reads 100%, and the profile endpoint until one call answers. An
+// answer the mod cannot read leaves the credits as they were.
+async function lookupCredits($: EngineInterface): Promise<void> {
+  const { value: usage } = await $.state.get(USAGE);
+  const { value: rejected } = await $.state.get(REJECTED);
+  if (!usage || !windowUsedUp(usage.rateLimits, rejected, Date.now())) return;
+  const auth = await $.session.authorize();
+  // No first-party login, or a key rather than a login: no request.
+  if (auth?.kind !== "bearer") return;
+  const now = await $.clock.now();
+  if (now < lookupNotBefore) return;
+  lookupNotBefore = now + LOOKUP_GAP_MS;
+  // A failed call of either endpoint waits a minute, and each further one in a row twice as long as the last, up to an hour.
+  const failed = () => {
+    lookupFailures++;
+    lookupNotBefore = now + Math.min(LOOKUP_GAP_MS * 2 ** (lookupFailures - 1), LOOKUP_WAIT_MAX_MS);
+  };
+  const get = async (path: string): Promise<unknown> => {
+    try {
+      const res = await $.http.fetch(`${ANTHROPIC_API}${path}`, { auth: auth.handle, headers: { "anthropic-beta": "oauth-2025-04-20" } });
+      return res.ok ? parseJson(res.text) : undefined;
+    } catch {
+      // A request that errors or is refused (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC refuses one that carries auth) is a failed lookup, not an error in the row.
+      return undefined;
+    }
+  };
+  const credits = parseCredits(await get("/api/oauth/usage"), now);
+  if (!credits) return failed();
+  await $.state.set(CREDITS, credits);
+  const { value: known } = await $.state.get(BILLING);
+  if (known === undefined) {
+    const day = billingDayOf(await get("/api/oauth/profile"));
+    if (day === undefined) return failed();
+    await $.state.set(BILLING, day);
+  }
+  lookupFailures = 0;
+}
+
+// A 5h or 7d window at 100%, a refusal that has not reset included.
+function windowUsedUp(limits: StatusLimit[], rejected: Record<string, number> | undefined, nowMs: number): boolean {
+  return limitsOf(limits, rejected, nowMs).some((r) => r.percentUsed >= 100 && LIMITS.some((l) => l.kind === r.kind));
+}
+
+// extra_usage, the only part of the usage response read, or none when it does not read. With extra usage off the amounts
+// may be absent, so only an enabled account must have them.
+function parseCredits(body: unknown, at: number): StatusCredits | undefined {
+  const extra = isRecord(body) && isRecord(body.extra_usage) ? body.extra_usage : undefined;
+  if (!extra || typeof extra.is_enabled !== "boolean") return undefined;
+  const { is_enabled: enabled, used_credits: spent, monthly_limit: cap, decimal_places: decimals, currency, spend_limit_reached: capReached, disabled_reason: reason } = extra;
+  const read = typeof spent === "number" && typeof cap === "number" && typeof decimals === "number" && typeof currency === "string";
+  if (enabled && !read) return undefined;
+  return {
+    at,
+    enabled,
+    spent: typeof spent === "number" ? spent : 0,
+    cap: typeof cap === "number" ? cap : 0,
+    decimals: typeof decimals === "number" ? decimals : 2,
+    currency: typeof currency === "string" ? currency : "",
+    capReached: capReached === true,
+    reason: typeof reason === "string" ? reason : null,
+  };
+}
+
+// The billing day, the day of the month in UTC of the subscription's start date: the one field read from the profile.
+function billingDayOf(body: unknown): number | undefined {
+  const start = isRecord(body) && isRecord(body.organization) ? body.organization.subscription_created_at : undefined;
+  const day = typeof start === "string" ? new Date(start).getUTCDate() : NaN;
+  return Number.isNaN(day) ? undefined : day;
 }
 
 // One run of a job at a time, in the background; a request during one runs it again once it ends.
@@ -2279,8 +2440,21 @@ function resetClock(resetMs: number, nowMs: number): string {
   const today = new Date(nowMs);
   const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate();
   const day = sameDay ? "" : `${at.getDay() === today.getDay() ? "next " : ""}${WEEKDAYS[at.getDay()]} `;
+  return `${day}${clockOf(at)}`;
+}
+
+// The hour and minutes of a time on a 12-hour clock: `3 PM`, `3:30 PM`.
+function clockOf(at: Date): string {
   const mins = at.getMinutes();
-  return `${day}${at.getHours() % 12 || 12}${mins > 0 ? `:${String(mins).padStart(2, "0")}` : ""} ${at.getHours() < 12 ? "AM" : "PM"}`;
+  return `${at.getHours() % 12 || 12}${mins > 0 ? `:${String(mins).padStart(2, "0")}` : ""} ${at.getHours() < 12 ? "AM" : "PM"}`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// A reset by its date and local clock time, `Nov 17 4 PM`, rounded to the minute as resetClock rounds it.
+function dateClock(resetMs: number): string {
+  const at = new Date(Math.round(resetMs / 60_000) * 60_000);
+  return `${MONTHS[at.getMonth()]} ${at.getDate()} ${clockOf(at)}`;
 }
 
 function formatTokens(n: number): string {

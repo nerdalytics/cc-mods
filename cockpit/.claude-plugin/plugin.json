@@ -23,8 +23,8 @@
     "layout": {
       "type": "string",
       "title": "Cockpit: Layout",
-      "description": "The lines around the prompt, top to bottom, split by ;. A line is prompt, spacer for a blank line, fresh or compact for an offer line while its own option is on, explain for the explanation line while explain_row is on, which holds the run-out warning while limit_forecast is on, or a row. Lines before prompt draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, from folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, model, limit_7d, limit_5h, context, turns, tokens, agents, cache, with spacer and gap-1, gap-2 or gap-3 between them. Any tag can go in any row. The tags after a hidden line are switched off. A tag left out goes after the one before it in the default order, an unknown name is ignored. Set by dragging in /cockpit:order. (default: the git row above the prompt, the status row, the offers and the explanation line under it)",
-      "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache;fresh;compact;explain"
+      "description": "The lines around the prompt, top to bottom, split by ;. A line is prompt, spacer for a blank line, fresh or compact for an offer line while its own option is on, explain for the explanation line while explain_row is on, which holds the run-out warning while limit_forecast is on, or a row. Lines before prompt draw above your prompt, lines after it under it. A row is a comma list of tags, left to right, from folders, branch, worktree, pr, review, comments, sync, conflict, checks, changes, model, limit_7d, limit_5h, credits, context, turns, tokens, agents, cache, with spacer and gap-1, gap-2 or gap-3 between them. Any tag can go in any row. The tags after a hidden line are switched off. A tag left out goes after the one before it in the default order, an unknown name is ignored. Set by dragging in /cockpit:order. (default: the git row above the prompt, the status row, the offers and the explanation line under it)",
+      "default": "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes;prompt;model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache;fresh;compact;explain"
     },
     "merge_costs": {
       "type": "boolean",
@@ -140,6 +140,12 @@
       "title": "Cockpit: Turn line › tokens per second",
       "description": "The tokens a turn generated per second, in the line that closes it (Cooked at 52 tok/s for 7s · done 11:22 PM). true (default) / false",
       "default": true
+    },
+    "usage_lookup": {
+      "type": "boolean",
+      "title": "Cockpit: Usage credits › look up",
+      "description": "Lets the credits tag look up your usage credits. At the end of a turn, while the 5h or 7d limit reads 100%, cockpit asks Claude Code to attach its own login credential to two requests, which go only to api.anthropic.com: /api/oauth/usage and /api/oauth/profile. The credential is Claude Code's own: cockpit never sees, shows, logs or stores it. From the usage response it reads only the extra usage figures (whether it is on, the credits spent, the monthly cap, the currency). From the profile it reads only the date your subscription started, for the billing day. Anthropic's API reference does not list these two endpoints, so they can change without notice. The credits tag uses this, and the Fable weekly limit will later. Off by default. true / false (default)",
+      "default": false
     }
   }
 }

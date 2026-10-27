@@ -52,6 +52,10 @@ export type StatusPr = {
   checks: { pending: number; failure: number; success: number };
 };
 
+// The usage endpoint's extra_usage as the latest lookup read it, at `at` (ms). `spent` and `cap` are in minor units, `decimals`
+// places from the whole; `reason` is disabled_reason, null when none.
+export type StatusCredits = { at: number; enabled: boolean; spent: number; cap: number; decimals: number; currency: string; capReached: boolean; reason: string | null };
+
 declare module "claude-code" {
   interface PluginState {
     cockpit: {
@@ -83,6 +87,9 @@ declare module "claude-code" {
       load: number;
       // When the person last prompted, and when the mod last ran a handoff and a compaction (ms): they outlive a reload of the module.
       stretch: { promptAt: number; handoffAt: number; compactedAt: number };
+      // The latest usage lookup's extra_usage, and the billing day: the day of the month, in UTC, of the account's subscription start.
+      credits: StatusCredits;
+      billing: number;
     };
   }
 }

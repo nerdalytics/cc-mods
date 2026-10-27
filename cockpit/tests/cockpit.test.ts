@@ -1,5 +1,6 @@
 import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, mock, test as kitTest, type TestRest } from "claude-code/testing";
+import type { StatusCredits } from "../types";
 
 // The host has a console too, which the API's globals leave out.
 declare const console: { log: (...data: unknown[]) => void };
@@ -80,7 +81,7 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // The layout option's rows as by default, and a layout with one row in place of its default. The git row draws above
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
-const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache";
+const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache";
 const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
@@ -2871,9 +2872,9 @@ describe("cockpit", () => {
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
   // (status), fresh, compact, explain, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
-  // (1-10), ── row 2 ── (11), model .. cache (12-19), ── hidden ── (20), spacer, gap-1, gap-2, gap-3 (21-24).
+  // (1-10), ── row 2 ── (11), model .. cache (12-20), ── hidden ── (21), spacer, gap-1, gap-2, gap-3 (22-25).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
-  const STATUS_TAGS = "model,limit_7d,limit_5h,context,turns,tokens,agents,cache";
+  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache";
   const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
@@ -2884,17 +2885,17 @@ describe("cockpit", () => {
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
     // The model tag dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 20)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,agents,cache", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 21)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache", "model")]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,agents,cache", "model") } }, async ($, on) => {
-    // 7d .. cache 12-18, ── hidden ── 19, the spacer and gaps 20-23, model 24: dropped on the 7d limit's line.
-    expect(await dragIn(on, $, PINNED, "tags", 24, 12)).toEqual([["layout", pinned()]]);
+  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache", "model") } }, async ($, on) => {
+    // 7d .. cache 12-19, ── hidden ── 20, the spacer and gaps 21-24, model 25: dropped on the 7d limit's line.
+    expect(await dragIn(on, $, PINNED, "tags", 25, 12)).toEqual([["layout", pinned()]]);
   });
 
   test("dragging a tag under another row's marker moves it into that row", { options: PINNED }, async ($, on) => {
     // The folders dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,context,turns,tokens,agents,cache`)]]);
+    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache`)]]);
   });
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
@@ -2904,7 +2905,7 @@ describe("cockpit", () => {
 
   test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,context,turns,tokens,agents,cache;fresh;compact;explain`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache;fresh;compact;explain`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
@@ -2918,23 +2919,23 @@ describe("cockpit", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone.
   test("dragging the spare spacer out of hidden adds a spacer to the row", { options: PINNED }, async ($, on) => {
-    // The spacer (21) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 21, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
+    // The spacer (22) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 22, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
   });
 
   test("dragging a gap out of hidden adds it to the row", { options: PINNED }, async ($, on) => {
-    // gap-2 (23) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
+    // gap-2 (24) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
   });
 
-  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache") };
+  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache") };
   test("a second spacer is there to drag out once one is", { options: SPACED }, async ($, on) => {
-    // model, spacer, 7d .. cache (12-20), ── hidden ── 21, the spare spacer 22: dropped beside the first.
-    expect(await dragIn(on, $, SPACED, "tags", 22, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,context,turns,tokens,agents,cache")]]);
+    // model, spacer, 7d .. cache (14-21), ── hidden ── 22, the spare spacer 23: dropped beside the first.
+    expect(await dragIn(on, $, SPACED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
   });
 
   test("dragging a spacer into hidden takes it away", { options: SPACED }, async ($, on) => {
-    expect(await dragIn(on, $, SPACED, "tags", 13, 21)).toEqual([["layout", pinned()]]);
+    expect(await dragIn(on, $, SPACED, "tags", 13, 22)).toEqual([["layout", pinned()]]);
   });
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
@@ -2944,7 +2945,7 @@ describe("cockpit", () => {
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
     // The review dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 5, 20)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 5, 21)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
@@ -2965,11 +2966,11 @@ describe("cockpit", () => {
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 4 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 5 more" } });
     expect(await clientProps("tags")).toMatchObject({
-      items: ["row-1", "cache", "model", "limit_5h", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
+      items: ["row-1", "cache", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
-      labels: { "row-2": "━━ row 2 ━━" },
+      labels: { "row-2": "━━ row 2 ━━", credits: "usage credits" },
     });
     // Each list as wide as the pane, so its labels wrap inside it.
     expect((await ui.findAll({ type: "Client" })).map((c) => c.props.width)).toEqual(["100%", "100%"]);
@@ -3001,7 +3002,7 @@ describe("cockpit", () => {
   // Merged, the subagents' tag is not in the list, so a drop leaves it out of the layout, which puts it back after the costs.
   test("a drop with the costs merged writes the layout without the subagents' tag", { options: { ...PINNED, merge_costs: true } }, async ($, on) => {
     // model .. cache without agents (12-18), ── hidden ── 19: the model dropped there.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 19)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,context,turns,tokens,cache", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 20)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache", "model")]]);
   });
 
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
@@ -3105,11 +3106,11 @@ describe("cockpit", () => {
     expect(lines.slice(7, 9)).toEqual(["≡ commits ahead", "  and behind"]);
     expect((await ui.findAll({ type: "Text", in: "tags" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
     // Its second line pressed and dropped on the hidden marker's first line (row 1's marker 0, folders to comments a
-    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache 13-21 with the
-    // main session's costs on two lines, the hidden marker from 22): ahead and behind is switched off.
+    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache 13-22 with the
+    // main session's costs on two lines, the hidden marker from 23): ahead and behind is switched off.
     await ui.pointer({ type: "down", x: 3, y: 8, button: "left", in: "tags" });
-    await ui.pointer({ type: "move", x: 3, y: 22, button: "left", in: "tags" });
-    await ui.pointer({ type: "up", x: 3, y: 22, button: "left", in: "tags" });
+    await ui.pointer({ type: "move", x: 3, y: 23, button: "left", in: "tags" });
+    await ui.pointer({ type: "up", x: 3, y: 23, button: "left", in: "tags" });
     await ui.unmount();
     expect(written).toEqual([["layout", pinned("folders,branch,worktree,pr,review,comments,conflict,checks,changes", STATUS_TAGS, "sync")]]);
   });
@@ -3304,6 +3305,362 @@ describe("cockpit", () => {
     });
     expect(written).toEqual([["gradients", true]]);
   });
+
+  // The usage lookup. A test's engine answers the session's credential as a handle, as the engine does (the secret
+  // never reaches the mod), and the requests to Anthropic's host are recorded with the handle each carried. The usage
+  // and profile answers are what a test sets; a function answer returns the status and body text, or throws as a
+  // refused request does.
+  const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+  const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+  type Answer = { status: number; text: string } | { deny: string };
+  type Auth = { handle: string; kind: "bearer" | "api-key" } | null;
+  const extraUsage = (extra: Record<string, unknown> = {}) => JSON.stringify({ extra_usage: { is_enabled: true, used_credits: 1011, monthly_limit: 1500, decimal_places: 2, currency: "EUR", spend_limit_reached: false, disabled_reason: null, ...extra } });
+  const lookupWorld = (on: On, { auth = { handle: "handle-1", kind: "bearer" }, usage = () => ({ status: 200, text: extraUsage() }), profile = () => ({ status: 200, text: JSON.stringify({ organization: { subscription_created_at: "2024-07-17T23:34:49Z" } }) }) }: { auth?: Auth; usage?: () => Answer; profile?: () => Answer } = {}) => {
+    const asked: { url: string; auth?: string; beta?: string }[] = [];
+    // The mod times its lookups by the engine's clock, which a test moves.
+    const clock = mock.clock(on, { now: 5_000_000 });
+    on("session.authorize", () => ({ value: auth }));
+    on("http.fetch", (_$, e) => {
+      if (!e.url.startsWith("https://api.anthropic.com/")) return { value: { status: 200, ok: true, headers: {}, text: md } };
+      asked.push({ url: e.url, auth: e.init?.auth, beta: e.init?.headers?.["anthropic-beta"] });
+      const answer = e.url === USAGE_URL ? usage() : profile();
+      if ("deny" in answer) return { deny: answer.deny };
+      return { value: { status: answer.status, ok: answer.status >= 200 && answer.status < 300, headers: {}, text: answer.text } };
+    });
+    return { asked, clock };
+  };
+  // A turn of the main conversation ends: the lookup it starts has run once `until` holds, or when it has had its turns.
+  const endTurn = async ($: Engine, until?: () => boolean) => {
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
+    for (let i = 0; i < (until ? 50 : 5) && !until?.(); i++) await settle();
+    for (let i = 0; i < 3; i++) await settle();
+  };
+  const sevenUsedUp = (): SessionRateLimit[] => [sevenResettingAt(100, localAt(1, 16))];
+
+  test("sends the engine's credential with the beta header to both endpoints, and reads a 200 from both as the normal path", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const { asked } = lookupWorld(on);
+    await startWithLimits($, on, sevenUsedUp());
+    await endTurn($, () => asked.length >= 2);
+    expect(asked).toEqual([
+      { url: USAGE_URL, auth: "handle-1", beta: "oauth-2025-04-20" },
+      { url: PROFILE_URL, auth: "handle-1", beta: "oauth-2025-04-20" },
+    ]);
+  });
+
+  // The 7d is at 100% in each: without the option, a first-party login of the bearer kind, no request goes out.
+  for (const [what, options, auth] of [
+    ["usage_lookup is unset", {}, { handle: "handle-1", kind: "bearer" }],
+    ["usage_lookup is false", { usage_lookup: false }, { handle: "handle-1", kind: "bearer" }],
+    ["the session holds no first-party login", { usage_lookup: true }, null],
+    ["the credential is an api key", { usage_lookup: true }, { handle: "handle-1", kind: "api-key" }],
+  ] as const)
+    test(`makes no request to api.anthropic.com and draws no credits tag when ${what}`, { options }, async ($, on) => {
+      stubHint(on);
+      on("turn.complete", (_$, e) => ({ text: e.answer }));
+      const { asked } = lookupWorld(on, { auth });
+      // Credits an earlier session with the option on left in the state are not drawn with it off.
+      if (options.usage_lookup !== true) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: { at: 0, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null }, version: 1 } }));
+      await startWithLimits($, on, sevenUsedUp());
+      await endTurn($);
+      expect(asked).toEqual([]);
+      const ui = await mountHint($);
+      expect(await ui.find({ type: "Box", key: "credits" })).toBeUndefined();
+      await ui.unmount();
+    });
+
+  // The credits the mod last kept as the session's state, parsed from the usage response's extra_usage.
+  const creditsKept = (on: On) => {
+    const kept: unknown[] = [];
+    on("state.set", { plugin: "cockpit", key: "credits" }, ($, e, next) => {
+      kept.push(e.value);
+      return next(e);
+    });
+    return kept;
+  };
+  const fiveUsedUp = (): SessionRateLimit[] => [{ kind: "five_hour", percentUsed: 100, resetsAt: localAt(0, 23, 59).toISOString() }, sevenResettingAt(60, localAt(3, 16))];
+
+  for (const [what, limits] of [["7d", sevenUsedUp], ["5h", fiveUsedUp]] as const)
+    test(`calls the usage endpoint once at the end of a turn with the ${what} at 100%, and keeps extra_usage's fields`, { options: { usage_lookup: true } }, async ($, on) => {
+      stubHint(on);
+      on("turn.complete", (_$, e) => ({ text: e.answer }));
+      const kept = creditsKept(on);
+      const { asked } = lookupWorld(on, { usage: () => ({ status: 200, text: extraUsage({ spend_limit_reached: true, disabled_reason: "out_of_credits" }) }) });
+      await startWithLimits($, on, limits());
+      await endTurn($, () => kept.length > 0);
+      expect(asked.filter((r) => r.url === USAGE_URL)).toHaveLength(1);
+      expect(kept).toEqual([{ at: 5_000_000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: true, reason: "out_of_credits" }]);
+    });
+
+  test("calls no endpoint at the end of a turn with neither the 5h nor the 7d at 100%", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const { asked } = lookupWorld(on);
+    await startWithLimits($, on, [sevenResettingAt(80, localAt(2, 16)), { kind: "five_hour", percentUsed: 40, resetsAt: localAt(0, 23, 59).toISOString() }]);
+    await endTurn($);
+    expect(asked).toEqual([]);
+  });
+
+  // A lookup that fails, each way it can: an error and a refusal (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC refuses a
+  // request that carries the credential), an error status, a body that is no JSON. The 7d is used up in each, the row
+  // draws without an error or a toast, and the credits tag stays hidden.
+  const FAILURES: [string, () => Answer][] = [
+    ["errors", () => ({ deny: "socket hang up" })],
+    ["is refused while CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set", () => ({ deny: "refused: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set" })],
+    ["answers 401", () => ({ status: 401, text: "{}" })],
+    ["returns a body the mod cannot read", () => ({ status: 200, text: "<html>" })],
+  ];
+  for (const [what, usage] of FAILURES)
+    test(`leaves the credits tag hidden and the row without an error when the usage lookup ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
+      stubHint(on);
+      on("turn.complete", (_$, e) => ({ text: e.answer }));
+      const toasts: string[] = [];
+      on("ui.toast", (_$, e) => {
+        toasts.push(e.text);
+        return { value: undefined };
+      });
+      const kept = creditsKept(on);
+      const { asked } = lookupWorld(on, { usage });
+      await startWithLimits($, on, sevenUsedUp());
+      await endTurn($, () => asked.length >= 1);
+      expect(asked.map((r) => r.url)).toEqual([USAGE_URL]);
+      expect(kept).toEqual([]);
+      expect(toasts).toEqual([]);
+      const ui = await mountHint($);
+      expect(await ui.find({ type: "Text", text: "O" })).toBeDefined();
+      expect(await creditsTag(ui)).toBeUndefined();
+      await ui.unmount();
+    });
+
+  // No text of the mod outside /config suggests switching the option on: with it off, the 7d at 100% and a refusal seen,
+  // every tag and explanation reads as it did before the option.
+  test("never mentions the usage_lookup option outside /config", async ($, on) => {
+    stubHint(on);
+    mock.clock(on);
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: Date.now() + 3_600_000 }, version: 1 } }));
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    const texts = [...(await ui.findAll({ type: "Text" })).map(flat), ...(await explanationsIn(ui)).map(flat)].join(" ");
+    expect(texts).toContain("7d at 100%");
+    expect(texts).not.toMatch(/lookup|credits/i);
+    await ui.unmount();
+  });
+
+  // The tags the order pane lists for a row, in the layout the options give: the mod's own default, or a saved one.
+  const orderedTags = async ($: Engine, row: string) => {
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const props = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
+    await ui.unmount();
+    const items: unknown[] = typeof props === "object" && props !== null && "items" in props && Array.isArray(props.items) ? props.items : [];
+    const at = items.indexOf(row);
+    return items.slice(at + 1, items.indexOf(`row-${Number(row.slice(4)) + 1}`));
+  };
+
+  test("places the credits tag after limit_5h in the default layout, a gap on each side", async ($) => {
+    expect((await orderedTags($, "row-2")).slice(4, 9)).toEqual(["limit_5h", "gap-1", "credits", "gap-1", "context"]);
+  });
+
+  test("places the credits tag after limit_5h in a saved layout that does not name it", { options: { layout: "folders;prompt;model,limit_7d,limit_5h,context;fresh;compact;explain" } }, async ($) => {
+    expect((await orderedTags($, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
+  });
+
+  test("draws a sample credits tag while the order pane shows and no credits state exists", async ($, on) => {
+    stubHint(on);
+    mock.clock(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    for (let i = 0; i < 50 && !(await creditsTag(ui)); i++) await settle();
+    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBB___" });
+    expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
+    await ui.unmount();
+  });
+
+  // The badge and the spent cells as drawn, colour by colour.
+  const creditsColors = async (ui: { find: Mounted["find"] }) => {
+    const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key: "credits" }), "the credits tag").children);
+    return { badge: badge?.props, spent: bar.slice(0, 4).map(({ props }) => props.backgroundColor) };
+  };
+
+  test("draws the credits badge and spent cells in the muted rose credits.spent, the label black on it", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    holding(on, creditsOf());
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    const { badge, spent } = await creditsColors(ui);
+    expect(badge).toMatchObject({ backgroundColor: "#b87a8c", color: "#000000" });
+    expect(spent).toEqual(Array(4).fill("#b87a8c"));
+    await ui.unmount();
+  });
+
+  test("draws the credits tag in the colors option's credits.spent, the label white on a dark one", { options: { usage_lookup: true, colors: "credits.spent=#112233" } }, async ($, on) => {
+    stubHint(on);
+    holding(on, creditsOf());
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    const { badge, spent } = await creditsColors(ui);
+    expect(badge).toMatchObject({ backgroundColor: "#112233", color: "#ffffff" });
+    expect(spent).toEqual(Array(4).fill("#112233"));
+    await ui.unmount();
+  });
+
+  test("lists credits.spent in a group of its own in the colours pane, with its default", async ($, on) => {
+    on("config.list", () => ({ value: [] }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const drawn = await ui.drawn();
+    // The pane's lines in order: a heading by its text, a field by its Input's key and value.
+    const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
+      const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
+      const input: unknown = props === undefined ? undefined : JSON.parse(props);
+      if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value}`];
+      return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
+    });
+    const at = lines.indexOf("credits.spent=#b87a8c");
+    expect(lines.slice(at - 1, at + 2)).toEqual(["Usage credits bar and badge", "credits.spent=#b87a8c", expect.stringMatching(/^Context bar and badge$/)]);
+    await ui.unmount();
+  });
+
+  // The invoices fall on the 17th for a start of 2024-07-17T23:34:49Z, which is the 18th in Warsaw: the day is the UTC one.
+  test("keeps the UTC day of the subscription's start as the billing day", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const days: unknown[] = [];
+    on("state.set", { plugin: "cockpit", key: "billing" }, ($, e, next) => {
+      days.push(e.value);
+      return next(e);
+    });
+    lookupWorld(on);
+    await startWithLimits($, on, sevenUsedUp());
+    await endTurn($, () => days.length > 0);
+    expect(days).toEqual([17]);
+  });
+
+  // Pacing, by the engine's clock: one lookup a minute at most; after a failure a wait of a minute, doubling with each
+  // failure in a row to an hour; a success ends the wait.
+  const MINUTE = 60_000;
+  // Turns end `gaps` apart (ms), the first at once; each answers the way `answers` has it, the last one repeating.
+  const turnsAt = async ($: Engine, on: On, gaps: number[], answers: ("ok" | "fail")[], usedUp = sevenUsedUp()) => {
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    let turn = 0;
+    const { asked, clock } = lookupWorld(on, { usage: () => (answers[Math.min(turn, answers.length - 1)] === "ok" ? { status: 200, text: extraUsage() } : { status: 500, text: "" }) });
+    await startWithLimits($, on, usedUp);
+    const calls: number[] = [];
+    for (const gap of gaps) {
+      await clock.advance(gap);
+      const before = asked.filter((r) => r.url === USAGE_URL).length;
+      await endTurn($);
+      if (asked.filter((r) => r.url === USAGE_URL).length > before) calls.push(turn);
+      turn++;
+    }
+    return { asked, calls };
+  };
+
+  test("makes at most one usage lookup a minute, and calls the profile endpoint once", { options: { usage_lookup: true } }, async ($, on) => {
+    // Turns at 0, 30 and 60 s: the second is within the minute, the third is not.
+    const { asked, calls } = await turnsAt($, on, [0, 30_000, 30_000], ["ok"]);
+    expect(calls).toEqual([0, 2]);
+    expect(asked.map((r) => r.url)).toEqual([USAGE_URL, PROFILE_URL, USAGE_URL]);
+  });
+
+  test("waits a minute after a failed usage lookup, and makes none within it", { options: { usage_lookup: true } }, async ($, on) => {
+    // Turns at 0 s (fails), 59.9 s and 60 s.
+    const { calls } = await turnsAt($, on, [0, MINUTE - 100, 100], ["fail"]);
+    expect(calls).toEqual([0, 2]);
+  });
+
+  test("doubles the wait after each failure in a row: 1, 2 and 4 minutes", { options: { usage_lookup: true } }, async ($, on) => {
+    // Failures at 0, 1 and 3 minutes; the turns just short of each wait end make no call, those at it do.
+    const gaps = [0, MINUTE - 100, 100, 2 * MINUTE - 100, 100, 4 * MINUTE - 100, 100];
+    expect((await turnsAt($, on, gaps, ["fail"])).calls).toEqual([0, 2, 4, 6]);
+  });
+
+  test("ends the wait at a success: the next failure waits a minute again", { options: { usage_lookup: true } }, async ($, on) => {
+    // Fail at 0, fail at 1 min (a 2 min wait), succeed at 3 min, fail at 4 min (a 1 min wait again, not 4), then call at 5 min.
+    const gaps = [0, MINUTE, 2 * MINUTE, MINUTE, MINUTE - 100, 100];
+    expect((await turnsAt($, on, gaps, ["fail", "fail", "ok", "fail", "fail", "fail"])).calls).toEqual([0, 1, 2, 3, 5]);
+  });
+
+  // A session whose state already holds a lookup's credits, and the billing day; its limits are what the test starts with.
+  const creditsOf = (extra: Partial<StatusCredits> = {}): StatusCredits => ({ at: Date.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null, ...extra });
+  const holding = (on: On, credits: StatusCredits, billing?: number, rejected?: Record<string, number>) => {
+    mock.clock(on, { now: Date.now() });
+    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
+    if (billing !== undefined) on("state.get", { plugin: "cockpit", key: "billing" }, () => ({ value: { value: billing, version: 1 } }));
+    if (rejected) on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: rejected, version: 1 } }));
+  };
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // The date a reset reads as: `Nov 17 4 PM` for 4 PM local on that day.
+  const dateAt = (at: Date) => `${MONTHS[at.getMonth()]} ${at.getDate()} 4 PM`;
+  const creditsTag = async (ui: { find: Mounted["find"] }) => {
+    const tag = await ui.find({ type: "Box", key: "credits" });
+    if (!tag) return undefined;
+    const [badge, ...bar] = elements(tag.children);
+    return { badge: flat(badge), bar: litCells(bar) };
+  };
+
+  // The tag's text and bar. The billing day is 5 days out, so the reset is the date 5 days from today at the 7d's 4 PM.
+  test("draws the credits tag: € on its badge, the share spent as cells, and its explanation with the reset", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    const billing = localAt(5, 16);
+    holding(on, creditsOf(), billing.getDate());
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    // 1011 of 1500 is 67%: 4 of the 7d's 7 cells.
+    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBB___" });
+    expect(await explanationOf(ui, "credits")).toBe(`€ at 67%: €10.11 of €15.00 spent, it resets on ${dateAt(billing)}.`);
+    await ui.unmount();
+  });
+
+  test("draws the credits bar in the 7d bar's length", { options: { usage_lookup: true, limit_7d_length: 10 } }, async ($, on) => {
+    stubHint(on);
+    holding(on, creditsOf());
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    // 67% of 10 cells, floored.
+    expect((await creditsTag(ui))?.bar).toBe("BBBBBB____");
+    await ui.unmount();
+  });
+
+  test("explains the credits without a reset when the 7d has no reset time", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    holding(on, creditsOf(), 17);
+    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
+    await ui.unmount();
+  });
+
+  test("shows a currency the mod has no symbol for by its code", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on);
+    holding(on, creditsOf({ currency: "CHF" }));
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    expect((await creditsTag(ui))?.badge).toBe(" CHF ");
+    expect(await explanationOf(ui, "credits")).toMatch(/^CHF at 67%: CHF ?10\.11 of CHF ?15\.00 spent/);
+    await ui.unmount();
+  });
+
+  // The tag draws only with extra usage enabled and a window at 100%: the 7d, the 5h alone, or one a refusal still holds.
+  for (const [what, credits, limits, rejected, drawn] of [
+    ["enabled and the 7d at 100%", creditsOf(), sevenUsedUp(), undefined, true],
+    ["enabled and the 5h alone at 100%", creditsOf(), fiveUsedUp(), undefined, true],
+    ["enabled and a refusal on the 7d that has not reset, the 7d reading 60%", creditsOf(), [sevenResettingAt(60, localAt(3, 16))], { seven_day: Date.now() + 3_600_000 }, true],
+    ["enabled and the 7d at 80% and the 5h at 40%", creditsOf(), [sevenResettingAt(80, localAt(2, 16)), { kind: "five_hour", percentUsed: 40, resetsAt: localAt(0, 23, 59).toISOString() }], undefined, false],
+    ["not enabled and the 7d at 100%", creditsOf({ enabled: false }), sevenUsedUp(), undefined, false],
+  ] as const)
+    test(`${drawn ? "draws" : "draws no"} credits tag with extra usage ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
+      stubHint(on);
+      holding(on, credits, 17, rejected);
+      await startWithLimits($, on, [...limits]);
+      const ui = await mountHint($);
+      expect(await creditsTag(ui)).toEqual(drawn ? { badge: " € ", bar: "BBBB___" } : undefined);
+      await ui.unmount();
+    });
 
   console.log(`cockpit tests in random order, seed ${seed}`);
   for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
