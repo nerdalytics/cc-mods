@@ -43,7 +43,7 @@ type Snapshot = {
   sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
   k?: number;
-  // The intervals a window read 100%, and when the latest main-session request with a reply was sent: coverOf reads them.
+  // The intervals a window read 100%, and when the latest main-session reply with usage arrived: coverOf reads them.
   usedUp?: { from: number; to?: number }[];
   answeredAt?: number;
   refusals?: Record<string, { at: number }>;
@@ -107,7 +107,7 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const cover = coverOf(s);
   const endsAt = Math.max(0, ...usedUpWindows(limits, undefined, s.now * 1000).flatMap((r) => (r.resetsAt && Date.parse(r.resetsAt) > s.now * 1000 ? [Date.parse(r.resetsAt)] : []))) || undefined;
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k, cover) : 100;
-  if (badge === "5h" && seven && seven.percentUsed >= 100 && !cover) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, target };
+  if (badge === "5h" && seven && seven.percentUsed >= 100 && !cover) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, endsAt, target };
   const bound = badge === "5h" && seven && s.k !== undefined && target < 100 ? { sevenUsed: seven.percentUsed, k: s.k } : undefined;
   return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, cover, endsAt, target, bound };
 }
@@ -839,7 +839,6 @@ export const register: Register = (on, options) => {
 
   on("turn.step", async function* ($, e, next) {
     const { value: before = 0 } = await $.state.get(SENT);
-    const sentAt = await $.clock.now();
     if (!e.agentId) {
       busy = true;
       effort = e.effort ?? "none";
@@ -849,9 +848,9 @@ export const register: Register = (on, options) => {
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
-    // The request's time, not the reply's: a reply's limits may be written before this hook resumes, and a reply stamped
-    // after them would count as coming after the interval it opened.
-    if (!e.agentId && response.usage) await $.state.set(ANSWERED_AT, sentAt);
+    // When the reply arrived. Limits written before this hook resumes are older than it, so a reply that brought the 7d to
+    // 100% itself counts as coming after the interval it opened; whether a host writes them before or after is unchecked.
+    if (!e.agentId && response.usage) await $.state.set(ANSWERED_AT, await $.clock.now());
     tokensStale = true;
     return response;
   });
@@ -1438,6 +1437,9 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, cover, endsAt, tar
   }
   if (shownPause) {
     const sevenResets = ahead(shownPause.until);
+    // The 5h at 100% too: the pause ends at the latest of their resets, the 5h's own named only when it is that one.
+    const ends = ahead(endsAt);
+    if (sevenResets !== undefined && ends !== undefined && ends > sevenResets) return `${head}: it is paused until the 7d and the 5h reset at ${resetClock(ends, now)}.`;
     return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}.`;
   }
   const until = ahead(resetsAtMs);

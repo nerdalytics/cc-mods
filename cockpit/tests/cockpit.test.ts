@@ -3870,21 +3870,40 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // The one response that brings the 7d to 100% is the one that used it up: the work did not go on past it. The response
-  // takes half a second, and its limits arrive a quarter in, before the hook that sent the request resumes.
-  test("keeps the 5h paused after a single response that reads the 7d at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+  // A reply is stamped when it arrives. This one takes half a second, and the 7d reads 100% in limits that come a quarter in,
+  // so the interval opened before the reply arrived: the reply counts as a later response.
+  const slowReply = (on: On) => {
     const clock = clockOn(on);
     on("turn.step", async function* (_$, e) {
       await clock.sleep(500);
       return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
     });
+    return clock;
+  };
+  test("counts a reply that arrives after a later reading of the 7d at 100% as a later response, leaving the 5h not paused", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const clock = slowReply(on);
     const run = await usedUpTest($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)], clock.now());
     const answered = reply($);
     await clock.advance(250);
     await run.hear([SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
     await clock.advance(250);
     await answered;
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    await ui.unmount();
+  });
+
+  // The single response that brings the 7d to 100% used it up. Its limits arrive after the reply is stamped, so no reply
+  // came after the interval opened.
+  test("keeps the 5h paused after a single response that reads the 7d at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const clock = slowReply(on);
+    const run = await usedUpTest($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)], clock.now());
+    const answered = reply($);
+    await clock.advance(500);
+    await answered;
+    await run.hear([SEVEN_USED_UP, reading("five_hour", 10, 0.6)], 100);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
@@ -4003,6 +4022,25 @@ describe("cockpit", () => {
     const ui = await afterWorkWentOn($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
     expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, work goes on until it resets at ${named(sevenResetsAt, "4 PM")}.`);
     expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it resets at ${named(fiveResetsAt, "10 AM")}.`);
+    await ui.unmount();
+  });
+
+  // The paused 5h at 100% too names the latest reset of the limits at 100%: the 5h's own when it is the latest, and says so.
+  test("names the 5h's later reset when the paused 5h at 100% resets after the 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const fiveResetsAt = dayAt(1, 15);
+    await startWithLimits($, on, [sevenResettingAt(100, dayAt(1, 10)), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d and the 5h reset at ${named(fiveResetsAt, "3 PM")}.`);
+    await ui.unmount();
+  });
+
+  test("names the 7d's later reset when the 7d resets after the paused 5h at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const sevenResetsAt = dayAt(1, 16);
+    await startWithLimits($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: dayAt(1, 10).toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d resets at ${named(sevenResetsAt, "4 PM")}.`);
     await ui.unmount();
   });
 

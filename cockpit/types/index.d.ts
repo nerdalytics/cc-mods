@@ -96,7 +96,7 @@ declare module "claude-code" {
       seenAt: number;
       // The newest refusal of each window kind in the sessions' transcripts: when it came (ms), and what its rate-limit info said of extra usage.
       refusals: Record<string, { at: number; overageStatus?: string; overageDisabledReason?: string }>;
-      // When the latest main-session request that got a reply with usage was sent (ms).
+      // When the latest main-session reply with usage arrived (ms).
       answeredAt: number;
     };
   }
