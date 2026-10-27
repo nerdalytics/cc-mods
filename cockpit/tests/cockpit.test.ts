@@ -1027,7 +1027,6 @@ describe("cockpit", () => {
     ["warns when a limit runs out before it resets at the pace so far", 70, 7_200, {}, new RegExp(`^\\uf071 5h at 70%: at this pace it runs out in 1h17m, 42m before it resets at ${CLOCK}\\.$`)],
     ["stays quiet while the pace reaches the reset with room to spare", 40, 7_200, {}, undefined],
     ["warns early in a window, where the pace is noise, with its run-out under a minute from now", 2, 17_999, {}, new RegExp(`^\\uf071 5h at 2%: at this pace it runs out any moment, 4h59m before it resets at ${CLOCK}\\.$`)],
-    ["warns with no response of this session in the last 10 minutes", 70, 7_200, {}, new RegExp(`^\\uf071 5h at 70%: at this pace it runs out in 1h17m, 42m before it resets at ${CLOCK}\\.$`)],
     ["stays quiet when the person turned limit_forecast off", 70, 7_200, { limit_forecast: false }, undefined],
   ] as const)
   test(title, { options }, async ($, on) => {
@@ -1263,8 +1262,8 @@ describe("cockpit", () => {
       expect(await explainedAt($, on, sevenResettingAt(used, resetsAt))).toMatch(new RegExp(`^7d at 100%: at this pace it runs out any moment, \\d+d\\d+h before it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM\\.$`));
     });
 
-  // The spec's stale reading: the 7d at 10% with 60% of its window passed. The mod reads no response age, so the pace
-  // stands on the clock alone and draws under pace with 83% unused, whatever the last response's age.
+  // The spec's stale reading: the 7d at 10% with 60% of its window passed, r 0.17, so 83% of the target goes unused. The mod
+  // reads no response age, so the pace stands on the clock alone, whatever the last response's age.
   test("explains a stale reading with its pace, under pace", { options: { limit_style: "gauge" } }, async ($, on) => {
     expect(await explainedAt($, on, reading("seven_day", 10, 0.6))).toMatch(new RegExp(`^7d at 10%: at this pace it resets at ${CLOCK} with ~83% unused\\.$`));
   });
@@ -1337,14 +1336,6 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // 10% with 60% of the 7d gone is r 0.17: 83% of the target goes unused.
-  test("explains an under-pace limit with the share of its target that goes unused", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
-    await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
-    const ui = await mountHint($);
-    expect(await explanationOf(ui, "limit_7d")).toContain("~83% unused");
-    await ui.unmount();
-  });
 
   // One reading, the 7d at 10% resetting 40% of a window after a fixed start, drawn with the clock at two times: at 60% of
   // the window passed r is 0.17, 83% unused, and at 61% passed, 1h41m later, r is 0.16, 84% unused. The percent used stays
