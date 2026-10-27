@@ -3657,7 +3657,7 @@ describe("cockpit", () => {
     expect(calls).toEqual([0, 1, 2]);
   });
 
-  // The pacing is the session's state, so a reload of the module keeps it. The test's clock starts at 5,000,000 ms.
+  // The pacing is the session's state, so a reload of the module keeps it.
   const PACE = { plugin: "cockpit", key: "lookupPace" } as const;
   test("keeps the lookup pacing in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
     stubHint(on);
