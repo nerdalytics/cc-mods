@@ -135,6 +135,11 @@ function clockOn(on: On, now = Date.now()): MockClock {
   }
   return clock;
 }
+// Settling the clock finishes the mod's unawaited work, but its $.state writes draw only at the redraw rate: draw `ui` now.
+async function caughtUp(on: On, ui: { redraw: () => Promise<void> }): Promise<void> {
+  await clockOn(on).settle();
+  await ui.redraw();
+}
 // The status row draws under the prompt, below the engine's hint line, which a test stands in for: before its first
 // call of $, as the kit requires.
 // The band above the prompt draws nothing of its own until the mod's git row has something to show.
@@ -1107,9 +1112,7 @@ describe("cockpit", () => {
     });
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    // The token scan has run once the cache tag draws here, or with it above the prompt, once its explanation does.
-    const scanned = async () => (await ui.find({ type: "Box", key: "cache" })) !== undefined || (await ui.find({ type: "Text", text: /^Cache / })) !== undefined;
-    for (let i = 0; i < 50 && !(await scanned()); i++) await settle();
+    await caughtUp(on, ui);
     return ui;
   }
 
