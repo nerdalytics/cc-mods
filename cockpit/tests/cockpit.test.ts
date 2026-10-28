@@ -270,9 +270,7 @@ describe("cockpit", () => {
     // The context bar against the 900,000-token compaction threshold: 797,100 used is 88%, so 1 of 10 cells of window
     // left underneath; past the 200,000-token smart zone, none on top. 597,100 of the 700,000 between the smart zone
     // and the threshold is 85%: the full moon. The threshold comes after the first draw, which measures the whole window.
-    await caughtUp(on, ui);
-    const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
-    expect({ badge: flat(context.children[0]), halves: litCells(context.children.slice(1)) }).toEqual({ badge: " ● ", halves: "U_________" });
+    expect(await contextBar(on, ui)).toEqual({ badge: " ● ", lit: "U_________" });
     // Hovered, the 102,900 tokens left.
     expect(await explanationOf(ui, "context")).toContain("102.9K");
     // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap is
