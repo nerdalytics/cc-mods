@@ -129,12 +129,13 @@ const md = [
 // the hour would round across it.
 const START = Date.parse("2026-10-27T12:00:00Z");
 // The clock a test's `on` answers the mod's time from. The kit takes one registration per test, so the first call makes it, at
-// `now` (the real time when not given), and every later call returns that same clock.
+// `now` (the real time when not given), and every later call returns that same clock. The real time is read only when
+// the clock is made, so a later call reads no machine clock.
 const clocks = new WeakMap<On, MockClock>();
-function clockOn(on: On, now = Date.now()): MockClock {
+function clockOn(on: On, now?: number): MockClock {
   let clock = clocks.get(on);
   if (!clock) {
-    clock = mock.clock(on, { now });
+    clock = mock.clock(on, { now: now ?? Date.now() });
     clocks.set(on, clock);
   }
   return clock;
@@ -168,7 +169,7 @@ async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
 async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57, reloaded = false }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number; reloaded?: boolean } = {}): Promise<string[]> {
-  stubHint(on);
+  stubHint(on, START);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
   const clock = clockOn(on);
@@ -177,7 +178,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   const written = { ephemeral_5m_input_tokens: ttl === "5m" || ttl === "5m-late" ? 1_000_000 : 0, ephemeral_1h_input_tokens: ttl === "1h" ? 1_000_000 : 0 };
   const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: written };
   const row = (id: string, minutesAgo: number, u: object) =>
-    JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: u } });
+    JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(START - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: u } });
   const transcript =
     ttl === "5m-held"
       ? [
@@ -214,17 +215,12 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   });
 
   // A module loaded again after the person's prompt finds its times in the session's state.
-  if (reloaded) on("state.get", { plugin: "cockpit", key: "stretch" }, () => ({ value: { value: { promptAt: Date.now() - 60_000, handoffAt: 0, compactedAt: 0 }, version: 1 } }));
+  if (reloaded) on("state.get", { plugin: "cockpit", key: "stretch" }, () => ({ value: { value: { promptAt: START - 60_000, handoffAt: 0, compactedAt: 0 }, version: 1 } }));
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
   const ui = await mountHint($);
-  for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "cache" })).length === 0; i++) {
-    await settle();
-  }
+  await caughtUp(on, ui);
   const polls = async (n: number) => {
-    for (let i = 0; i < n; i++) {
-      await clock.advance(2_000);
-      await settle();
-    }
+    for (let i = 0; i < n; i++) await clock.advance(2_000);
   };
 
   // No prompt of the person's since the mod loaded: nothing runs.
@@ -242,8 +238,8 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
 
 describe("cockpit", () => {
   test("draws the status row under the prompt", async ($, on) => {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: {
@@ -274,12 +270,9 @@ describe("cockpit", () => {
     // The context bar against the 900,000-token compaction threshold: 797,100 used is 88%, so 1 of 10 cells of window
     // left underneath; past the 200,000-token smart zone, none on top. 597,100 of the 700,000 between the smart zone
     // and the threshold is 85%: the full moon. The threshold comes after the first draw, which measures the whole window.
-    const bar = async () => {
-      const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
-      return { badge: flat(context.children[0]), halves: litCells(context.children.slice(1)) };
-    };
-    for (let i = 0; i < 50 && (await bar()).halves !== "U_________"; i++) await settle();
-    expect(await bar()).toEqual({ badge: " ● ", halves: "U_________" });
+    await caughtUp(on, ui);
+    const context = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
+    expect({ badge: flat(context.children[0]), halves: litCells(context.children.slice(1)) }).toEqual({ badge: " ● ", halves: "U_________" });
     // Hovered, the 102,900 tokens left.
     expect(await explanationOf(ui, "context")).toContain("102.9K");
     // A row wraps between segments, none of which shrinks, so a narrow terminal never squeezes a glyph out; a gap is
@@ -393,7 +386,7 @@ describe("cockpit", () => {
   });
 
   test("draws the smart zone left on top of the context bar, sized by the smart_zone_tokens option", { options: { smart_zone_tokens: 100_000 } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // 50,000 of a 1,000,000 window with no compaction threshold reported: 5% used, 9 cells of window left underneath;
     // half of the 100,000-token smart zone left, 5 cells on top; past half of it, the filled diamond.
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -409,7 +402,7 @@ describe("cockpit", () => {
   });
 
   test("draws the context bar as full-height blocks of the window left with the smart_zone option off", { options: { smart_zone: false } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // 300,000 of a 1,000,000 window: 30% used, 7 cells left, each both halves; the moon a quarter full (◔), not a diamond.
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 300_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -428,16 +421,11 @@ describe("cockpit", () => {
   // the compaction threshold when auto-compaction is on, else the raw window, else the window the usage names. Each case
   // names the window, the tokens and the breakdown, and the bar is the arithmetic on them: the tokens left, the share of
   // them underneath (B both halves lit, T the smart zone's top half, U the bottom half), and the glyph for the zone.
-  // The bar as drawn once it reaches `bar`, or as last drawn: the breakdown comes after the first draw.
-  const contextBar = async (ui: Mounted<"terminal", "PromptHint">, bar: { badge: string; lit: string }) => {
-    let drawn;
-    for (let i = 0; i < 50; i++) {
-      const chip = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
-      drawn = { badge: flat(chip.children[0]), lit: litCells(chip.children.slice(1)) };
-      if (drawn.badge === bar.badge && drawn.lit === bar.lit) break;
-      await settle();
-    }
-    return drawn;
+  // The bar as drawn once the mod caught up: the breakdown comes after the first draw.
+  const contextBar = async (on: On, ui: Mounted<"terminal", "PromptHint">) => {
+    await caughtUp(on, ui);
+    const chip = must(await ui.find({ type: "Box", key: "context" }), "the context chip");
+    return { badge: flat(chip.children[0]), lit: litCells(chip.children.slice(1)) };
   };
   const smartZone = { smart_zone_tokens: 150_000 };
   for (const [title, options, context, left, bar] of [
@@ -451,19 +439,19 @@ describe("cockpit", () => {
     ["measures a window with no breakdown against the whole window", {}, { tokens: 750_000, window: 1_500_000 }, "750.0K", { badge: " ◑ ", lit: "UUUUU_____" }],
   ] satisfies [string, Record<string, number>, SessionContextUsage, string, { badge: string; lit: string }][])
     test(title, { options }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       on("session.start", ($, e) => ({ cwd: e.cwd }));
       on("session.usage", () => ({ value: { startedAt: 0, context, rateLimits: [] } }));
       on("session.model", () => ({ value: "claude-opus-5-5" }));
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
       const ui = await mountHint($);
-      expect(await contextBar(ui, bar)).toEqual(bar);
+      expect(await contextBar(on, ui)).toEqual(bar);
       expect(await explanationOf(ui, "context")).toContain(left);
       await ui.unmount();
     });
 
   test("reads the compaction threshold again when a turn ends", { options: smartZone }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // The threshold the session reports changes between turns, as a setting or a different model's window would change it.
     let threshold = 1_350_000;
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -472,12 +460,12 @@ describe("cockpit", () => {
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    expect(await contextBar(ui, { badge: " ◑ ", lit: "UUUUU_____" })).toEqual({ badge: " ◑ ", lit: "UUUUU_____" });
+    expect(await contextBar(on, ui)).toEqual({ badge: " ◑ ", lit: "UUUUU_____" });
     expect(await explanationOf(ui, "context")).toContain("675.0K");
     // Against 900,000: 225,000 left, 75% used, 2 cells left; (675,000 - 150,000) of the 750,000 beyond the smart zone is the fourth moon.
     threshold = 900_000;
     await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
-    expect(await contextBar(ui, { badge: " ◕ ", lit: "UU________" })).toEqual({ badge: " ◕ ", lit: "UU________" });
+    expect(await contextBar(on, ui)).toEqual({ badge: " ◕ ", lit: "UU________" });
     expect(await explanationOf(ui, "context")).toContain("225.0K");
     await ui.unmount();
   });
@@ -773,7 +761,7 @@ describe("cockpit", () => {
     ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;explain;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "Σ"]],
   ] as const) {
     test(title, { options }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       const usage = (inp: number, out: number, read: number, w5: number) => ({
         input_tokens: inp,
         output_tokens: out,
@@ -809,10 +797,7 @@ describe("cockpit", () => {
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
       const ui = await mountHint($);
 
-      // The scan has run once the last chip is there: the agents' chip, or the merged one that holds them.
-      for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: chips.at(-1)?.[0] })).length === 0; i++) {
-        await settle();
-      }
+      await caughtUp(on, ui);
       expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
       // Each chip: a space, its tag, and its value's tag right against it.
       // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
@@ -834,11 +819,11 @@ describe("cockpit", () => {
   }
 
   test("times the main conversation's cache from its last request: warm with what a read costs, cold with a rewrite", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // An hour-TTL write, then a read: the cache lives an hour from the read. 1,000,000 cached tokens on Opus 5.5:
     // $0.20 read, $8.00 written for an hour. A subagent's later request with a 5m write changes nothing here.
     const row = (minutesAgo: number, usage: object, extra: object = {}) =>
-      JSON.stringify({ type: "assistant", requestId: `r${minutesAgo}`, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage }, ...extra });
+      JSON.stringify({ type: "assistant", requestId: `r${minutesAgo}`, timestamp: new Date(START - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage }, ...extra });
     let minutes = 10;
     const transcript = () =>
       [
@@ -857,13 +842,10 @@ describe("cockpit", () => {
       return { value: { code: 0, signal: null } };
     });
 
+    // The chip once this session's token scan is drawn.
     const chip = async (ui: Mounted<"terminal", "PromptHint">) => {
-      for (let i = 0; i < 50; i++) {
-        const found = await ui.find({ type: "Box", key: "cache" });
-        if (found) return found;
-        await settle();
-      }
-      throw new Error("the cache chip did not draw");
+      await caughtUp(on, ui);
+      return must(await ui.find({ type: "Box", key: "cache" }), "the cache chip");
     };
     const mount = () =>
       mountHint($);
@@ -884,7 +866,6 @@ describe("cockpit", () => {
     minutes = 40;
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     ui = await mount();
-    for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).match(/^ (20|19)m/); i++) await settle();
     expect(flat((await chip(ui)).children[0])).toBe(" ◑ ");
     await ui.unmount();
 
@@ -892,7 +873,6 @@ describe("cockpit", () => {
     minutes = 0;
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     ui = await mount();
-    for (let i = 0; i < 50 && /^ (20|19)m/.test(flat((await chip(ui)).children[1])); i++) await settle();
     expect(flat((await chip(ui)).children[1])).toBe(" 59m $0.20 ");
     await ui.unmount();
 
@@ -900,7 +880,6 @@ describe("cockpit", () => {
     minutes = 120;
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     ui = await mount();
-    for (let i = 0; i < 50 && !flat((await chip(ui)).children[1]).includes("cold"); i++) await settle();
     cache = await chip(ui);
     expect(flat(cache.children[0])).toBe(" ○ ");
     expect(flat(cache.children[1])).toBe(" cold $8.00 ");
@@ -1081,8 +1060,8 @@ describe("cockpit", () => {
   // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
   // subagent's one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00, reads it for $0.20.
   async function explained($: Engine, on: On, { cachedAgo = 10, agents = true } = {}): Promise<Mounted<"terminal", "PromptHint">> {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     const at = new Date(now - cachedAgo * 60_000).toISOString();
     const usage = (out: number, read: number, w1: number) => ({ input_tokens: 0, output_tokens: out, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });
     const main = { type: "assistant", requestId: "A", timestamp: at, message: { model: "claude-opus-5-5", usage: usage(10, 0, 1_000_000) } };
@@ -1839,23 +1818,23 @@ describe("cockpit", () => {
     ["offers a handoff only its own closing reply follows, up to five minutes after the file", ["HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle, false, 4],
     ["offers none from a handoff that later requests have moved past, once the cache is cold", ["HANDOFF-2026-10-16-1200.md"], false, 120, {}, idle, false, 60],
     ["offers none from a handoff that later requests have moved past, with the cache warm", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle, false, 60],
-    // The cache is cold by the engine's clock, two hours ahead of the machine's, by which it is still warm.
+    // The cache is cold by the engine's clock, two hours past START, by which it is still warm.
     ["offers one once the engine's clock has the cache cold", ["HANDOFF-2026-10-16-1200.md"], true, 10, {}, idle, false, 0.5, 120],
   ] as const)
   test(title, { options }, async ($, on) => {
-    // The engine's clock runs `ahead` minutes past the machine's, which times the transcript and the files.
-    const clock = clockOn(on, Date.now() + ahead * 60_000);
+    // The engine's clock runs `ahead` minutes past START, which times the transcript and the files.
+    const clock = clockOn(on, START + ahead * 60_000);
     stubHint(on);
     // The session's first request had a 20,000-token prompt; its last, two hours ago, wrote 1,000,000 for an hour: cold,
     // and $8.00 to write again on Opus 5.5. The 0900 file is from before this session started, the 1200 one (40,000
     // bytes, about 10,000 tokens) after: fresh from it is 30,000 tokens at the same rate, $0.24.
     const written = (tokens: number) => ({ input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: tokens } });
     const row = (id: string, minutesAgo: number, tokens: number) =>
-      JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
+      JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(START - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
     const transcript = [row("r1", 150, 20_000), row("r2", lastAgo, 1_000_000)].join("\n");
     const file = (name: string, mtimeMs: number) => ({ name, kind: "file" as const, size: 40_000, mtimeMs, isLink: false });
     // The 0900 file is older than the session; the others were written `handoffBefore` minutes before its last request.
-    const handoffAt = Date.now() - (lastAgo + handoffBefore) * 60_000;
+    const handoffAt = START - (lastAgo + handoffBefore) * 60_000;
     const ran: string[] = [];
     const sent: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -1883,12 +1862,10 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     if (prompted) await typeAtComposer($, "go on");
     const ui = await mountHint($);
-    let button;
-    for (let i = 0; i < (offered ? 50 : 5) && !button; i++) {
-      await clock.advance(2_000);
-      await settle();
-      button = (await ui.findAll({ type: "Button", key: "resume" }))[0];
-    }
+    // The handoff file is looked for at a poll, every 2 s.
+    await clock.advance(2_000);
+    await caughtUp(on, ui);
+    const button = (await ui.findAll({ type: "Button", key: "resume" }))[0];
     if (!offered) {
       expect(button).toBeUndefined();
       return ui.unmount();
@@ -1930,8 +1907,7 @@ describe("cockpit", () => {
     ["offers one while a subagent is at work: the command queues until the session is idle", 190_000, true, {}, working],
   ] as const)
   test(title, { options }, async ($, on) => {
-    stubHint(on);
-    const clock = clockOn(on);
+    stubHint(on, START);
     const ran: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
@@ -1950,12 +1926,8 @@ describe("cockpit", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    let button;
-    for (let i = 0; i < (offered ? 50 : 5) && !button; i++) {
-      await clock.advance(2_000);
-      await settle();
-      button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
-    }
+    await caughtUp(on, ui);
+    const button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
     if (!offered) {
       expect(button).toBeUndefined();
       return ui.unmount();
@@ -1983,8 +1955,7 @@ describe("cockpit", () => {
   const SPINNER = { word: "Sauteing", message: "Compacting conversation", suffix: "\u2026", mode: "requesting" } as const;
   // A session nearly out of its smart zone, its compaction offer drawn; `offer` finds the offer's button.
   const offered = async ($: Engine, on: On) => {
-    stubHint(on);
-    const clock = clockOn(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2000,10 +1971,7 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const offer = async () => (await ui.findAll({ type: "Button", key: "compact" }))[0];
-    for (let i = 0; i < 50 && !(await offer()); i++) {
-      await clock.advance(2_000);
-      await settle();
-    }
+    await caughtUp(on, ui);
     expect(await offer()).toBeDefined();
     return { ui, offer };
   };
@@ -2028,10 +1996,10 @@ describe("cockpit", () => {
     on("command.run", () => new Promise<CommandRunResult>((finish, fail) => (held = { finish, fail })));
     const { ui, offer } = await offered($, on);
     const end = await start($, () => must(held, "the held /compact"));
-    await settle();
+    await caughtUp(on, ui);
     expect(await offer()).toBeUndefined();
     await end();
-    await settle();
+    await caughtUp(on, ui);
     expect(await offer()).toBeDefined();
     await ui.unmount();
   });
@@ -2043,11 +2011,11 @@ describe("cockpit", () => {
     const { ui, offer } = await offered($, on);
     const running = $.command.run(COMPACT);
     const spinner = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Spinner", requestId: "main", props: { ...SPINNER, message: "Running PreCompact hooks\u2026" } });
-    await settle();
+    await caughtUp(on, ui);
     expect(await offer()).toBeUndefined();
     must(held, "the held /compact").finish({ text: "" });
     await running;
-    await settle();
+    await caughtUp(on, ui);
     expect(await offer()).toBeDefined();
     await spinner.unmount();
     await ui.unmount();
@@ -2056,7 +2024,7 @@ describe("cockpit", () => {
   test("keeps the compaction offer while a subagent's spinner says it compacts", async ($, on) => {
     const { ui, offer } = await offered($, on);
     const spinner = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Spinner", requestId: "agent-1", props: SPINNER });
-    await settle();
+    await caughtUp(on, ui);
     expect(await offer()).toBeDefined();
     await spinner.unmount();
     await ui.unmount();
@@ -2070,7 +2038,7 @@ describe("cockpit", () => {
     ["keeps it hidden within dismiss_minutes", { dismiss_minutes: 0.5 }, 27, false],
   ] as const)
   test(title, { options }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
@@ -2086,19 +2054,13 @@ describe("cockpit", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    let button;
-    for (let i = 0; i < 50 && !button; i++) {
-      await clock.advance(2_000);
-      await settle();
-      button = (await ui.findAll({ type: "Button", key: "compact" }))[0];
-    }
-    expect(button).toBeDefined();
+    await caughtUp(on, ui);
+    expect((await ui.findAll({ type: "Button", key: "compact" }))[0]).toBeDefined();
     await ui.press({ key: "dismiss" });
     expect((await ui.findAll({ type: "Button", key: "compact" }))[0]).toBeUndefined();
     // A prompt of the person's does not bring it back.
     await typeAtComposer($, "go on");
     await clock.advance(seconds * 1_000);
-    await settle();
     await ui.unmount();
     const again = await mountHint($);
     expect(((await again.findAll({ type: "Button", key: "compact" }))[0] !== undefined)).toBe(shown);
@@ -2113,7 +2075,7 @@ describe("cockpit", () => {
     ["compacts nothing while a subagent is at work", 190_000, [], { auto_compact: true }, working],
   ] as const)
   test(title, { options }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     const ran: string[] = [];
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -2135,10 +2097,7 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const polls = async (n: number) => {
-      for (let i = 0; i < n; i++) {
-        await clock.advance(2_000);
-        await settle();
-      }
+      for (let i = 0; i < n; i++) await clock.advance(2_000);
     };
     // No prompt of the person's since the mod loaded: nothing runs.
     await polls(2);
@@ -2167,9 +2126,9 @@ describe("cockpit", () => {
     expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["cockpit:handoff"]);
   });
 
-  // The cache clock is the engine's: 7 minutes ahead of the machine's, a write 52 minutes ago by the machine's has 1 left.
+  // The cache clock is the engine's: 7 minutes past START, which times the transcript, a write 52 minutes before START has 1 left.
   test("times the cache by the engine's clock: the handoff runs once that clock leaves less than the lead", async ($, on) => {
-    clockOn(on, Date.now() + 7 * 60_000);
+    clockOn(on, START + 7 * 60_000);
     expect(await handoffRuns($, on, { ago: 52, settings: { idleCompaction: false } })).toEqual(["cockpit:handoff"]);
   });
 
@@ -2221,11 +2180,11 @@ describe("cockpit", () => {
     expect(await handoffRuns($, on, { rateLimits: [{ kind: "seven_day", percentUsed: 100 }] })).toEqual([]);
   });
 
-  // The engine's clock runs 2 minutes ahead of the machine's: a 5h refused until a minute from now by the machine's has
-  // reset by it, and the write 57 minutes ago by the machine's has a minute left.
+  // The engine's clock runs 2 minutes past START, which times the transcript: a 5h refused until a minute past START has
+  // reset by it, and the write 57 minutes before START has a minute left.
   test("runs the handoff once the engine's clock passes the reset of a refused window", async ($, on) => {
-    clockOn(on, Date.now() + 2 * 60_000);
-    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { five_hour: Date.now() + 60_000 }, version: 1 } }));
+    clockOn(on, START + 2 * 60_000);
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { five_hour: START + 60_000 }, version: 1 } }));
     expect(await handoffRuns($, on)).toEqual(["cockpit:handoff"]);
   });
 
@@ -2249,10 +2208,10 @@ describe("cockpit", () => {
     expect(lines[2]).toBe("cache window open, no handoff: a handoff already ran since your last prompt");
   });
 
-  // The engine's clock runs 2 minutes ahead of the machine's and moves only by the polls' 2 s, so each line is stamped
-  // with one of the poll times by it, as HH:MM:SS local.
+  // The engine's clock runs 2 minutes past START, which times the transcript, and moves only by the polls' 2 s, so each
+  // line is stamped with one of the poll times by it, as HH:MM:SS local.
   test("stamps the handoff trace with the engine's clock", async ($, on) => {
-    const start = Date.now() + 2 * 60_000;
+    const start = START + 2 * 60_000;
     clockOn(on, start);
     const lines: string[] = [];
     await handoffRuns($, on, { trace: lines });
@@ -2275,9 +2234,9 @@ describe("cockpit", () => {
   });
 
   test("times no cache across a compaction: the summary shares no prefix with what was cached", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const usage = { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1_000_000 } };
-    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const ago = (minutes: number) => new Date(START - minutes * 60_000).toISOString();
     const transcript = [
       JSON.stringify({ type: "assistant", requestId: "r1", timestamp: ago(10), message: { model: "claude-opus-5-5", usage } }),
       JSON.stringify({ type: "system", subtype: "compact_boundary", timestamp: ago(5) }),
@@ -2295,7 +2254,7 @@ describe("cockpit", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && (await ui.findAll({ type: "Box", key: "tokens" })).length === 0; i++) await settle();
+    await caughtUp(on, ui);
     expect(await ui.findAll({ type: "Box", key: "tokens" })).toHaveLength(1);
     expect(await ui.findAll({ type: "Box", key: "cache" })).toHaveLength(0);
     await ui.unmount();
@@ -2745,15 +2704,14 @@ describe("cockpit", () => {
   // seconds, in the status row's units (plain under 1000, K to a tenth, M to a hundredth).
   // `later` moves the engine's clock that many ms between the turn's end and the line's draw.
   const turnLine = async ($: Engine, on: On, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: TurnUsage }, later = 0) => {
-    stubHint(on);
+    stubHint(on, START);
     on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     if (turn) await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", ...turn });
     await clockOn(on).advance(later);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "TurnDuration", props });
-    const text = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
-    for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await settle();
-    const drawn = await text();
+    await caughtUp(on, ui);
+    const drawn = (await ui.findAll({ type: "Text" })).map(glyph).join("");
     await ui.unmount();
     return drawn;
   };
@@ -2761,32 +2719,27 @@ describe("cockpit", () => {
   const RATES: [number, string][] = [[7_000, "1.0K"], [700, "100"], [14_500 * 1_000, "2.07M"], [7_000_000, "1.00M"], [6_999, "999"]];
   for (const [tokens, rate] of RATES) {
     test(`draws ${rate} tok/s in the closing line for ${tokens} output tokens over 7 s`, async ($, on) => {
-      clockOn(on);
       const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(tokens) });
       expect(drawn).toBe(`Cooked at ${rate} tok/s for 7s`);
     });
   }
 
   test("counts only the output tokens: the input, the cache read and the cache write are not tokens generated", async ($, on) => {
-    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(350, 1_000_000) });
     expect(drawn).toBe("Cooked at 50 tok/s for 7s");
   });
 
   test("draws no rate when the person turned turn_rate off", { options: { turn_rate: false } }, async ($, on) => {
-    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(7_000) });
     expect(drawn).toBe("Cooked for 7s");
   });
 
   test("gives a closing line of another length none: it is an older turn's", async ($, on) => {
-    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 30_000 }, { durationMs: 7_000, usage: used(7_000) });
     expect(drawn).toBe("Cooked for 7s");
   });
 
   test("gives a closing line drawn 5 s after its turn ended by the engine's clock none: it is an older turn's", async ($, on) => {
-    clockOn(on);
     const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(7_000) }, 5_000);
     expect(drawn).toBe("Cooked for 7s");
   });
@@ -3306,8 +3259,8 @@ describe("cockpit", () => {
 
   // The colours: the colors option's overrides, and with the gradients option off one colour per gradient.
   async function barsOf($: Engine, on: On, tokens: number) {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() }] },
