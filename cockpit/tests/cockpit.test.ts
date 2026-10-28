@@ -1337,7 +1337,7 @@ describe("cockpit", () => {
   // One reading, the 7d at 10% resetting 40% of a window after START, drawn with the clock at two times: at 60% of the
   // window passed r is 0.17, 83% unused, and at 61% passed, 1h41m later, r is 0.16, 84% unused. The percent used stays
   // at the reading's 10%, so only the clock moves the pace.
-  for (const [later, unused] of [
+  for (const [advancedBy, unused] of [
     [0, 83],
     [0.01 * SEVEN_DAYS, 84],
   ] as const)
@@ -1345,7 +1345,7 @@ describe("cockpit", () => {
       const resetsAt = new Date(START + 0.4 * SEVEN_DAYS);
       stubHint(on, START);
       // Moved before the session starts: once it has, each 100 ms frame of the tick would run on the way.
-      await clockOn(on).advance(later);
+      await clockOn(on).advance(advancedBy);
       await startWithLimits($, on, [sevenResettingAt(10, resetsAt)]);
       const ui = await mountHint($);
       expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 10%: at this pace it resets at ${CLOCK} with ~${unused}% unused\\.$`));
