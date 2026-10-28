@@ -369,7 +369,7 @@ describe("cockpit", () => {
 
   // Any tag goes in any row: the folder, a git part, beside the model under the prompt.
   test("draws a git part and a status tag in one row", { options: { layout: "prompt;model,gap-1,folders;fresh;compact;explain;hidden;branch,worktree,pr,review,comments,sync,conflict,checks,changes,limit_7d,limit_5h,context,turns,tokens,cache" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -378,7 +378,7 @@ describe("cockpit", () => {
     on("process.run", () => ({ value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && !rowSpelled((await tagRows(ui))[0]).includes("work"); i++) await settle();
+    await caughtUp(on, ui);
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(["Opus 5.5", "_1", "work"]);
     await ui.unmount();
   });
@@ -2264,7 +2264,7 @@ describe("cockpit", () => {
     [{ layout: withGit("folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes") }, ["spike › cc-mods", "⎇ develop ⎇ feat/gitline", "⎇ spike"]],
   ] as const)
   test(`draws the repository row from local git: branch ancestry, worktree, sync, conflict and changes${"layout" in options ? ", with no gaps" : ""}`, { options }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // A branch made off develop in a linked worktree, on no remote, one behind origin/main with a merge that conflicts.
     const out: Record<string, { stdout: string; exitCode?: number }> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -2303,12 +2303,8 @@ describe("cockpit", () => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
-    let changes;
-    for (let i = 0; i < 50 && !changes; i++) {
-      changes = await ui.find({ type: "Box", text: "+120 -8 ~2" });
-      if (!changes) await settle();
-    }
-    expect(changes).toBeDefined();
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "+120 -8 ~2" })).toBeDefined();
     for (const text of ["↑2? ↓1?", "\uf071"]) {
       expect(await ui.find({ type: "Box", text })).toBeDefined();
     }
@@ -2324,7 +2320,7 @@ describe("cockpit", () => {
   });
 
   test("without a remote, takes init.defaultBranch as the default branch", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // A repository with no remote at all, a branch made off trunk.
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -2351,18 +2347,14 @@ describe("cockpit", () => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
-    let branch;
-    for (let i = 0; i < 50 && !branch; i++) {
-      branch = await ui.find({ type: "Box", text: "⎇ feat" });
-      if (!branch) await settle();
-    }
-    expect(branch).toBeDefined();
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ feat" })).toBeDefined();
     expect(await ui.find({ type: "Box", text: "⎇ trunk ⎇ feat" })).toBeUndefined();
     await ui.unmount();
   });
 
   test("parts the default branch from the folder by the default order's gap, where no ⎇ does", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
         "/r/cc-mods/.git\n/r/cc-mods/.git\n/r/cc-mods\ntrunk\n",
@@ -2387,8 +2379,7 @@ describe("cockpit", () => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
-    const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
-    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
+    await caughtUp(on, ui);
     const rows = await tagRows(ui);
     // The gaps after trunk, before parts with nothing to show, are dropped at the row's end.
     expect(rowSpelled(rows[0])).toEqual(["cc-mods", "_1", "trunk"]);
@@ -2397,7 +2388,7 @@ describe("cockpit", () => {
 
   // While the order pane shows, a part with nothing to show draws a made-up value, so it can be placed.
   test("draws every git part while the order pane shows, and only what there is once it closes", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     const out: Record<string, string> = {
       "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}":
@@ -2420,19 +2411,19 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
-    for (let i = 0; i < 50 && !(await glyphs()).includes("trunk"); i++) await settle();
+    await caughtUp(on, ui);
     expect(await glyphs()).not.toContain("PR #");
 
     isOpen = true;
     await clock.advance(100);
-    for (let i = 0; i < 50 && !(await glyphs()).includes("PR #42"); i++) await settle();
+    await caughtUp(on, ui);
     // The real folder and branch, and made-up values for the rest.
     const spelled = rowSpelled((await tagRows(ui))[0]);
     for (const text of ["cc-mods", "trunk", "⎇ spike", "PR #42", "↑2? ↓1?", "+12 -3 ~2"]) expect(spelled).toContain(text);
 
     isOpen = false;
     await clock.advance(100);
-    for (let i = 0; i < 50 && (await glyphs()).includes("PR #42"); i++) await settle();
+    await caughtUp(on, ui);
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(["cc-mods", "_1", "trunk"]);
     await ui.unmount();
   });
@@ -2504,7 +2495,7 @@ describe("cockpit", () => {
   });
 
   test("draws the branch's pull request from gh: number, draft, review, comments, conflict and checks", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     // Checks: one passed, one failed, one running, one commit status passed.
     const pr = {
@@ -2551,12 +2542,8 @@ describe("cockpit", () => {
 
     // The number links to the PR's page; the branch, a link to its checkout, holds its own text.
     const href = async (to: string) => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === to);
-    let number = false;
-    for (let i = 0; i < 50 && !number; i++) {
-      number = await href("https://github.com/o/r/pull/42");
-      if (!number) await settle();
-    }
-    expect(number).toBe(true);
+    await caughtUp(on, ui);
+    expect(await href("https://github.com/o/r/pull/42")).toBe(true);
     expect(await href("file:///r")).toBe(true);
     // Behind links the remote branch's history; ahead, only local, links nothing. Each failure is a cross of its own,
     // linking its check (a check run's details, a status's target); running and passed are counts on the checks tab.
@@ -2578,10 +2565,8 @@ describe("cockpit", () => {
     }
     // Pulled: nothing behind, so no link for it, rather than an empty one the terminal draws as its address.
     out["git rev-list --left-right --count HEAD...origin/feat"] = "2\t0\n";
-    for (let i = 0; i < 5 && (await href("https://github.com/o/r/commits/feat")); i++) {
-      await clock.advance(2_000);
-      await settle();
-    }
+    await clock.advance(2_000);
+    await caughtUp(on, ui);
     expect(await href("https://github.com/o/r/commits/feat")).toBe(false);
     expect((await ui.findAll({ type: "Link" })).every((l) => l.children.length > 0)).toBe(true);
     await ui.unmount();
@@ -2597,7 +2582,7 @@ describe("cockpit", () => {
   ];
   for (const { name, colour, state, draft, shown, hidden, checks } of prStates) {
     test(`draws ${name} pull request's number whole in ${colour}, with${checks ? "" : "out"} its glyphs`, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       clockOn(on);
       const pr = {
         number: 7,
@@ -2637,7 +2622,7 @@ describe("cockpit", () => {
       });
 
       const link = async () => (await ui.findAll({ type: "Link" })).find((l) => l.props.href === "https://github.com/o/r/pull/7");
-      for (let i = 0; i < 50 && !(await link()); i++) await settle();
+      await caughtUp(on, ui);
       const colours = elements((await link())?.children ?? []).map((t) => t.props.color);
       expect(colours.length).toBe("PR #7".length);
       expect(new Set(colours)).toEqual(new Set([colour]));
@@ -2660,7 +2645,7 @@ describe("cockpit", () => {
     { name: "the pull request in the status row", status: "QUEUED", calls: 2, options: { layout: `folders;prompt;${STATUS},pr,checks;fresh;compact;explain` } },
   ] as { name: string; status: string; calls: number; options?: Record<string, string> }[]) {
     test(`asks gh ${calls} times in 12 s for ${name}`, { options }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       const clock = clockOn(on);
       const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
       const out: Record<string, string> = {
@@ -2687,11 +2672,8 @@ describe("cockpit", () => {
       });
 
       await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
-      for (let i = 0; i < 50 && asks === 0; i++) await settle();
-      for (let i = 0; i < 6; i++) {
-        await clock.advance(2_000);
-        await settle();
-      }
+      await clock.settle();
+      for (let i = 0; i < 6; i++) await clock.advance(2_000);
       // git ran, so no ask means one skipped.
       expect(scans).toBeGreaterThan(0);
       expect(asks).toBe(calls);
@@ -2743,7 +2725,7 @@ describe("cockpit", () => {
   });
 
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     let branch = "feat-a";
     let used = 0;
@@ -2775,35 +2757,35 @@ describe("cockpit", () => {
       component: "AbovePrompt",
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
-    const until = async (text: string) => {
-      for (let i = 0; i < 50; i++) {
-        if (await ui.find({ type: "Box", text })) return true;
-        await settle();
-      }
-      return false;
-    };
     // The bottom half of a 5h cell is lit while its usage is left: all ten at 0% used, none at 100%. The limits are
     // under the prompt, the branch above it.
     const hint = await mountHint($);
     const usageLeft = async () =>
       (await hint.findAll({ type: "Text", text: "▀" })).filter((t) => t.props.backgroundColor !== "#373a48").length;
+    const bothCaughtUp = async () => {
+      await caughtUp(on, ui);
+      await hint.redraw();
+    };
 
-    expect(await until("⎇ feat-a")).toBe(true);
+    await bothCaughtUp();
+    expect(await ui.find({ type: "Box", text: "⎇ feat-a" })).toBeDefined();
     expect(await usageLeft()).toBe(10);
 
     branch = "feat-b";
     used = 100;
     await clock.advance(1_900);
+    await bothCaughtUp();
     expect(await ui.find({ type: "Box", text: "⎇ feat-b" })).toBeUndefined();
     await clock.advance(100);
-    expect(await until("⎇ feat-b")).toBe(true);
+    await bothCaughtUp();
+    expect(await ui.find({ type: "Box", text: "⎇ feat-b" })).toBeDefined();
     expect(await usageLeft()).toBe(0);
     await hint.unmount();
     await ui.unmount();
   });
 
   test("shows the folder outside a repository, and nothing of git", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -2821,12 +2803,8 @@ describe("cockpit", () => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
-    let folder;
-    for (let i = 0; i < 50 && !folder; i++) {
-      folder = await ui.find({ type: "Box", text: "cc-mods" });
-      if (!folder) await settle();
-    }
-    expect(folder).toBeDefined();
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "cc-mods" })).toBeDefined();
     expect(await ui.find({ type: "Text", text: "⎇" })).toBeUndefined();
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(["cc-mods"]);
     await ui.unmount();
@@ -3206,7 +3184,7 @@ describe("cockpit", () => {
     ["folders,gap-1,branch,gap-1,worktree,spacer,changes", ["r", "_1", "main", "<1", "+3 -1 ~1"]],
   ] as const)
   test(`draws the git row's parts in the layout's ${order} with its spacers and gaps, a hidden part left out`, { options: { layout: withGit(order, "sync") } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -3225,7 +3203,7 @@ describe("cockpit", () => {
     });
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
-    for (let i = 0; i < 50 && !(await ui.find({ type: "Box", text: "+3 -1 ~1" })); i++) await settle();
+    await caughtUp(on, ui);
     // The commits ahead (↑2) are hidden.
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(spelled);
     await ui.unmount();
