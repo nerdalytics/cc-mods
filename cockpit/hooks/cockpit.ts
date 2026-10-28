@@ -1603,9 +1603,11 @@ const running = new Map<string, { again: boolean }>();
 // TEMPORARY: the PR fetches, read by the debug mod's /pr-trace pane; remove with the calls to trace.
 const PR_TRACE = { plugin: "cockpit", key: "prTrace" } as const;
 const traceLog: string[] = [];
-function trace($: EngineInterface, at: number, msg: string): void {
-  traceLog.push(`${new Date(at).toTimeString().slice(0, 8)} ${msg}`);
-  void $.state.set(PR_TRACE, traceLog.slice(-200));
+function trace($: EngineInterface, msg: string): void {
+  void $.clock.now().then((at) => {
+    traceLog.push(`${new Date(at).toTimeString().slice(0, 8)} ${msg}`);
+    return $.state.set(PR_TRACE, traceLog.slice(-200));
+  });
 }
 
 // The handoff's gates while its window is open, read by the debug mod's /debug:handoff-trace pane. A line that repeats the
@@ -1744,9 +1746,9 @@ function refreshGit($: EngineInterface): void {
     prAt = now;
     const pr = branch ? await fetchPr($) : null;
     prBusy = (pr?.checks.pending ?? 0) > 0;
-    trace($, await $.clock.now(), `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
+    trace($, `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
     await $.state.set(PR, pr);
-  }, () => void $.clock.now().then((at) => trace($, at, "git job still running; poll folded into again")), (err) => void $.clock.now().then((at) => trace($, at, `git job failed: ${err instanceof Error ? err.message : String(err)}`)));
+  }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | undefined> {
@@ -1976,7 +1978,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
     const fields = "number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state";
     const { exitCode, stdout, stderr } = await $.process.run(["gh", "pr", "view", "--json", fields], { timeoutMs: 15_000 });
     if (exitCode !== 0) {
-      trace($, await $.clock.now(), `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
+      trace($, `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
       return null;
     }
     const pr: GhPr | null = JSON.parse(stdout);
@@ -2003,7 +2005,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
       checks,
     };
   } catch (err) {
-    trace($, await $.clock.now(), `fetchPr threw: ${err instanceof Error ? err.message : err}`);
+    trace($, `fetchPr threw: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }

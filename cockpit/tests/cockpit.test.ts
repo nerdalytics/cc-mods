@@ -2750,11 +2750,13 @@ describe("cockpit", () => {
 
   // The line that closes a turn gets the tokens the turn generated per second in its verb: its output tokens over the
   // seconds, in the status row's units (plain under 1000, K to a tenth, M to a hundredth).
-  const turnLine = async ($: Engine, on: On, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: TurnUsage }) => {
+  // `later` moves the engine's clock that many ms between the turn's end and the line's draw.
+  const turnLine = async ($: Engine, on: On, props: { word: string; durationMs: number }, turn?: { durationMs: number; usage: TurnUsage }, later = 0) => {
     stubHint(on);
     on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     if (turn) await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", ...turn });
+    await clockOn(on).advance(later);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "TurnDuration", props });
     const text = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     for (let i = 0; i < 50 && !(await text()).includes("tok/s"); i++) await settle();
@@ -2791,15 +2793,9 @@ describe("cockpit", () => {
   });
 
   test("gives a closing line drawn 5 s after its turn ended by the engine's clock none: it is an older turn's", async ($, on) => {
-    const clock = clockOn(on);
-    on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
-    on("turn.complete", (_$, e) => ({ text: e.answer }));
-    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 7_000, usage: used(7_000) });
-    await clock.advance(5_000);
-    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "TurnDuration", props: { word: "Cooked", durationMs: 7_000 } });
-    await caughtUp(on, ui);
-    expect((await ui.findAll({ type: "Text" })).map(glyph).join("")).toBe("Cooked for 7s");
-    await ui.unmount();
+    clockOn(on);
+    const drawn = await turnLine($, on, { word: "Cooked", durationMs: 7_000 }, { durationMs: 7_000, usage: used(7_000) }, 5_000);
+    expect(drawn).toBe("Cooked for 7s");
   });
 
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
