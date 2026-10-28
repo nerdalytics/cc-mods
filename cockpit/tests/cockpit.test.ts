@@ -124,6 +124,10 @@ const md = [
   "| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |",
 ].join("\n");
 
+// The time a test's clock starts at, so every run sees the same time; the time zone stays the machine's. On a whole UTC
+// hour, every zone's local clock reads a whole or quarter hour, never the last minute before one, where a reset named by
+// the hour would round across it.
+const START = Date.parse("2026-10-27T12:00:00Z");
 // The clock a test's `on` answers the mod's time from. The kit takes one registration per test, so the first call makes it, at
 // `now` (the real time when not given), and every later call returns that same clock.
 const clocks = new WeakMap<On, MockClock>();
@@ -141,10 +145,10 @@ async function caughtUp(on: On, ui: { redraw: () => Promise<void> }): Promise<vo
   await ui.redraw();
 }
 // The status row draws under the prompt, below the engine's hint line, which a test stands in for: before its first
-// call of $, as the kit requires.
+// call of $, as the kit requires. It registers the test's clock, so a test's own start for it goes here.
 // The band above the prompt draws nothing of its own until the mod's git row has something to show.
-function stubHint(on: On): void {
-  clockOn(on);
+function stubHint(on: On, now?: number): void {
+  clockOn(on, now);
   on("ui.render", { component: "PromptHint" }, ($, e) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
   on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
@@ -153,8 +157,8 @@ function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "Pro
 }
 // A session started with these limits. By default the 5h is at 70% with 2 hours to its reset, 3 hours into its 5: at that
 // pace it runs out in 1h17m, 42m before it resets.
-async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[], now = Date.now()): Promise<void> {
-  clockOn(on, now);
+async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[]): Promise<void> {
+  const now = clockOn(on).now();
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: rateLimits ?? [{ kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 120 * 60_000).toISOString() }] } }));
   on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -479,8 +483,8 @@ describe("cockpit", () => {
   });
 
   test("draws each limit's time left on top, its usage left underneath, and the empty track to 100%", async ($, on) => {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: {
@@ -510,8 +514,8 @@ describe("cockpit", () => {
 
   // A limit_style the mod does not know draws the two lanes cockpit 1.1.0 drew: the reading above, in the same colours.
   test("draws both limit tags as classic for a limit_style it does not know", { options: { limit_style: "fancy" } }, async ($, on) => {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     await startWithLimits($, on, [
       { kind: "seven_day", percentUsed: 15, resetsAt: new Date(now + 217_728_000).toISOString() },
       { kind: "five_hour", percentUsed: 72, resetsAt: new Date(now + 9_900_000).toISOString() },
@@ -526,16 +530,15 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // A 7d reading with `passed` of its window gone, and the 5h's alike.
+  // A 7d reading with `passed` of its window gone at START, and the 5h's alike.
   const reading = (kind: "seven_day" | "five_hour", percentUsed: number, passed: number): SessionRateLimit => {
     const windowMs = kind === "seven_day" ? 604_800_000 : 18_000_000;
-    return { kind, percentUsed, resetsAt: new Date(Date.now() + (1 - passed) * windowMs).toISOString() };
+    return { kind, percentUsed, resetsAt: new Date(START + (1 - passed) * windowMs).toISOString() };
   };
-  // A reset built from local parts, as the person's clock reads it: `days` from today at hour:minute:second. The mod reads
-  // the clock itself, so a test chooses the reset from today's date and not from a pinned `now`.
+  // A reset built from local parts, as the person's clock reads it: `days` from START's local day at hour:minute:second.
   const localAt = (days: number, hour: number, minute = 0, second = 0): Date => {
-    const today = new Date();
-    return new Date(today.getFullYear(), today.getMonth(), today.getDate() + days, hour, minute, second);
+    const start = new Date(START);
+    return new Date(start.getFullYear(), start.getMonth(), start.getDate() + days, hour, minute, second);
   };
   const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   // Any reset clock, for a reset a test cannot pin to the minute: `3 PM`, `Thu 3:30 PM`, `next Thu 9 AM`.
@@ -550,7 +553,7 @@ describe("cockpit", () => {
   };
 
   test("reads the limit and its percent used, rounded, in the gauge's badge", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 50.6, 1 / 3)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).badge).toBe(" 7d 51% ");
@@ -558,7 +561,7 @@ describe("cockpit", () => {
   });
 
   test("draws half the length, rounded down, on each side of the gauge's pipe: 5 at the 5h's 10, 3 at the 7d's 7", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // Too early in either window for a pace, its window not begun, so each side is blank.
     await startWithLimits($, on, [reading("seven_day", 1, -0.5), reading("five_hour", 1, -0.5)]);
     const ui = await mountHint($);
@@ -575,7 +578,7 @@ describe("cockpit", () => {
     ["fills the gauge's left side outward from the pipe under pace, in slate", 10, 0.6, " ████│     ", [[1, "#94a3b8"], [4, "#94a3b8"], [5, "#e5e7eb"]]],
   ] as const)
     test(title, { options: { limit_style: "gauge", limit_7d_length: 10 } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [reading("seven_day", used, passed)]);
       const ui = await mountHint($);
       const gauge = await limitTagOf(ui, "seven_day");
@@ -589,11 +592,11 @@ describe("cockpit", () => {
   // reset not ahead of now, and a window not begun, its reset a window and a half ahead, so the share passed is -0.5.
   for (const [title, limit] of [
     ["draws a gauge with no reset time without a pace", { kind: "seven_day", percentUsed: 51 }],
-    ["draws a gauge without a pace when its reset is not ahead of now", { kind: "seven_day", percentUsed: 51, resetsAt: new Date(Date.now() - 3_600_000).toISOString() }],
+    ["draws a gauge without a pace when its reset is not ahead of now", { kind: "seven_day", percentUsed: 51, resetsAt: new Date(START - 3_600_000).toISOString() }],
     ["draws a gauge without a pace before its window has begun", reading("seven_day", 51, -0.5)],
   ] satisfies [string, SessionRateLimit][])
     test(title, { options: { limit_style: "gauge", limit_7d_length: 10 } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [limit]);
       const ui = await mountHint($);
       const gauge = await limitTagOf(ui, "seven_day");
@@ -608,7 +611,7 @@ describe("cockpit", () => {
   // The pace needs no response of this session in the last 10 minutes, nor a tenth of the window gone: 51% with 5% of the
   // window gone is over pace.
   test("draws the gauge's pace while less than a tenth of the window has passed", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 51, 0.05)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).bar).not.toBe("     │     ");
@@ -639,7 +642,7 @@ describe("cockpit", () => {
     ["draws the lanes' time lane deep red when the token lane is empty and the usage ahead of par", 95, 0.8, Array(7).fill(GREY), [SEVERE, ...Array(6).fill(GREY)]],
   ] as const)
     test(title, { options: { limit_style: "lanes" } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [reading("seven_day", used, passed)]);
       const ui = await mountHint($);
       const lanes = await limitTagOf(ui, "seven_day");
@@ -654,7 +657,7 @@ describe("cockpit", () => {
   // On a 10-cell 5h tag with its target at 100%, 38% used with 19% gone is 1.9 cells ahead of par: 2 cells impacted at
   // the end of the token lane, lit to the usage left, 62%, 6 cells. The time lane is lit to the par left, 81%, 8 cells.
   test("lights the 5h lanes' tokens on top and the par left below, the impacted token cells amber to red", { options: { limit_style: "lanes" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("five_hour", 38, 0.19)]);
     const ui = await mountHint($);
     const lanes = await limitTagOf(ui, "five_hour");
@@ -676,7 +679,7 @@ describe("cockpit", () => {
     ["notches the lane after its last cell when the par left fills it", 1, 10, 0.4, " ▏", ["#c084fc", GREY]],
   ] as const)
     test(title, { options: { limit_style: "notch", limit_7d_length: length } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [reading("seven_day", used, passed)]);
       const ui = await mountHint($);
       const notch = await limitTagOf(ui, "seven_day");
@@ -693,11 +696,11 @@ describe("cockpit", () => {
   const DIM = "#6b7280";
   for (const [why, limit, top] of [
     ["with no reset time", { kind: "seven_day", percentUsed: 51 }, 0],
-    ["with its reset not ahead of now", { kind: "seven_day", percentUsed: 51, resetsAt: new Date(Date.now() - 3_600_000).toISOString() }, 0],
+    ["with its reset not ahead of now", { kind: "seven_day", percentUsed: 51, resetsAt: new Date(START - 3_600_000).toISOString() }, 0],
     ["before its window has begun", reading("seven_day", 51, -0.5), 7],
   ] satisfies [string, SessionRateLimit, number][]) {
     test(`draws both lanes dim without a pace ${why}`, { options: { limit_style: "lanes" } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [limit]);
       const ui = await mountHint($);
       const lanes = await limitTagOf(ui, "seven_day");
@@ -706,7 +709,7 @@ describe("cockpit", () => {
       await ui.unmount();
     });
     test(`draws the notch style's usage dim with no notch without a pace ${why}`, { options: { limit_style: "notch" } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [limit]);
       const ui = await mountHint($);
       const notch = await limitTagOf(ui, "seven_day");
@@ -719,7 +722,7 @@ describe("cockpit", () => {
   // 30% of the 7d with no reset time has no pace and no time left: the usage left, 70%, lights the token lane dim to 4
   // of 7 cells, and the time lane is empty.
   test("draws the lanes' token lane dim and the time lane empty at 30% with no reset time", { options: { limit_style: "lanes" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 30 }]);
     const ui = await mountHint($);
     const lanes = await limitTagOf(ui, "seven_day");
@@ -730,8 +733,8 @@ describe("cockpit", () => {
 
   // The 7d, 5h and context bars, each with a value to show while hovered.
   const mountBars = async ($: Engine, on: On) => {
-    stubHint(on);
-    const resetsAt = new Date(Date.now() + 9_900_000).toISOString();
+    stubHint(on, START);
+    const resetsAt = new Date(START + 9_900_000).toISOString();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -907,9 +910,9 @@ describe("cockpit", () => {
   });
 
   test("shows a limit another session was refused on as used up, until it resets", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // This session last heard 40% of the 5h window used; another session's transcript has its refusal, resetting in an hour.
-    const now = Date.now();
+    const now = clockOn(on).now();
     const refusal = JSON.stringify({
       type: "assistant",
       error: "rate_limit",
@@ -928,14 +931,9 @@ describe("cockpit", () => {
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
+    await caughtUp(on, ui);
     // Usage left is the bars' bottom halves: none once refused, where 40% used would light 6.
-    const usageLeft = async () =>
-      (await ui.findAll({ type: "Text", text: "▀" })).filter((t) => t.props.backgroundColor !== "#373a48").length;
-    let lit = await usageLeft();
-    for (let i = 0; i < 50 && lit !== 0; i++) {
-      await settle();
-      lit = await usageLeft();
-    }
+    const lit = (await ui.findAll({ type: "Text", text: "▀" })).filter((t) => t.props.backgroundColor !== "#373a48").length;
     expect(lit).toBe(0);
     await ui.unmount();
   });
@@ -1000,7 +998,7 @@ describe("cockpit", () => {
   });
 
   test("wraps a run-out warning wider than the window between words, the explanation line growing for it", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on);
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
@@ -1015,7 +1013,7 @@ describe("cockpit", () => {
   });
 
   test("draws the explanation line above the prompt when the layout puts it there", { options: { layout: `explain;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on);
     const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: /at this pace/ })).toBeDefined();
@@ -1035,8 +1033,8 @@ describe("cockpit", () => {
     ["stays quiet when the person turned limit_forecast off", 70, 7_200, { limit_forecast: false }, undefined],
   ] as const)
   test(title, { options }, async ($, on) => {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: {
@@ -1065,8 +1063,8 @@ describe("cockpit", () => {
     [65, /^\uf071 7d at 99%: at this pace it runs out in 1h27m, /, /5h at/],
   ] as const)
   test(`warns of the limit that runs out sooner, with the 5h at ${five}% and the 7d at 99%`, async ($, on) => {
-    stubHint(on);
-    const now = Date.now();
+    stubHint(on, START);
+    const now = clockOn(on).now();
     await startWithLimits($, on, [
       { kind: "five_hour", percentUsed: five, resetsAt: new Date(now + 120 * 60_000).toISOString() },
       { kind: "seven_day", percentUsed: 99, resetsAt: new Date(now + 86_400_000).toISOString() },
@@ -1211,8 +1209,8 @@ describe("cockpit", () => {
     });
 
   test("rounds a limit's percent used in its explanation, as the gauge's badge and the run-out warning round it", async ($, on) => {
-    stubHint(on);
-    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 50.6, resetsAt: new Date(Date.now() + 90_030_000).toISOString() }]);
+    stubHint(on, START);
+    await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 50.6, resetsAt: new Date(clockOn(on).now() + 90_030_000).toISOString() }]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_7d")).toMatch(/ 51%/);
     await ui.unmount();
@@ -1222,7 +1220,7 @@ describe("cockpit", () => {
   // over pace. How long it runs out in, and how long before the reset, depend on the time of day, so the sentence's shape is
   // pinned and not its numbers.
   test("explains an over-pace limit with how long from now it runs out and how long before its reset that is", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const resetsAt = localAt(3, 15);
     await startWithLimits($, on, [sevenResettingAt(89, resetsAt)]);
     const ui = await mountHint($);
@@ -1233,7 +1231,7 @@ describe("cockpit", () => {
   // A reset 3 days out at 3 PM local, on the 7d: 48% to 63% of its window has passed. Under pace at 10%, over it at 100%.
   const SEVEN_DAYS = 604_800_000;
   const explainedAt = async ($: Engine, on: On, limit: SessionRateLimit) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [limit]);
     const ui = await mountHint($);
     const text = await explanationOf(ui, "limit_7d");
@@ -1249,7 +1247,7 @@ describe("cockpit", () => {
   // A third of the window passed, its reset 5 days out at 3 PM local: used set to the share passed, so r is within 0.05 of 1.
   test("explains a limit on pace as reaching its target as it resets at the clock", { options: { limit_style: "gauge" } }, async ($, on) => {
     const resetsAt = localAt(5, 15);
-    const share = 1 - (resetsAt.getTime() - Date.now()) / SEVEN_DAYS;
+    const share = 1 - (resetsAt.getTime() - START) / SEVEN_DAYS;
     const used = Math.round(share * 100);
     expect(await explainedAt($, on, sevenResettingAt(used, resetsAt))).toBe(`7d at ${used}%: at this pace it reaches its target as it resets at ${WEEKDAYS[resetsAt.getDay()]} 3 PM.`);
   });
@@ -1287,13 +1285,13 @@ describe("cockpit", () => {
   });
 
   test("explains a reading whose reset has already passed as one without a reset time", { options: { limit_style: "gauge" } }, async ($, on) => {
-    expect(await explainedAt($, on, sevenResettingAt(30, new Date(Date.now() - 3_600_000)))).toBe("7d at 30%.");
+    expect(await explainedAt($, on, sevenResettingAt(30, new Date(START - 3_600_000)))).toBe("7d at 30%.");
   });
 
-  // The reset clock, on a limit with no pace so that only the clock varies. A reset later today is chosen from the hour
-  // now: the next full hour, or past midnight in the last hour of the day, which names tomorrow.
+  // The reset clock, on a limit with no pace so that only the clock varies. A reset later today is chosen from START's
+  // local hour: the next full hour, or past midnight in the last hour of the day, which names tomorrow.
   const HOURS = ["12 AM", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM", "7 AM", "8 AM", "9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM", "6 PM", "7 PM", "8 PM", "9 PM", "10 PM", "11 PM"];
-  const nextHour = new Date().getHours() + 1;
+  const nextHour = new Date(START).getHours() + 1;
   const later: [Date, string] = nextHour < 24 ? [localAt(0, nextHour), HOURS[nextHour] ?? ""] : [localAt(1, 0), `${WEEKDAYS[localAt(1, 0).getDay()]} 12 AM`];
   const midnight = localAt(3, 0);
   for (const [title, resetsAt, clock] of [
@@ -1307,23 +1305,19 @@ describe("cockpit", () => {
     ["on today's weekday a week out with next", localAt(7, 9), `next ${WEEKDAYS[localAt(7, 9).getDay()]} 9 AM`],
   ] as const)
     test(`names a reset ${title}`, { options: { limit_style: "classic" } }, async ($, on) => {
-      // A reset under a minute away, which the later-today row reaches in the last minute of its hour, may pass before it is read, and a past reset has no clock.
-      if (resetsAt.getTime() - Date.now() < 60_000) return;
       expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at ${clock}.`);
     });
 
   test("names a reset at 23:59:40 today as the next day's 12 AM, not today's", { options: { limit_style: "classic" } }, async ($, on) => {
     const tomorrow = localAt(1, 0);
     const resetsAt = localAt(0, 23, 59, 40);
-    // Past 23:58:40 the reset may pass before it is read, and a past reset has no clock.
-    if (resetsAt.getTime() - Date.now() < 60_000) return;
     expect(await explainedAt($, on, sevenResettingAt(30, resetsAt))).toBe(`7d at 30%: it resets at ${WEEKDAYS[tomorrow.getDay()]} 12 AM.`);
   });
 
   // The 7d at 100% pauses the 5h: its sentence names the 7d's reset, or none when the 7d has no reset time.
-  const FIVE_AT_40: SessionRateLimit = { kind: "five_hour", percentUsed: 40, resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString() };
+  const FIVE_AT_40: SessionRateLimit = { kind: "five_hour", percentUsed: 40, resetsAt: new Date(START + 3 * 3_600_000).toISOString() };
   test("explains the 5h paused until the 7d resets at its clock time", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const resetsAt = localAt(2, 15);
     await startWithLimits($, on, [sevenResettingAt(100, resetsAt), FIVE_AT_40]);
     const ui = await mountHint($);
@@ -1332,7 +1326,7 @@ describe("cockpit", () => {
   });
 
   test("explains the 5h paused without a clock when the 7d has no reset time", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }, FIVE_AT_40]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toBe("5h at 40%: it is paused until the 7d resets.");
@@ -1340,19 +1334,19 @@ describe("cockpit", () => {
   });
 
 
-  // One reading, the 7d at 10% resetting 40% of a window after a fixed start, drawn with the clock at two times: at 60% of
-  // the window passed r is 0.17, 83% unused, and at 61% passed, 1h41m later, r is 0.16, 84% unused. The percent used stays
+  // One reading, the 7d at 10% resetting 40% of a window after START, drawn with the clock at two times: at 60% of the
+  // window passed r is 0.17, 83% unused, and at 61% passed, 1h41m later, r is 0.16, 84% unused. The percent used stays
   // at the reading's 10%, so only the clock moves the pace.
-  const T0 = Date.parse("2026-10-27T12:00:00Z");
-  for (const [clockAt, unused] of [
-    [T0, 83],
-    [T0 + 0.01 * SEVEN_DAYS, 84],
+  for (const [later, unused] of [
+    [0, 83],
+    [0.01 * SEVEN_DAYS, 84],
   ] as const)
     test(`draws the same 7d reading at the clock's time as ${unused}% unused`, { options: { limit_style: "gauge" } }, async ($, on) => {
-      const resetsAt = new Date(T0 + 0.4 * SEVEN_DAYS);
-      clockOn(on, clockAt);
-      stubHint(on);
-      await startWithLimits($, on, [sevenResettingAt(10, resetsAt)], T0);
+      const resetsAt = new Date(START + 0.4 * SEVEN_DAYS);
+      stubHint(on, START);
+      // Moved before the session starts: once it has, each 100 ms frame of the tick would run on the way.
+      await clockOn(on).advance(later);
+      await startWithLimits($, on, [sevenResettingAt(10, resetsAt)]);
       const ui = await mountHint($);
       expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 10%: at this pace it resets at ${CLOCK} with ~${unused}% unused\\.$`));
       await ui.unmount();
@@ -1364,7 +1358,7 @@ describe("cockpit", () => {
     ["explains a limit just over 0.05 past its pace as running out, not on pace", 53, /runs out/, /on pace/],
   ] as const)
     test(title, { options: { limit_style: "gauge" } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [reading("seven_day", used, 0.5)]);
       const ui = await mountHint($);
       const explanation = await explanationOf(ui, "limit_7d");
@@ -1375,7 +1369,7 @@ describe("cockpit", () => {
 
   // 51% with 5% of the 7d gone is over pace: a tenth of the window no longer waits for the pace to show.
   test("explains a limit with its pace while less than a tenth of its window has passed", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 51, 0.05)]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_7d")).toMatch(/^7d at 51%: at this pace it runs out in \d+[hdm]/);
@@ -1388,7 +1382,7 @@ describe("cockpit", () => {
     ["lanes", new RegExp(`^7d at 51%: at this pace it runs out in \\d+d\\d+h, 2d10h before it resets at ${CLOCK}\\.$`)],
   ] as const)
     test(`explains an over-pace limit ${style === "classic" ? "with no pace words" : "with its pace"} at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [reading("seven_day", 51, 1 / 3)]);
       const ui = await mountHint($);
       expect(await explanationOf(ui, "limit_7d")).toMatch(shown);
@@ -1401,7 +1395,7 @@ describe("cockpit", () => {
   const HOUR = 3_600_000;
   const DAYS_3 = 72 * HOUR;
   const fedReadings = async ($: Engine, on: On, readings: Reading[]) => {
-    const start = Date.now();
+    const start = clockOn(on).now();
     const limitsOf = ([five, fiveIn, seven, sevenIn]: Reading): SessionRateLimit[] => [
       { kind: "five_hour", percentUsed: five, resetsAt: new Date(start + fiveIn).toISOString() },
       { kind: "seven_day", percentUsed: seven, resetsAt: new Date(start + sevenIn).toISOString() },
@@ -1422,7 +1416,7 @@ describe("cockpit", () => {
   // the 7d left, 40 points of 5h at k 0.1: a target of 45%. At 60% of that window, r is 5 / 27, under pace: 5% reaches
   // 8.3% by the reset, which costs the 7d 0.3 of its 4%, ~4% left.
   test("measures k from a 15-point 5h rise within one window and bounds a later window's 5h target by it", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, HOUR, 40, DAYS_3],
       [25, HOUR, 41.5, DAYS_3],
@@ -1436,7 +1430,7 @@ describe("cockpit", () => {
   // 10% to 10.4% of the 5h while the 7d goes 40% to 41%: k 1 / 0.4, 2.5, a rise of under a point counts. The 5h's target is
   // 10.4 + 59 / 2.5 = 34%. At 60% of its window, r is 10.4 / 20.4, under pace, and 7d has 59 - 2.5 * 6.93 = ~42% left.
   test("measures k from a 0.4-point 5h rise and bounds the 5h target by it", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 2 * HOUR, 40, DAYS_3],
       [10.4, 2 * HOUR, 41, DAYS_3],
@@ -1450,7 +1444,7 @@ describe("cockpit", () => {
   // rise of 0 that takes no sample, so k stays 0.1 and the 5h's target is 10 + 4 / 0.1 = 50%. At 60% of the window 10% is
   // under pace, and the 7d has 4 - 0.1 * 6.67 = ~3% left. A sample would divide by the zero rise.
   test("leaves k unchanged by a 5h rise of 0", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 2 * HOUR, 40, DAYS_3],
       [25, 2 * HOUR, 41.5, DAYS_3],
@@ -1465,7 +1459,7 @@ describe("cockpit", () => {
   // its first 40%: a sample of -2 / 15 would make k negative, and the 5h's target below its use. No sample is taken, so k
   // stays 0.1, the target stays 100%, and at 60% of the window 25% is ~58% unused.
   test("leaves k unchanged by a 7d drop during a 5h rise", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 2 * HOUR, 40, DAYS_3],
       [25, 2 * HOUR, 41.5, DAYS_3],
@@ -1479,7 +1473,7 @@ describe("cockpit", () => {
   // 10% to 25% of the 5h while the 7d goes 80% to 92%. With its reset moved 60 seconds the pair gives no k: the 5h's
   // target stays 100%, and at 60% of its window 25% is ~58% unused. Taken as a sample, k 0.8 would make it 35%, over pace.
   test("takes no sample of k across a 7d reset that moved by 60 seconds", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 2 * HOUR, 80, DAYS_3],
       [25, 2 * HOUR, 92, DAYS_3 + 60_000],
@@ -1492,7 +1486,7 @@ describe("cockpit", () => {
   // The same pair with the 7d's reset moved 59 seconds is one 7d window: k is 12 / 15, 0.8, which leaves the 5h 8% of the
   // 7d's worth, 10 points: a target of 35%, which 25% at 60% of its window is over.
   test("takes a sample of k across a 7d reset that moved by under 60 seconds", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 2 * HOUR, 80, DAYS_3],
       [25, 2 * HOUR, 92, DAYS_3 + 59_000],
@@ -1506,7 +1500,7 @@ describe("cockpit", () => {
   // days after it: 20 + 10 / 0.5, a target of 40%. At 60% of the window r is 20 / 24, under pace with ~17% unused: 2 of
   // the 10 halves left of the pipe. Against 100% it would be 7.
   test("draws the 5h gauge against the target the 7d can still pay for", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, HOUR, 40, DAYS_3],
       [20, HOUR, 45, DAYS_3],
@@ -1529,7 +1523,7 @@ describe("cockpit", () => {
   // cells of the time lane; the usage, 20%, is 0.4 cells behind the par, 24%, which spares none. Against 100% the par
   // left would be 40%, 4 cells, and the usage 4 cells behind par would draw 4 spare cells.
   test("draws the 5h lanes' time lane at the par left of the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [20, 2 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     const lanes = await limitTagOf(ui, "five_hour");
@@ -1541,7 +1535,7 @@ describe("cockpit", () => {
   // The same reading's par left, 76%, rounds to 8 of the 10 cells: the notch sits on the 9th's left edge. Against 100%
   // it would sit on the 5th's.
   test("notches the 5h lane at the par left of the target the 7d can still pay for", { options: { limit_style: "notch" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [20, 2 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "five_hour")).bar.indexOf("▏")).toBe(8);
@@ -1553,7 +1547,7 @@ describe("cockpit", () => {
   // Against 100% it would be under pace: a par left of 50%, 5 cells, the 6th cell slate.
   for (const [style, notched] of [["notch", 7]] as const)
     test(`draws the 5h ${style} over pace, amber, against the target the 7d can still pay for`, { options: { limit_style: style } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await fedReadings($, on, [...K_HALF, [37, 2.5 * HOUR, 90, DAYS_3]]);
       const ui = await mountHint($);
       const tag = await limitTagOf(ui, "five_hour");
@@ -1567,7 +1561,7 @@ describe("cockpit", () => {
   // 0.85 cells ahead, which impacts the last of the token lane's 6 cells, amber. Against 100% it would be 1.3 cells
   // behind, and that cell spare.
   test("draws the 5h lanes over pace, amber, against the target the 7d can still pay for", { options: { limit_style: "lanes" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [37, 2.5 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     const lanes = await limitTagOf(ui, "five_hour");
@@ -1581,7 +1575,7 @@ describe("cockpit", () => {
   // 10% to 24% of the 5h while the 7d goes 80% to 89%: k 9 / 14. The 7d resets in 1 hour, before the 5h window ends in
   // 3, so the 5h's target stays 100%: at 40% of its window 24% is ~40% unused. Bounded, it would be 41%, over pace.
   test("keeps the 5h target at 100% when the 7d resets before the 5h window ends", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [
       [10, 3 * HOUR, 80, HOUR],
       [24, 3 * HOUR, 89, HOUR],
@@ -1594,7 +1588,7 @@ describe("cockpit", () => {
   // A session's first reading measures no k: with the 7d at 90%, the 5h's target is still 100%, and at 60% of its window
   // 20% is ~67% unused.
   test("keeps the 5h target at 100% until this session has measured k", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [[20, 2 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toContain("~67% unused");
@@ -1605,7 +1599,7 @@ describe("cockpit", () => {
   // names the 7d at the 5h's pace. The clock decides a minute of a time counted from now, so `1h0m` may read `59m`.
   // 20% with 1 hour of the 5h's 5 gone reaches 40% 1 hour from now, 3 before it resets.
   test("explains the bounded 5h over its target with when the 7d runs out and how long before the 5h resets that is", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [20, 4 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this 5h pace the 7d runs out in (?:1h0m|59m), (?:3h0m|2h59m) before the 5h resets at ${CLOCK}\\.$`));
@@ -1614,7 +1608,7 @@ describe("cockpit", () => {
 
   // The same reading warns: the bounded 5h reaches its 40% target in 1 hour, 3 before it resets, and the warning names the 7d.
   test("warns of a bounded 5h that reaches its target before it resets with the sentence that names the 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [20, 4 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     const explain = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
@@ -1624,7 +1618,7 @@ describe("cockpit", () => {
 
   // 10% with half the window gone is 20% at the reset, 10 points of 5h that cost the 7d 5: 5% of it is left.
   test("explains the bounded 5h under its target with the share of the 7d left when it resets", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [10, 2.5 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this 5h pace the 7d still has ~5% left when the 5h resets at ${CLOCK}\\.$`));
@@ -1633,7 +1627,7 @@ describe("cockpit", () => {
 
   // 20% with half the window gone reaches 40% as it resets: r is 1.
   test("explains the bounded 5h on its target as the 7d running out as the 5h resets", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [20, 2.5 * HOUR, 90, DAYS_3]]);
     const ui = await mountHint($);
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this 5h pace the 7d runs out as the 5h resets at ${CLOCK}\\.$`));
@@ -1642,9 +1636,9 @@ describe("cockpit", () => {
 
   // While the 7d is used up the 5h cannot be spent. 10% of the 5h with 60% of its window gone would fill 8 halves left of
   // the pipe; paused it draws as a gauge without a pace. The 7d resets in 52.5 hours.
-  const SEVEN_USED_UP = { kind: "seven_day", percentUsed: 100, resetsAt: new Date(Date.now() + 52.5 * HOUR).toISOString() } satisfies SessionRateLimit;
+  const SEVEN_USED_UP = { kind: "seven_day", percentUsed: 100, resetsAt: new Date(START + 52.5 * HOUR).toISOString() } satisfies SessionRateLimit;
   test("draws the 5h gauge paused, empty with its pipe dim, while the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
     const ui = await mountHint($);
     const gauge = await limitTagOf(ui, "five_hour");
@@ -1658,7 +1652,7 @@ describe("cockpit", () => {
   // With k measured and the 7d at 100%, the 5h's target is its own percent used: at 0% its pace would be 0 / 0. Paused,
   // it draws none, so no NaN reaches the gauge or the words. The 7d resets in 3 days.
   test("draws the 5h at 0% paused with no NaN once k is measured and the 7d is at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await fedReadings($, on, [...K_HALF, [0, 2 * HOUR, 100, DAYS_3]]);
     const ui = await mountHint($);
     const gauge = await limitTagOf(ui, "five_hour");
@@ -1673,7 +1667,7 @@ describe("cockpit", () => {
   // Paused, neither lane of `lanes` nor the usage of `notch` draws, dim or lit, and the notch is gone.
   for (const [style, bar] of [["lanes", "▀".repeat(10)], ["notch", " ".repeat(10)]] as const)
     test(`draws the 5h ${style} paused with every cell empty while the 7d is at 100%`, { options: { limit_style: style } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
       const ui = await mountHint($);
       const tag = await limitTagOf(ui, "five_hour");
@@ -1685,7 +1679,7 @@ describe("cockpit", () => {
   // Classic draws no pace, so a used-up 7d leaves its 5h bars as they were: 10% used lights 9 of 10 bottom halves, and
   // 45% of the window still to go 4 top halves. Its explanation says nothing of a pause.
   test("leaves the classic 5h bars and explanation as they were while the 7d is at 100%", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.55)]);
     const ui = await mountHint($);
     expect(litCells(elements(must(await ui.find({ type: "Box", key: "five_hour" }), "the 5h tag").children).slice(1))).toBe("BBBBUUUUU_");
@@ -1695,7 +1689,7 @@ describe("cockpit", () => {
 
   // The 5h names its own reset, tomorrow at 3 PM, and not the used-up 7d's, in 3 days at 9 AM.
   test("names the classic 5h's own reset, not the 7d's, while the 7d is at 100%", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const fiveResetsAt = localAt(1, 15);
     await startWithLimits($, on, [sevenResettingAt(100, localAt(3, 9)), { kind: "five_hour", percentUsed: 10, resetsAt: fiveResetsAt.toISOString() }]);
     const ui = await mountHint($);
@@ -1706,12 +1700,12 @@ describe("cockpit", () => {
   // This session last heard the 7d at 80%, but another session's transcript has its refusal on the 7d, resetting in 52.5
   // hours: the 7d is used up all the same.
   test("draws the 5h gauge paused while a refusal on the 7d is in force below 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const refusal = JSON.stringify({
       type: "assistant",
       error: "rate_limit",
       apiError: "usage_limit_reached",
-      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((Date.now() + 52.5 * HOUR) / 1000) },
+      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((clockOn(on).now() + 52.5 * HOUR) / 1000) },
     });
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("process.run", (_$, e) => ({
@@ -1719,7 +1713,7 @@ describe("cockpit", () => {
     }));
     await startWithLimits($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)]);
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && (await limitTagOf(ui, "five_hour")).bar !== "     │     "; i++) await settle();
+    await caughtUp(on, ui);
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
     expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
     await ui.unmount();
@@ -1727,9 +1721,9 @@ describe("cockpit", () => {
 
   // The run-out warning reads the limits as the tags do and speaks the explanation's sentence. The warning is what the
   // explanation line shows in its flow, after its sign.
-  const warnedOf = async ($: Engine, on: On, limits: SessionRateLimit[], now = Date.now()) => {
-    stubHint(on);
-    await startWithLimits($, on, limits, now);
+  const warnedOf = async ($: Engine, on: On, limits: SessionRateLimit[]) => {
+    stubHint(on, START);
+    await startWithLimits($, on, limits);
     const ui = await mountHint($);
     const warning = shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"));
     await ui.unmount();
@@ -1740,7 +1734,7 @@ describe("cockpit", () => {
   // warning shows for it, and the hover on the 7d tag reveals what it says. Both are read from one drawing of the line.
   for (const style of ["gauge", "lanes", "notch"])
     test(`says in the warning what the hovered 7d explanation says, at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       await startWithLimits($, on, [sevenResettingAt(89, localAt(3, 15))]);
       const ui = await mountHint($);
       const [warning, ...overlays] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
@@ -1760,15 +1754,14 @@ describe("cockpit", () => {
   // warn, in a style that draws the pause and in classic, which does not.
   for (const style of ["classic", "gauge"])
     test(`does not warn of a 5h paused while the 7d is at 100%, at limit_style ${style}`, { options: { limit_style: style } }, async ($, on) => {
-      const now = Date.now();
-      const fiveAt70 = { kind: "five_hour", percentUsed: 70, resetsAt: new Date(now + 2 * HOUR).toISOString() } satisfies SessionRateLimit;
-      expect(await warnedOf($, on, [SEVEN_USED_UP, fiveAt70], now)).toBe("");
+      const fiveAt70 = { kind: "five_hour", percentUsed: 70, resetsAt: new Date(START + 2 * HOUR).toISOString() } satisfies SessionRateLimit;
+      expect(await warnedOf($, on, [SEVEN_USED_UP, fiveAt70])).toBe("");
     });
 
   // Half the 7d gone and 51.4% used is r 1.03: over pace, though the hover reads it as on pace, reaching its target as it
   // resets. The warning still shows, with the sentence for a limit that runs out.
   test("warns of a limit just over its pace with the sentence that says it runs out, where the hover says on pace", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 51.4, 0.5)]);
     const ui = await mountHint($);
     const [warning, ...overlays] = elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children);
@@ -1779,12 +1772,12 @@ describe("cockpit", () => {
 
   // A session refused on the 7d until tomorrow counts as at 100%, though its last reading was 98% and over pace.
   test("does not warn of a 7d another session was refused on, whose last reading is over pace", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const refusal = JSON.stringify({
       type: "assistant",
       error: "rate_limit",
       apiError: "usage_limit_reached",
-      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((Date.now() + 24 * HOUR) / 1000) },
+      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((clockOn(on).now() + 24 * HOUR) / 1000) },
     });
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("process.run", (_$, e) => ({
@@ -1793,7 +1786,7 @@ describe("cockpit", () => {
     await startWithLimits($, on, [sevenResettingAt(98, localAt(3, 15))]);
     const ui = await mountHint($);
     // Until the refusal is read the 98% warns, so wait for it: the 7d's explanation then reads it at 100%.
-    for (let i = 0; i < 50 && !(await explanationOf(ui, "limit_7d")).startsWith("7d at 100%"); i++) await settle();
+    await caughtUp(on, ui);
     expect(await explanationOf(ui, "limit_7d")).toMatch(/^7d at 100%/);
     expect(shownIn(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line"))).toBe("");
     await ui.unmount();
@@ -3422,7 +3415,7 @@ describe("cockpit", () => {
   });
 
   test("draws under-pace cells in the colors option's pace.under", { options: { limit_style: "gauge", limit_7d_length: 10, colors: "pace.under=#112233" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).colors.slice(1, 5)).toEqual(Array(4).fill("#112233"));
@@ -3431,7 +3424,7 @@ describe("cockpit", () => {
 
   // 10% of the 7d with 60% gone spares the token lane's 4th to 6th cells.
   test("draws the lanes' spare cells in the colors option's pace.spare", { options: { limit_style: "lanes", colors: "pace.spare=#112233" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 10, 0.6)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).colors.slice(3, 6)).toEqual(Array(3).fill("#112233"));
@@ -3440,7 +3433,7 @@ describe("cockpit", () => {
 
   // 80% of the 7d with 45% gone impacts more cells than the token lane holds, so the time lane's 3 lit cells draw deep red.
   test("draws the lanes' deep-red time lane in the colors option's pace.severe", { options: { limit_style: "lanes", colors: "pace.severe=#112233" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     await startWithLimits($, on, [reading("seven_day", 80, 0.45)]);
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "seven_day")).backgrounds.slice(0, 3)).toEqual(Array(3).fill("#112233"));
@@ -3531,20 +3524,19 @@ describe("cockpit", () => {
     });
     return { asked, clock };
   };
-  // A turn of the main conversation ends: the lookup it starts has run once `until` holds, or when it has had its turns.
-  const endTurn = async ($: Engine, until?: () => boolean) => {
+  // A turn of the main conversation ends, and the lookup it starts unawaited runs out on the settled clock.
+  const endTurn = async ($: Engine, on: On) => {
     await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
-    for (let i = 0; i < (until ? 50 : 5) && !until?.(); i++) await settle();
-    for (let i = 0; i < 3; i++) await settle();
+    await clockOn(on).settle();
   };
   const sevenUsedUp = (): SessionRateLimit[] => [sevenResettingAt(100, localAt(1, 16))];
 
   test("sends the engine's credential with the beta header to both endpoints, and reads a 200 from both as the normal path", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const { asked } = lookupWorld(on);
     await startWithLimits($, on, sevenUsedUp());
-    await endTurn($, () => asked.length >= 2);
+    await endTurn($, on);
     expect(asked).toEqual([
       { url: USAGE_URL, auth: "handle-1", beta: "oauth-2025-04-20" },
       { url: PROFILE_URL, auth: "handle-1", beta: "oauth-2025-04-20" },
@@ -3559,13 +3551,13 @@ describe("cockpit", () => {
     ["the credential is an api key", { usage_lookup: true }, { handle: "handle-1", kind: "api-key" }],
   ] as const)
     test(`makes no request to api.anthropic.com and draws no credits tag when ${what}`, { options }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       on("turn.complete", (_$, e) => ({ text: e.answer }));
       const { asked } = lookupWorld(on, { auth });
       // Credits an earlier session with the option on left in the state are not drawn with it off.
       if (options.usage_lookup !== true) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: { at: 0, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null }, version: 1 } }));
       await startWithLimits($, on, sevenUsedUp());
-      await endTurn($);
+      await endTurn($, on);
       expect(asked).toEqual([]);
       const ui = await mountHint($);
       expect(await ui.find({ type: "Box", key: "credits" })).toBeUndefined();
@@ -3585,34 +3577,34 @@ describe("cockpit", () => {
 
   for (const [what, limits] of [["7d", sevenUsedUp], ["5h", fiveUsedUp]] as const)
     test(`calls the usage endpoint once at the end of a turn with the ${what} at 100%, and keeps extra_usage's fields`, { options: { usage_lookup: true } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       on("turn.complete", (_$, e) => ({ text: e.answer }));
       const kept = creditsKept(on);
       const { asked, clock } = lookupWorld(on, { usage: () => ({ status: 200, text: extraUsage({ spend_limit_reached: true, disabled_reason: "out_of_credits" }) }) });
       await startWithLimits($, on, limits());
-      await endTurn($, () => kept.length > 0);
+      await endTurn($, on);
       expect(asked.filter((r) => r.url === USAGE_URL)).toHaveLength(1);
       expect(kept).toEqual([{ at: clock.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: true, reason: "out_of_credits" }]);
     });
 
   test("calls no endpoint at the end of a turn with neither the 5h nor the 7d at 100%", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const { asked } = lookupWorld(on);
     await startWithLimits($, on, [sevenResettingAt(80, localAt(2, 16)), { kind: "five_hour", percentUsed: 40, resetsAt: localAt(0, 23, 59).toISOString() }]);
-    await endTurn($);
+    await endTurn($, on);
     expect(asked).toEqual([]);
   });
 
-  // The engine's clock runs 2 hours behind the machine's: a 7d refused until an hour ago by the machine's has not reset by it.
+  // A 7d refused until an hour past the engine's clock has not reset by it. START lies in the past, so by the machine's
+  // clock that refusal has long reset.
   test("counts a refused window as used up until the engine's clock reaches its reset", { options: { usage_lookup: true } }, async ($, on) => {
-    clockOn(on, Date.now() - 2 * 3_600_000);
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
-    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: Date.now() - 3_600_000 }, version: 1 } }));
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: clockOn(on).now() + 3_600_000 }, version: 1 } }));
     const { asked } = lookupWorld(on);
     await startWithLimits($, on, [sevenResettingAt(60, localAt(3, 16))]);
-    await endTurn($, () => asked.length >= 1);
+    await endTurn($, on);
     expect(asked[0]?.url).toBe(USAGE_URL);
   });
 
@@ -3627,7 +3619,7 @@ describe("cockpit", () => {
   ];
   for (const [what, usage] of FAILURES)
     test(`leaves the credits tag hidden and the row without an error when the usage lookup ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       on("turn.complete", (_$, e) => ({ text: e.answer }));
       const toasts: string[] = [];
       on("ui.toast", (_$, e) => {
@@ -3637,7 +3629,7 @@ describe("cockpit", () => {
       const kept = creditsKept(on);
       const { asked } = lookupWorld(on, { usage });
       await startWithLimits($, on, sevenUsedUp());
-      await endTurn($, () => asked.length >= 1);
+      await endTurn($, on);
       expect(asked.map((r) => r.url)).toEqual([USAGE_URL]);
       expect(kept).toEqual([]);
       expect(toasts).toEqual([]);
@@ -3650,9 +3642,8 @@ describe("cockpit", () => {
   // No text of the mod outside /config suggests switching the option on: with it off, the 7d at 100% and a refusal seen,
   // every tag and explanation reads as it did before the option.
   test("never mentions the usage_lookup option outside /config", async ($, on) => {
-    stubHint(on);
-    clockOn(on);
-    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: Date.now() + 3_600_000 }, version: 1 } }));
+    stubHint(on, START);
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: clockOn(on).now() + 3_600_000 }, version: 1 } }));
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
     const texts = [...(await ui.findAll({ type: "Text" })).map(flat), ...(await explanationsIn(ui)).map(flat)].join(" ");
@@ -3663,7 +3654,7 @@ describe("cockpit", () => {
 
   // The tags the order pane lists for a row, in the layout the options give: the mod's own default, or a saved one.
   const orderedTags = async ($: Engine, on: On, row: string) => {
-    clockOn(on);
+    clockOn(on, START);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const props = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
     await ui.unmount();
@@ -3702,7 +3693,7 @@ describe("cockpit", () => {
   };
 
   test("draws the credits badge and spent cells in the muted rose credits.spent, the label black on it", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     holding(on, creditsOf());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
@@ -3713,7 +3704,7 @@ describe("cockpit", () => {
   });
 
   test("draws the credits tag in the colors option's credits.spent, the label white on a dark one", { options: { usage_lookup: true, colors: "credits.spent=#112233" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     holding(on, creditsOf());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
@@ -3742,7 +3733,7 @@ describe("cockpit", () => {
 
   // The invoices fall on the 17th for a start of 2024-07-17T23:34:49Z, which is the 18th in Warsaw: the day is the UTC one.
   test("keeps the UTC day of the subscription's start as the billing day", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const days: unknown[] = [];
     on("state.set", { plugin: "cockpit", key: "billing" }, ($, e, next) => {
@@ -3751,7 +3742,7 @@ describe("cockpit", () => {
     });
     lookupWorld(on);
     await startWithLimits($, on, sevenUsedUp());
-    await endTurn($, () => days.length > 0);
+    await endTurn($, on);
     expect(days).toEqual([17]);
   });
 
@@ -3760,7 +3751,7 @@ describe("cockpit", () => {
   const MINUTE = 60_000;
   // Turns end `gaps` apart (ms), the first at once; each answers the way `answers` has it, the last one repeating.
   const turnsAt = async ($: Engine, on: On, gaps: number[], answers: ("ok" | "fail")[], { profileFails = false } = {}) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     let turn = 0;
     const { asked, clock } = lookupWorld(on, { usage: () => (answers[Math.min(turn, answers.length - 1)] === "ok" ? { status: 200, text: extraUsage() } : { status: 500, text: "" }), ...(profileFails ? { profile: () => ({ status: 500, text: "" }) } : {}) });
@@ -3769,7 +3760,7 @@ describe("cockpit", () => {
     for (const gap of gaps) {
       await clock.advance(gap);
       const before = asked.filter((r) => r.url === USAGE_URL).length;
-      await endTurn($);
+      await endTurn($, on);
       if (asked.filter((r) => r.url === USAGE_URL).length > before) calls.push(turn);
       turn++;
     }
@@ -3810,7 +3801,7 @@ describe("cockpit", () => {
   // The pacing is the session's state, so a reload of the module keeps it.
   const PACE = { plugin: "cockpit", key: "lookupPace" } as const;
   test("keeps the lookup pacing in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const paced: unknown[] = [];
     on("state.set", PACE, ($, e, next) => {
@@ -3819,26 +3810,26 @@ describe("cockpit", () => {
     });
     const { asked, clock } = lookupWorld(on, { usage: () => ({ status: 500, text: "" }) });
     await startWithLimits($, on, sevenUsedUp());
-    await endTurn($, () => asked.length >= 1);
+    await endTurn($, on);
     expect(paced.at(-1)).toEqual({ notBefore: clock.now() + MINUTE, failures: 1 });
   });
 
   test("makes no lookup within the wait a reloaded module finds in the session's state", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const notBefore = clockOn(on).now() + 30_000;
     on("state.get", PACE, () => ({ value: { value: { notBefore, failures: 0 }, version: 1 } }));
     const { asked, clock } = lookupWorld(on);
     await startWithLimits($, on, sevenUsedUp());
-    await endTurn($);
+    await endTurn($, on);
     expect(asked).toEqual([]);
     await clock.advance(30_000);
-    await endTurn($, () => asked.length >= 1);
+    await endTurn($, on);
     expect(asked[0]?.url).toBe(USAGE_URL);
   });
 
   // A session whose state already holds a lookup's credits, and the billing day; its limits are what the test starts with.
-  const creditsOf = (extra: Partial<StatusCredits> = {}): StatusCredits => ({ at: Date.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null, ...extra });
+  const creditsOf = (extra: Partial<StatusCredits> = {}): StatusCredits => ({ at: START, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null, ...extra });
   const holding = (on: On, credits: StatusCredits, billing?: number, rejected?: Record<string, number>) => {
     clockOn(on);
     on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
@@ -3857,7 +3848,7 @@ describe("cockpit", () => {
 
   // The tag's text and bar. The billing day is 5 days out, so the reset is the date 5 days from today at the 7d's 4 PM.
   test("draws the credits tag: € on its badge, the share spent as cells, and its explanation with the reset", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const billing = localAt(5, 16);
     holding(on, creditsOf(), billing.getDate());
     await startWithLimits($, on, sevenUsedUp());
@@ -3869,7 +3860,7 @@ describe("cockpit", () => {
   });
 
   test("draws the credits bar in the 7d bar's length", { options: { usage_lookup: true, limit_7d_length: 10 } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     holding(on, creditsOf());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
@@ -3879,7 +3870,7 @@ describe("cockpit", () => {
   });
 
   test("explains the credits without a reset when the 7d has no reset time", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     holding(on, creditsOf(), 17);
     await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }]);
     const ui = await mountHint($);
@@ -3888,7 +3879,7 @@ describe("cockpit", () => {
   });
 
   test("shows a currency the mod has no symbol for by its code", { options: { usage_lookup: true } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     holding(on, creditsOf({ currency: "CHF" }));
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
@@ -3901,12 +3892,12 @@ describe("cockpit", () => {
   for (const [what, credits, limits, rejected, drawn] of [
     ["enabled and the 7d at 100%", creditsOf(), sevenUsedUp(), undefined, true],
     ["enabled and the 5h alone at 100%", creditsOf(), fiveUsedUp(), undefined, true],
-    ["enabled and a refusal on the 7d that has not reset, the 7d reading 60%", creditsOf(), [sevenResettingAt(60, localAt(3, 16))], { seven_day: Date.now() + 3_600_000 }, true],
+    ["enabled and a refusal on the 7d that has not reset, the 7d reading 60%", creditsOf(), [sevenResettingAt(60, localAt(3, 16))], { seven_day: START + 3_600_000 }, true],
     ["enabled and the 7d at 80% and the 5h at 40%", creditsOf(), [sevenResettingAt(80, localAt(2, 16)), { kind: "five_hour", percentUsed: 40, resetsAt: localAt(0, 23, 59).toISOString() }], undefined, false],
     ["not enabled and the 7d at 100%", creditsOf({ enabled: false }), sevenUsedUp(), undefined, false],
   ] as const)
     test(`${drawn ? "draws" : "draws no"} credits tag with extra usage ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       holding(on, credits, 17, rejected);
       await startWithLimits($, on, [...limits]);
       const ui = await mountHint($);
