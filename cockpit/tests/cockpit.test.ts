@@ -282,10 +282,11 @@ describe("cockpit", () => {
   });
 
   test("leaves out a hidden tag, and draws tags with no gap between them touching", { options: { layout: withStatus("model,limit_5h,context,turns,tokens,cache", "limit_7d") } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
+    const now = clockOn(on).now();
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
-      value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt: new Date(Date.now() + 90_030_000).toISOString() }] },
+      value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt: new Date(now + 90_030_000).toISOString() }] },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
@@ -299,7 +300,7 @@ describe("cockpit", () => {
   });
 
   test("parts the status row's tags by the gaps it names, and a spacer first draws it against the right edge", { options: { layout: withStatus("spacer,model,gap-2,limit_7d,gap-3,limit_5h,context,turns,tokens,cache") } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -313,7 +314,7 @@ describe("cockpit", () => {
   });
 
   test("starts each row at the left edge by default: no spacer", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -337,9 +338,9 @@ describe("cockpit", () => {
     ["model,limit_7d,spacer,limit_5h", ["Opus 5.5", "7d", "<1", "5h", "◇", "⏎"]],
   ] as const) {
     test(`draws ${order.replaceAll(",spacer", " |").replaceAll(",", " ")} with its spacers as shares of the room`, { options: { layout: withStatus(order) } }, async ($, on) => {
-      stubHint(on);
+      stubHint(on, START);
       on("session.start", ($, e) => ({ cwd: e.cwd }));
-      const resetsAt = new Date(Date.now() + 90_030_000).toISOString();
+      const resetsAt = new Date(clockOn(on).now() + 90_030_000).toISOString();
       on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [{ kind: "seven_day", percentUsed: 20, resetsAt }, { kind: "five_hour", percentUsed: 10, resetsAt }] } }));
       on("session.model", () => ({ value: "claude-opus-5-5" }));
       on("session.turns", () => ({ value: 3 }));
@@ -354,7 +355,7 @@ describe("cockpit", () => {
   }
 
   test("draws each row on its side of the prompt in the layout", { options: { layout: `${STATUS};prompt;${GIT};fresh;compact;explain` } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -916,7 +917,7 @@ describe("cockpit", () => {
   });
 
   test("draws the explanation line under the prompt by default, after the fresh-start and compaction lines", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const below = await mountHint($);
     const drawn = await below.drawn();
     expect(leaves(isDrawn(drawn) ? drawn.children : []).at(-1)?.props.key).toBe("explain");
@@ -932,7 +933,7 @@ describe("cockpit", () => {
 
   // forecast is no longer a line's name: a saved layout's line of it is an empty row, and the explanation line goes last.
   test("draws the explanation line last under the prompt for a saved layout that names forecast", { options: { layout: `forecast;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.root", () => ({ value: "/work" }));
     on("session.cwd", () => ({ value: "/work" }));
     // Outside a repository the git row holds the folder alone.
@@ -944,7 +945,7 @@ describe("cockpit", () => {
       const drawn = await above.drawn();
       return leaves(isDrawn(drawn) ? drawn.children : []).map((line) => (line.props.flexWrap === "wrap" ? "row" : flat(line)));
     };
-    for (let i = 0; i < 50 && !(await lines()).includes("row"); i++) await settle();
+    await caughtUp(on, above);
     // The line that named forecast is an empty row, which draws nothing: above the prompt only the git row draws.
     expect(await lines()).toEqual(["row"]);
     await above.unmount();
@@ -961,7 +962,7 @@ describe("cockpit", () => {
     ["draws no explanation line and no run-out warning anywhere with explain_row off", { explain_row: false }, undefined],
   ] as const)
   test(title, { options }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // With explain_row on nothing is shown: no limit at all. Off, a 5h that runs out early has no place to warn.
     await startWithLimits($, on, line === undefined ? undefined : []);
     const below = await mountHint($);
@@ -2429,7 +2430,7 @@ describe("cockpit", () => {
   });
 
   test("draws every status tag while the order pane shows, and an offer that does not hold as a dim line naming it", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -2438,7 +2439,7 @@ describe("cockpit", () => {
     on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && !(await ui.find({ type: "Text", text: "O" })); i++) await settle();
+    await caughtUp(on, ui);
     const chips = async () => {
       const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
       return keys.flat();
@@ -2447,7 +2448,7 @@ describe("cockpit", () => {
 
     isOpen = true;
     await clock.advance(100);
-    for (let i = 0; i < 50 && (await chips()).length < 7; i++) await settle();
+    await caughtUp(on, ui);
     expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"]);
     expect(await ui.find({ type: "Text", text: /smart zone: compaction: shows when it applies/ })).toBeDefined();
     // The blank explanation line names itself, dim, inside its own line.
@@ -2456,7 +2457,7 @@ describe("cockpit", () => {
 
     isOpen = false;
     await clock.advance(100);
-    for (let i = 0; i < 50 && (await chips()).length > 0; i++) await settle();
+    await caughtUp(on, ui);
     expect(await chips()).toEqual([]);
     expect(await ui.find({ type: "Text", text: /shows when it applies/ })).toBeUndefined();
     expect((await ui.find({ type: "Box", key: "explain" }))?.text).toBe("");
@@ -2465,7 +2466,7 @@ describe("cockpit", () => {
 
   // No response has come in this session: the samples' resets are set from now, so the pace shows with no reading at all.
   test("draws the 5h sample's pace on a gauge while the order pane shows", { options: { limit_style: "gauge" } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -2473,7 +2474,7 @@ describe("cockpit", () => {
     on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "five_hour" })); i++) await settle();
+    await caughtUp(on, ui);
     // The sample is 20% used halfway through the window: r 0.4, 60% of the target unused, 6 of 10 halves.
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("  ███│     ");
     await ui.unmount();
@@ -2481,7 +2482,7 @@ describe("cockpit", () => {
 
   // A /clear fires no session.start; the mod's hook on the command starts the readings and the tick over.
   test("draws the status row in a session a /clear started", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     clockOn(on);
     on("command.run", () => ({ text: "" }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -2489,7 +2490,7 @@ describe("cockpit", () => {
     on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
     await $.command.run({ command: "clear", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 80 } });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && !(await ui.find({ type: "Box", key: "context" })); i++) await settle();
+    await caughtUp(on, ui);
     expect(await ui.find({ type: "Box", key: "context" })).toBeDefined();
     await ui.unmount();
   });
@@ -2811,7 +2812,7 @@ describe("cockpit", () => {
   });
 
   test("colours the model by family, Mythos bold", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     // A held clock draws no frames, so the sweep stays at its start: a name's first glyph shows its window's first colour.
     clockOn(on);
     let model = "";
@@ -2839,7 +2840,7 @@ describe("cockpit", () => {
   });
 
   test("shows a model switch within a frame, before any turn ends", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     let model = "claude-haiku-5-5";
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -2859,7 +2860,7 @@ describe("cockpit", () => {
   // A copy of the module loaded later writes the load key its own way; this copy's tick reads it the next frame and stops.
   // The test stands in for that copy, answering the key once it has loaded. Each frame reads the model once.
   test("stops the tick once a copy of the module loaded later holds the load key", async ($, on) => {
-    const clock = clockOn(on);
+    const clock = clockOn(on, START);
     let reloaded = false;
     let reads = 0;
     on("state.get", { plugin: "cockpit", key: "load" }, ($, e, next) => (reloaded ? { value: { value: -1, version: 2 } } : next(e)));
@@ -2883,7 +2884,7 @@ describe("cockpit", () => {
   // Nothing the row reads changes between the frames: only the tick draws it again, and the model's sweep moves on with each.
   // The model is written once: written again each frame, the same, it would draw the row again too.
   test("draws the status row again every tick", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const clock = clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -2919,6 +2920,7 @@ describe("cockpit", () => {
   const ROWS = ["fresh_start", "compact_hint", "explain_row"].map((field) => configRow(field, true));
 
   test("hides the layout row in /config, and no other", async ($, on) => {
+    clockOn(on, START);
     // The engine beneath answers each row as it is.
     on("config.describe", (_$, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }));
     const describe = (field: string, plugin = "cockpit@cc-mods") => $.config.describe({ key: `${plugin}.${field}`, label: field, isHidden: false, provider: { plugin, tier: "user" } });
@@ -2927,7 +2929,7 @@ describe("cockpit", () => {
     expect(await describe("layout", "otherplugin")).toMatchObject({ isHidden: false });
   });
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
-    clockOn(on);
+    clockOn(on, START);
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
@@ -3036,7 +3038,7 @@ describe("cockpit", () => {
   // A refused write answers each drop with the list as saved, so the list drops the order dragged into it, the second
   // time as the first: the engine's clock does not move between them.
   test("draws the saved order again after each of two refused drops", { options: PINNED }, async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: ROWS }));
     on("config.set", () => ({ deny: "managed by your organization" }));
     on("ui.toast", () => ({ value: undefined }));
@@ -3056,7 +3058,7 @@ describe("cockpit", () => {
   // An accepted drop draws both lists again: a new row dragged out in the lines puts its marker in the tags, the second
   // time as the first, though a press gave the tags list an order of its own each time and the engine's clock does not move.
   test("draws the other list again after each of two accepted drops", { options: PINNED }, async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => ({ value: e.value }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
@@ -3076,7 +3078,7 @@ describe("cockpit", () => {
   });
 
   test("the order pane lists the lines around the prompt marker and each row's tags under its marker, hidden ones after theirs", { options: { layout: "cache,model,limit_5h,context,turns,tokens;changes,spacer,folders,branch,worktree,pr,review,comments,sync,checks;prompt;fresh;compact;explain;hidden;limit_7d,conflict", compact_hint: false } }, async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
@@ -3092,7 +3094,7 @@ describe("cockpit", () => {
   });
 
   test("the order pane's text says the explanation line holds the run-out warning", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: /The explanation line .*run-out warning/ })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /forecast/ })).toBeUndefined();
@@ -3105,7 +3107,7 @@ describe("cockpit", () => {
     [true, ["tokens"], { tokens: "total costs" }],
   ] as const) {
     test(`the order pane lists ${items.length} cost tags with merge_costs ${merged}`, { options: { ...PINNED, merge_costs: merged } }, async ($, on) => {
-      clockOn(on);
+      clockOn(on, START);
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
       expect(tags).toMatchObject({ labels });
@@ -3128,7 +3130,7 @@ describe("cockpit", () => {
     ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
-      clockOn(on);
+      clockOn(on, START);
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
       expect(await clientProps("lines")).toMatchObject({ items: [...lines, "hidden", "spacer", "row"] });
@@ -3139,7 +3141,7 @@ describe("cockpit", () => {
 
   // The spacers around a blank explanation line do not meet: it takes its line as a row does.
   test("draws a blank explanation line as a line of its own between two spacers", { options: { layout: `${GIT};prompt;${STATUS};fresh;compact;spacer;explain;spacer` } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     const below = await mountHint($);
     const drawn = await below.drawn();
     const lines = leaves(isDrawn(drawn) ? drawn.children : []);
@@ -3153,7 +3155,7 @@ describe("cockpit", () => {
 
   // A row of nothing but a gap draws nothing.
   test("draws a spacer among the lines as a blank line on its side of the prompt, spacers that meet as one", { options: { layout: `spacer;${GIT};gap-1;spacer;prompt;spacer;spacer;${STATUS};fresh;compact;explain` } }, async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -3169,7 +3171,8 @@ describe("cockpit", () => {
       const drawn = await ui.drawn();
       return leaves(isDrawn(drawn) ? drawn.children : []).map((line) => (line.props.key === "explain" ? "explain" : line.props.height === 1 ? "_" : line.props.flexWrap === "wrap" ? "row" : flat(line)));
     };
-    for (let i = 0; i < 50 && !(await lines(above)).includes("row"); i++) await settle();
+    await caughtUp(on, above);
+    await below.redraw();
     expect(await lines(above)).toEqual(["_", "row", "_"]);
     // Under the engine's hint line, the two spacers as one blank line.
     expect((await lines(below)).slice(-4)).not.toEqual(["_", "_", "row", "explain"]);
@@ -3210,7 +3213,7 @@ describe("cockpit", () => {
   });
 
   test("wraps a label in a narrow order pane, and a press on its second line picks it", { options: PINNED }, async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
@@ -3272,7 +3275,7 @@ describe("cockpit", () => {
   });
 
   async function colorsPane($: Engine, on: On, options: Record<string, unknown>, act: (ui: Mounted<"terminal", "Pane">) => Promise<void>) {
-    clockOn(on);
+    clockOn(on, START);
     const written: [string, unknown][] = [];
     const toasts: string[] = [];
     // Another plugin's colors row comes first: the write still goes to the mod's own.
@@ -3300,7 +3303,7 @@ describe("cockpit", () => {
   });
 
   test("keeps a colour's swatch and field whole in a narrow pane, its label wrapping between them", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 24, placement: "dock", ...SITE } });
     const boxes = await ui.findAll({ type: "Box" });
@@ -3317,7 +3320,7 @@ describe("cockpit", () => {
   });
 
   test("lists the seven pace colours under Limit pace in the colours pane, with their defaults", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const drawn = await ui.drawn();
@@ -3334,7 +3337,7 @@ describe("cockpit", () => {
   });
 
   test("names the styles each pace colour serves in the colours pane: under pace gauge and notch, spare and deep red lanes", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: "gauge and notch: under pace" })).toBeDefined();
@@ -3370,7 +3373,7 @@ describe("cockpit", () => {
   });
 
   test("names the run-out warning's sign among what the warnings colour sets", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: "the compaction line's diamond and link, the run-out warning's sign" })).toBeDefined();
@@ -3379,7 +3382,7 @@ describe("cockpit", () => {
   });
 
   test("writes to an installed copy's rows, named for its marketplace", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     const written: string[] = [];
     const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `cockpit@cc-mods.${field}`, provider: { plugin: "cockpit@cc-mods", tier: "user" } });
     const other: ConfigRow = { ...configRow("gradients", true), key: "otherplugin.gradients", provider: { plugin: "otherplugin", tier: "user" } };
@@ -3601,7 +3604,7 @@ describe("cockpit", () => {
   });
 
   test("draws a sample credits tag while the order pane shows and no credits state exists", async ($, on) => {
-    stubHint(on);
+    stubHint(on, START);
     clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
@@ -3609,7 +3612,7 @@ describe("cockpit", () => {
     on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
-    for (let i = 0; i < 50 && !(await creditsTag(ui)); i++) await settle();
+    await caughtUp(on, ui);
     expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBB___" });
     expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
     await ui.unmount();
@@ -3644,7 +3647,7 @@ describe("cockpit", () => {
   });
 
   test("lists credits.spent in a group of its own in the colours pane, with its default", async ($, on) => {
-    clockOn(on);
+    clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const drawn = await ui.drawn();
