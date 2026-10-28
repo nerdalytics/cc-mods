@@ -1834,7 +1834,7 @@ describe("cockpit", () => {
 
   const idle = [subagent("completed")];
   const working = [subagent("running")];
-  for (const [title, files, offered, lastAgo, options, agents, prompted, handoffBefore = 0.5] of [
+  for (const [title, files, offered, lastAgo, options, agents, prompted, handoffBefore = 0.5, ahead = 0] of [
     ["offers a fresh session from this session's handoff file once the cache is cold", ["HANDOFF-2026-10-16-0900.md", "HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle],
     ["offers none from a handoff file older than the session", ["HANDOFF-2026-10-16-0900.md"], false, 120, {}, idle],
     // Warm, the next prompt reads the 1,000,000 tokens for $0.20, less than the fresh start's $0.24.
@@ -1846,13 +1846,16 @@ describe("cockpit", () => {
     ["offers a handoff only its own closing reply follows, up to five minutes after the file", ["HANDOFF-2026-10-16-1200.md"], true, 120, {}, idle, false, 4],
     ["offers none from a handoff that later requests have moved past, once the cache is cold", ["HANDOFF-2026-10-16-1200.md"], false, 120, {}, idle, false, 60],
     ["offers none from a handoff that later requests have moved past, with the cache warm", ["HANDOFF-2026-10-16-1200.md"], false, 10, {}, idle, false, 60],
+    // The cache is cold by the engine's clock, two hours ahead of the machine's, by which it is still warm.
+    ["offers one once the engine's clock has the cache cold", ["HANDOFF-2026-10-16-1200.md"], true, 10, {}, idle, false, 0.5, 120],
   ] as const)
   test(title, { options }, async ($, on) => {
+    // The engine's clock runs `ahead` minutes past the machine's, which times the transcript and the files.
+    const clock = clockOn(on, Date.now() + ahead * 60_000);
     stubHint(on);
     // The session's first request had a 20,000-token prompt; its last, two hours ago, wrote 1,000,000 for an hour: cold,
     // and $8.00 to write again on Opus 5.5. The 0900 file is from before this session started, the 1200 one (40,000
     // bytes, about 10,000 tokens) after: fresh from it is 30,000 tokens at the same rate, $0.24.
-    const clock = clockOn(on);
     const written = (tokens: number) => ({ input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: tokens } });
     const row = (id: string, minutesAgo: number, tokens: number) =>
       JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: written(tokens) } });
@@ -2171,6 +2174,12 @@ describe("cockpit", () => {
     expect(await handoffRuns($, on, { settings: { idleCompaction: false } })).toEqual(["cockpit:handoff"]);
   });
 
+  // The cache clock is the engine's: 7 minutes ahead of the machine's, a write 52 minutes ago by the machine's has 1 left.
+  test("times the cache by the engine's clock: the handoff runs once that clock leaves less than the lead", async ($, on) => {
+    clockOn(on, Date.now() + 7 * 60_000);
+    expect(await handoffRuns($, on, { ago: 52, settings: { idleCompaction: false } })).toEqual(["cockpit:handoff"]);
+  });
+
   test("runs the handoff for a prompt typed before the module loaded again", async ($, on) => {
     expect(await handoffRuns($, on, { reloaded: true })).toEqual(["cockpit:handoff"]);
   });
@@ -2219,6 +2228,14 @@ describe("cockpit", () => {
     expect(await handoffRuns($, on, { rateLimits: [{ kind: "seven_day", percentUsed: 100 }] })).toEqual([]);
   });
 
+  // The engine's clock runs 2 minutes ahead of the machine's: a 5h refused until a minute from now by the machine's has
+  // reset by it, and the write 57 minutes ago by the machine's has a minute left.
+  test("runs the handoff once the engine's clock passes the reset of a refused window", async ($, on) => {
+    clockOn(on, Date.now() + 2 * 60_000);
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { five_hour: Date.now() + 60_000 }, version: 1 } }));
+    expect(await handoffRuns($, on)).toEqual(["cockpit:handoff"]);
+  });
+
   test("runs no handoff while a subagent is at work", async ($, on) => {
     expect(await handoffRuns($, on, { agents: [subagent("running")] })).toEqual([]);
   });
@@ -2237,6 +2254,19 @@ describe("cockpit", () => {
     expect(lines[0]).toBe("cache window open, no handoff: no prompt of yours in this session");
     expect(lines[1]).toMatch(/^\d+ s of cache left, handoff started$/);
     expect(lines[2]).toBe("cache window open, no handoff: a handoff already ran since your last prompt");
+  });
+
+  // The engine's clock runs 2 minutes ahead of the machine's and moves only by the polls' 2 s, so each line is stamped
+  // with one of the poll times by it, as HH:MM:SS local.
+  test("stamps the handoff trace with the engine's clock", async ($, on) => {
+    const start = Date.now() + 2 * 60_000;
+    clockOn(on, start);
+    const lines: string[] = [];
+    await handoffRuns($, on, { trace: lines });
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const polls = Array.from({ length: 10 }, (_, k) => new Date(start + 2_000 * (k + 1))).map((at) => `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expect(polls).toContain(line.slice(0, 8));
   });
 
   test("runs the handoff while a subagent only waits, held on a plan's approval or on work listed on its own", async ($, on) => {
@@ -2760,6 +2790,18 @@ describe("cockpit", () => {
     expect(drawn).toBe("Cooked for 7s");
   });
 
+  test("gives a closing line drawn 5 s after its turn ended by the engine's clock none: it is an older turn's", async ($, on) => {
+    const clock = clockOn(on);
+    on("ui.render", { component: "TurnDuration" }, ($, e) => $.ui.resolve(e).Text({ children: `${e.props.word} for 7s` }));
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 7_000, usage: used(7_000) });
+    await clock.advance(5_000);
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "TurnDuration", props: { word: "Cooked", durationMs: 7_000 } });
+    await caughtUp(on, ui);
+    expect((await ui.findAll({ type: "Text" })).map(glyph).join("")).toBe("Cooked for 7s");
+    await ui.unmount();
+  });
+
   test("polls git and the limits every 2 s, so a branch switch and spent usage show without a turn ending", async ($, on) => {
     stubHint(on);
     const clock = clockOn(on);
@@ -2896,6 +2938,56 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // A copy of the module loaded later writes the load key its own way; this copy's tick reads it the next frame and stops.
+  // The test stands in for that copy, answering the key once it has loaded. Each frame reads the model once.
+  test("stops the tick once a copy of the module loaded later holds the load key", async ($, on) => {
+    const clock = clockOn(on);
+    let reloaded = false;
+    let reads = 0;
+    on("state.get", { plugin: "cockpit", key: "load" }, ($, e, next) => (reloaded ? { value: { value: -1, version: 2 } } : next(e)));
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => {
+      reads++;
+      return { value: "claude-opus-5-5" };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const started = reads;
+    await clock.advance(300);
+    expect(reads - started).toBe(3);
+    reloaded = true;
+    await clock.advance(100);
+    const stopped = reads;
+    await clock.advance(500);
+    expect(reads).toBe(stopped);
+  });
+
+  // Nothing the row reads changes between the frames: only the tick draws it again, and the model's sweep moves on with each.
+  // The model is written once: written again each frame, the same, it would draw the row again too.
+  test("draws the status row again every tick", async ($, on) => {
+    stubHint(on);
+    const clock = clockOn(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    let modelWritten = false;
+    on("state.set", { plugin: "cockpit", key: "model" }, ($, e, next) => {
+      if (modelWritten) return { value: { isSet: true, version: 1 } };
+      modelWritten = true;
+      return next(e);
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    const firstGlyph = async () => (await ui.find({ type: "Text", text: "O" }))?.props.color;
+    const colors = [await firstGlyph()];
+    for (let i = 0; i < 2; i++) {
+      await clock.advance(100);
+      colors.push(await firstGlyph());
+    }
+    expect(new Set(colors).size).toBe(3);
+    await ui.unmount();
+  });
+
   // The order pane: a drag in a Client of the pane posts the new order; the mod writes the /config options it changed.
   const configRow = (field: string, value: ConfigValue): ConfigRow => ({
     key: `cockpit.${field}`,
@@ -2917,6 +3009,7 @@ describe("cockpit", () => {
     expect(await describe("layout", "otherplugin")).toMatchObject({ isHidden: false });
   });
   async function dragIn(on: On, $: Engine, options: Record<string, unknown>, list: string, from: number, to: number): Promise<[string, unknown][]> {
+    clockOn(on);
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
@@ -3022,7 +3115,50 @@ describe("cockpit", () => {
     expect(await dragIn(on, $, PINNED, "lines", 0, 0)).toEqual([]);
   });
 
+  // A refused write answers each drop with the list as saved, so the list drops the order dragged into it, the second
+  // time as the first: the engine's clock does not move between them.
+  test("draws the saved order again after each of two refused drops", { options: PINNED }, async ($, on) => {
+    clockOn(on);
+    on("config.list", () => ({ value: ROWS }));
+    on("config.set", () => ({ deny: "managed by your organization" }));
+    on("ui.toast", () => ({ value: undefined }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const tags = async () => (await ui.findAll({ type: "Text", in: "tags" })).map((t) => flat(t));
+    const saved = await tags();
+    for (let i = 0; i < 2; i++) {
+      // The model dropped on the hidden marker's line.
+      await ui.pointer({ type: "down", x: 2, y: 12, button: "left", in: "tags" });
+      await ui.pointer({ type: "move", x: 2, y: 21, button: "left", in: "tags" });
+      await ui.pointer({ type: "up", x: 2, y: 21, button: "left", in: "tags" });
+      expect(await tags()).toEqual(saved);
+    }
+    await ui.unmount();
+  });
+
+  // An accepted drop draws both lists again: a new row dragged out in the lines puts its marker in the tags, the second
+  // time as the first, though a press gave the tags list an order of its own each time and the engine's clock does not move.
+  test("draws the other list again after each of two accepted drops", { options: PINNED }, async ($, on) => {
+    clockOn(on);
+    on("config.list", () => ({ value: ROWS }));
+    on("config.set", (_$, e) => ({ value: e.value }));
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+    const drag = async (list: string, from: number, to: number) => {
+      await ui.pointer({ type: "down", x: 2, y: from, button: "left", in: list });
+      await ui.pointer({ type: "move", x: 2, y: to, button: "left", in: list });
+      await ui.pointer({ type: "up", x: 2, y: to, button: "left", in: list });
+    };
+    // The new row (8) dropped on the prompt marker's line (1), under row 1; then, a line further down each, again.
+    for (const [from, to, marker] of [[8, 1, "━━ row 3 ━━"], [9, 2, "━━ row 4 ━━"]] as const) {
+      await drag("tags", 1, 1);
+      await drag("lines", from, to);
+      await caughtUp(on, ui);
+      expect((await ui.findAll({ type: "Text", in: "tags" })).map((t) => flat(t))).toContain(marker);
+    }
+    await ui.unmount();
+  });
+
   test("the order pane lists the lines around the prompt marker and each row's tags under its marker, hidden ones after theirs", { options: { layout: "cache,model,limit_5h,context,turns,tokens;changes,spacer,folders,branch,worktree,pr,review,comments,sync,checks;prompt;fresh;compact;explain;hidden;limit_7d,conflict", compact_hint: false } }, async ($, on) => {
+    clockOn(on);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
@@ -3038,6 +3174,7 @@ describe("cockpit", () => {
   });
 
   test("the order pane's text says the explanation line holds the run-out warning", async ($, on) => {
+    clockOn(on);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: /The explanation line .*run-out warning/ })).toBeDefined();
     expect(await ui.find({ type: "Text", text: /forecast/ })).toBeUndefined();
@@ -3050,6 +3187,7 @@ describe("cockpit", () => {
     [true, ["tokens"], { tokens: "total costs" }],
   ] as const) {
     test(`the order pane lists ${items.length} cost tags with merge_costs ${merged}`, { options: { ...PINNED, merge_costs: merged } }, async ($, on) => {
+      clockOn(on);
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
       expect(tags).toMatchObject({ labels });
@@ -3072,6 +3210,7 @@ describe("cockpit", () => {
     ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
+      clockOn(on);
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
       expect(await clientProps("lines")).toMatchObject({ items: [...lines, "hidden", "spacer", "row"] });
@@ -3153,6 +3292,7 @@ describe("cockpit", () => {
   });
 
   test("wraps a label in a narrow order pane, and a press on its second line picks it", { options: PINNED }, async ($, on) => {
+    clockOn(on);
     const written: [string, unknown][] = [];
     on("config.list", () => ({ value: ROWS }));
     on("config.set", (_$, e) => {
@@ -3214,6 +3354,7 @@ describe("cockpit", () => {
   });
 
   async function colorsPane($: Engine, on: On, options: Record<string, unknown>, act: (ui: Mounted<"terminal", "Pane">) => Promise<void>) {
+    clockOn(on);
     const written: [string, unknown][] = [];
     const toasts: string[] = [];
     // Another plugin's colors row comes first: the write still goes to the mod's own.
@@ -3241,6 +3382,7 @@ describe("cockpit", () => {
   });
 
   test("keeps a colour's swatch and field whole in a narrow pane, its label wrapping between them", async ($, on) => {
+    clockOn(on);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 24, placement: "dock", ...SITE } });
     const boxes = await ui.findAll({ type: "Box" });
@@ -3257,6 +3399,7 @@ describe("cockpit", () => {
   });
 
   test("lists the seven pace colours under Limit pace in the colours pane, with their defaults", async ($, on) => {
+    clockOn(on);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const drawn = await ui.drawn();
@@ -3273,6 +3416,7 @@ describe("cockpit", () => {
   });
 
   test("names the styles each pace colour serves in the colours pane: under pace gauge and notch, spare and deep red lanes", async ($, on) => {
+    clockOn(on);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: "gauge and notch: under pace" })).toBeDefined();
@@ -3308,6 +3452,7 @@ describe("cockpit", () => {
   });
 
   test("names the run-out warning's sign among what the warnings colour sets", async ($, on) => {
+    clockOn(on);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     expect(await ui.find({ type: "Text", text: "the compaction line's diamond and link, the run-out warning's sign" })).toBeDefined();
@@ -3316,6 +3461,7 @@ describe("cockpit", () => {
   });
 
   test("writes to an installed copy's rows, named for its marketplace", async ($, on) => {
+    clockOn(on);
     const written: string[] = [];
     const installed = (field: string, value: ConfigValue): ConfigRow => ({ ...configRow(field, value), key: `cockpit@cc-mods.${field}`, provider: { plugin: "cockpit@cc-mods", tier: "user" } });
     const other: ConfigRow = { ...configRow("gradients", true), key: "otherplugin.gradients", provider: { plugin: "otherplugin", tier: "user" } };
@@ -3462,6 +3608,18 @@ describe("cockpit", () => {
     expect(asked).toEqual([]);
   });
 
+  // The engine's clock runs 2 hours behind the machine's: a 7d refused until an hour ago by the machine's has not reset by it.
+  test("counts a refused window as used up until the engine's clock reaches its reset", { options: { usage_lookup: true } }, async ($, on) => {
+    clockOn(on, Date.now() - 2 * 3_600_000);
+    stubHint(on);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: { seven_day: Date.now() - 3_600_000 }, version: 1 } }));
+    const { asked } = lookupWorld(on);
+    await startWithLimits($, on, [sevenResettingAt(60, localAt(3, 16))]);
+    await endTurn($, () => asked.length >= 1);
+    expect(asked[0]?.url).toBe(USAGE_URL);
+  });
+
   // A lookup that fails, each way it can: an error and a refusal (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC refuses a
   // request that carries the credential), an error status, a body that is no JSON. The 7d is used up in each, the row
   // draws without an error or a toast, and the credits tag stays hidden.
@@ -3508,7 +3666,8 @@ describe("cockpit", () => {
   });
 
   // The tags the order pane lists for a row, in the layout the options give: the mod's own default, or a saved one.
-  const orderedTags = async ($: Engine, row: string) => {
+  const orderedTags = async ($: Engine, on: On, row: string) => {
+    clockOn(on);
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const props = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
     await ui.unmount();
@@ -3517,12 +3676,12 @@ describe("cockpit", () => {
     return items.slice(at + 1, items.indexOf(`row-${Number(row.slice(4)) + 1}`));
   };
 
-  test("places the credits tag after limit_5h in the default layout, a gap on each side", async ($) => {
-    expect((await orderedTags($, "row-2")).slice(4, 9)).toEqual(["limit_5h", "gap-1", "credits", "gap-1", "context"]);
+  test("places the credits tag after limit_5h in the default layout, a gap on each side", async ($, on) => {
+    expect((await orderedTags($, on, "row-2")).slice(4, 9)).toEqual(["limit_5h", "gap-1", "credits", "gap-1", "context"]);
   });
 
-  test("places the credits tag after limit_5h in a saved layout that does not name it", { options: { layout: "folders;prompt;model,limit_7d,limit_5h,context;fresh;compact;explain" } }, async ($) => {
-    expect((await orderedTags($, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
+  test("places the credits tag after limit_5h in a saved layout that does not name it", { options: { layout: "folders;prompt;model,limit_7d,limit_5h,context;fresh;compact;explain" } }, async ($, on) => {
+    expect((await orderedTags($, on, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
   });
 
   test("draws a sample credits tag while the order pane shows and no credits state exists", async ($, on) => {
@@ -3569,6 +3728,7 @@ describe("cockpit", () => {
   });
 
   test("lists credits.spent in a group of its own in the colours pane, with its default", async ($, on) => {
+    clockOn(on);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     const drawn = await ui.drawn();

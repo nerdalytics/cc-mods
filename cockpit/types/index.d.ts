@@ -81,7 +81,7 @@ declare module "claude-code" {
       prTrace: string[];
       // Why the handoff did or did not run while its window was open, newest last; read by the debug mod's /debug:handoff-trace pane.
       handoffTrace: string[];
-      // When the latest copy of the module loaded: an older copy's tick stops once it reads a newer one.
+      // A random id of the latest copy of the module loaded: an older copy's tick stops once it reads another's.
       load: number;
       // When the person last prompted, and when the mod last ran a handoff and a compaction (ms): they outlive a reload of the module.
       stretch: { promptAt: number; handoffAt: number; compactedAt: number };

@@ -306,7 +306,8 @@ type ListKey = "lines" | "tags";
 const isList = (key: string): key is ListKey => key === "lines" || key === "tags";
 type List = { items: string[]; labels: Record<string, string>; fixed: string[] };
 let lists: Record<ListKey, List> = listsOf(layout, () => true);
-// Changes whenever the lists do, so each list's Client drops a drag it kept from before.
+// Changes whenever the lists do, so each list's Client drops a drag it kept from before. A random number, not a count:
+// an option write loads the module again, and a count starting over at 0 could repeat a revision an older copy gave.
 let rev = 0;
 const listProps = (key: ListKey) => ({ ...lists[key], rev });
 
@@ -688,7 +689,7 @@ export const register: Register = (on, options) => {
     else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
   lists = listsOf(layout, shown, mergeCosts);
-  rev = Date.now();
+  rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   barCells = {
     "7d": lengthOf(options.limit_7d_length, BAR_CELLS["7d"]),
@@ -749,7 +750,7 @@ export const register: Register = (on, options) => {
     const sameNames = [...data].sort().join(",") === [...items].sort().join(",");
     if (!sameNames || !fixed.every((name, i) => i === 0 || data.indexOf(fixed[i - 1] ?? "") < data.indexOf(name))) return next(e);
     const drop = dropped(key, data);
-    if (!drop) return { props: { ...listProps(key), rev: Date.now() } };
+    if (!drop) return { props: { ...listProps(key), rev: Math.random() } };
     const saved: Record<string, string | boolean> = { ...drop.toggles, layout: layoutText(drop.layout) };
     const changed = Object.entries(saved).filter(([field, value]) => value !== options[field]);
     changed.sort(([, a], [, b]) => Number(typeof b === "boolean") - Number(typeof a === "boolean"));
@@ -757,14 +758,14 @@ export const register: Register = (on, options) => {
       const deny = await setOption($, field, value);
       if (deny) {
         $.ui.toast(`Cockpit order: ${deny}`);
-        return { props: { ...listProps(key), rev: Date.now() } };
+        return { props: { ...listProps(key), rev: Math.random() } };
       }
     }
     // A drop in one list can change the other (a new row's marker), so the pane draws both again.
     const now = { ...options, ...saved };
     layout = drop.layout;
     lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts);
-    rev = Date.now();
+    rev = Math.random();
     $.ui.invalidate("ui.render");
     return { props: listProps(key) };
   });
@@ -815,7 +816,7 @@ export const register: Register = (on, options) => {
       busy = true;
       effort = e.effort ?? "none";
       // The main conversation's request goes out now: its cache lives a TTL from here.
-      void $.state.set(SENT, Date.now());
+      void $.state.set(SENT, await $.clock.now());
     }
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
@@ -852,7 +853,7 @@ export const register: Register = (on, options) => {
 
   on("prompt.submit", async ($, e, next) => {
     if (e.origin.kind === "composer") {
-      promptAt = Date.now();
+      promptAt = await $.clock.now();
       remember($);
     }
     return next(e);
@@ -862,7 +863,7 @@ export const register: Register = (on, options) => {
     const result = await next(e);
     if (!e.agentId) busy = false;
     if (turnRate && !e.agentId && e.usage && e.durationMs > 0) {
-      lastTurn = { tokens: e.usage.output_tokens, durationMs: e.durationMs, at: Date.now() };
+      lastTurn = { tokens: e.usage.output_tokens, durationMs: e.durationMs, at: await $.clock.now() };
       // The closing line may have drawn before this event: draw it again, now its tokens are known.
       $.ui.invalidate("ui.render");
     }
@@ -885,7 +886,9 @@ export const register: Register = (on, options) => {
   on("ui.render", { component: "TurnDuration" }, async ($, e, next) => {
     if (!turnRate) return next(e);
     let rate = turnRates.get(e.requestId);
-    if (rate === undefined && lastTurn && Date.now() - lastTurn.at < 5_000 && Math.abs(lastTurn.durationMs - e.props.durationMs) < 1_000) {
+    // Read before the test of lastTurn, which then runs without a wait, so two lines drawn at once cannot both take it.
+    const now = rate === undefined && lastTurn ? await $.clock.now() : 0;
+    if (rate === undefined && lastTurn && now - lastTurn.at < 5_000 && Math.abs(lastTurn.durationMs - e.props.durationMs) < 1_000) {
       rate = formatTokens(Math.floor((lastTurn.tokens * 1_000) / lastTurn.durationMs));
       turnRates.set(e.requestId, rate);
       lastTurn = undefined;
@@ -1113,7 +1116,7 @@ async function cacheClock($: EngineInterface): Promise<{ ttl: number; left: numb
   const cache = tokens?.cache;
   if (!cache) return undefined;
   const { value: sent } = await $.state.get(SENT);
-  const left = cacheLeft(cache, sent, Math.floor(Date.now() / 1000));
+  const left = cacheLeft(cache, sent, Math.floor((await $.clock.now()) / 1000));
   const lead = cache.ttl === 3_600 && idleCompaction ? IDLE_COMPACT_LEAD_S : (PING_LEAD_S[cache.ttl] ?? 300);
   return left > 0 ? { ttl: cache.ttl, left, lead } : undefined;
 }
@@ -1153,7 +1156,8 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   if (!autoHandoff) return;
   const cache = await cacheClock($);
   if (!cache || cache.left > cache.lead || (cache.ttl !== 3_600 && keepWarm <= 0)) return;
-  const no = (why: string) => traceHandoff($, `cache window open, no handoff: ${why}`);
+  const now = await $.clock.now();
+  const no = (why: string) => traceHandoff($, now, `cache window open, no handoff: ${why}`);
   if (busy) return no("a turn is running");
   if (promptAt === 0) return no("no prompt of yours in this session");
   if (handoffAt >= promptAt) return no("a handoff already ran since your last prompt");
@@ -1162,9 +1166,9 @@ async function maybeHandoff($: EngineInterface): Promise<void> {
   if (await limitsNear($)) return no("a usage limit is nearly reached");
   // With pings on, the handoff waits for the last of them.
   if (keepWarm > 0 && (pingFor !== promptAt || pings < keepWarm || (await $.clock.now()) - pingAt < PING_GAP_MS)) return no("the keep-warm pings are not done");
-  handoffAt = Date.now();
+  handoffAt = await $.clock.now();
   remember($);
-  traceHandoff($, `${Math.round(cache.left)} s of cache left, handoff started`);
+  traceHandoff($, handoffAt, `${Math.round(cache.left)} s of cache left, handoff started`);
   try {
     await $.command.run({ command: HANDOFF_COMMAND });
   } catch (err) {
@@ -1178,7 +1182,7 @@ async function maybeCompact($: EngineInterface): Promise<void> {
   if (!autoCompact || smartZone <= 0 || busy || compactedAt >= promptAt || (await agentsAtWork($))) return;
   const { value: usage } = await $.state.get(USAGE);
   if (usage?.context.tokens === undefined || usage.context.tokens < smartZone * COMPACT_HINT_AT || (await limitsNear($))) return;
-  compactedAt = Date.now();
+  compactedAt = await $.clock.now();
   remember($);
   await compactSession($);
 }
@@ -1190,7 +1194,7 @@ async function limitsNear($: EngineInterface): Promise<boolean> {
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: model = "" } = await $.state.get(MODEL);
   const cap = /fable|mythos/i.test(model) ? 90 : 98;
-  return limitsOf(usage?.rateLimits ?? [], rejected, Date.now()).some((r) => r.percentUsed >= 100 || (r.kind === "five_hour" && r.percentUsed >= cap));
+  return limitsOf(usage?.rateLimits ?? [], rejected, await $.clock.now()).some((r) => r.percentUsed >= 100 || (r.kind === "five_hour" && r.percentUsed >= cap));
 }
 
 // A subagent still at work keeps the session alive: its answer comes back to the main conversation, which writes the
@@ -1253,7 +1257,7 @@ async function freshStartLine($: EngineInterface, ui: Ui) {
   const { value: sent } = await $.state.get(SENT);
   const c = tokens?.cache;
   if (!c || !handoff || Math.max(c.at, sent ?? 0) > handoff.at + HANDOFF_GRACE_MS) return undefined;
-  const cold = cacheLeft(c, sent, Math.floor(Date.now() / 1000)) <= 0;
+  const cold = cacheLeft(c, sent, Math.floor((await $.clock.now()) / 1000)) <= 0;
   if ((!cold && handoff.at < promptAt) || (await agentsAtWork($))) return undefined;
   // ponytail: priced at this conversation's write rate, the handoff at 4 bytes a token; the new session's system
   // prompt is likely read from a cache other sessions keep warm, so this is an upper bound.
@@ -1503,17 +1507,19 @@ async function startSession($: EngineInterface): Promise<void> {
   prFor = undefined;
   // A copy of this module loaded before a /reload-plugins kept its tick running in the same session, and wrote its
   // own (older) state shapes over this one's. The latest load stands in the state: an older copy's tick stops itself.
-  const load = Date.now() + Math.random();
+  // A random id tells the loads apart, with no clock read.
+  const load = Math.random();
   await $.state.set(LOAD, load);
   const own = (tick = $.clock.every(FRAME_MS, () => {
     void $.state.get(LOAD).then(({ value }) => value !== load && own.cancel());
     const steps = EFFORT_STEPS[String(effort)] ?? HIGH_STEPS;
     phase = (phase + (FRAME_MS / 1000) * steps * STEP_CYCLES_PER_SECOND) % 1;
-    void $.state.set(TICK, Date.now());
+    // A value that differs each frame draws again what reads TICK; none of its readers keeps it, so it need not be a time.
+    void $.state.set(TICK, ++frames);
     // Read every frame, so a /model switch shows within a frame instead of when the next turn ends.
     void $.session.model().then((model) => $.state.set(MODEL, model));
     void readTurns($);
-    if (++frames % (POLL_MS / FRAME_MS) === 0) poll($);
+    if (frames % (POLL_MS / FRAME_MS) === 0) poll($);
     if (frames % (REJECTED_POLL_MS / FRAME_MS) === 0) refreshRejected($);
   }));
   try {
@@ -1597,8 +1603,8 @@ const running = new Map<string, { again: boolean }>();
 // TEMPORARY: the PR fetches, read by the debug mod's /pr-trace pane; remove with the calls to trace.
 const PR_TRACE = { plugin: "cockpit", key: "prTrace" } as const;
 const traceLog: string[] = [];
-function trace($: EngineInterface, msg: string): void {
-  traceLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
+function trace($: EngineInterface, at: number, msg: string): void {
+  traceLog.push(`${new Date(at).toTimeString().slice(0, 8)} ${msg}`);
   void $.state.set(PR_TRACE, traceLog.slice(-200));
 }
 
@@ -1606,10 +1612,10 @@ function trace($: EngineInterface, msg: string): void {
 // last one is dropped, as the poll asks every 2 s.
 const HANDOFF_TRACE = { plugin: "cockpit", key: "handoffTrace" } as const;
 let lastHandoffTrace = "";
-function traceHandoff($: EngineInterface, msg: string): void {
+function traceHandoff($: EngineInterface, at: number, msg: string): void {
   if (msg === lastHandoffTrace) return;
   lastHandoffTrace = msg;
-  void $.state.get(HANDOFF_TRACE).then(({ value = [] }) => $.state.set(HANDOFF_TRACE, [...value, `${new Date().toTimeString().slice(0, 8)} ${msg}`].slice(-200)));
+  void $.state.get(HANDOFF_TRACE).then(({ value = [] }) => $.state.set(HANDOFF_TRACE, [...value, `${new Date(at).toTimeString().slice(0, 8)} ${msg}`].slice(-200)));
 }
 
 // The usage lookup at a main turn's end: Anthropic's usage and account profile endpoints, called with the session's own
@@ -1624,11 +1630,11 @@ function refreshCredits($: EngineInterface): void {
 async function lookupCredits($: EngineInterface): Promise<void> {
   const { value: usage } = await $.state.get(USAGE);
   const { value: rejected } = await $.state.get(REJECTED);
-  if (!usage || !windowUsedUp(usage.rateLimits, rejected, Date.now())) return;
+  const now = await $.clock.now();
+  if (!usage || !windowUsedUp(usage.rateLimits, rejected, now)) return;
   const auth = await $.session.authorize();
   // No first-party login, or a key rather than a login: no request.
   if (auth?.kind !== "bearer") return;
-  const now = await $.clock.now();
   const { value: pace = { notBefore: 0, failures: 0 } } = await $.state.get(LOOKUP_PACE);
   if (now < pace.notBefore) return;
   let failures = pace.failures;
@@ -1738,9 +1744,9 @@ function refreshGit($: EngineInterface): void {
     prAt = now;
     const pr = branch ? await fetchPr($) : null;
     prBusy = (pr?.checks.pending ?? 0) > 0;
-    trace($, `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
+    trace($, await $.clock.now(), `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
     await $.state.set(PR, pr);
-  }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
+  }, () => void $.clock.now().then((at) => trace($, at, "git job still running; poll folded into again")), (err) => void $.clock.now().then((at) => trace($, at, `git job failed: ${err instanceof Error ? err.message : String(err)}`)));
 }
 
 async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | undefined> {
@@ -1970,7 +1976,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
     const fields = "number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state";
     const { exitCode, stdout, stderr } = await $.process.run(["gh", "pr", "view", "--json", fields], { timeoutMs: 15_000 });
     if (exitCode !== 0) {
-      trace($, `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
+      trace($, await $.clock.now(), `gh exit ${exitCode}: ${stderr.trim().slice(0, 120)}`);
       return null;
     }
     const pr: GhPr | null = JSON.parse(stdout);
@@ -1997,7 +2003,7 @@ async function fetchPr($: EngineInterface): Promise<StatusPr | null> {
       checks,
     };
   } catch (err) {
-    trace($, `fetchPr threw: ${err instanceof Error ? err.message : err}`);
+    trace($, await $.clock.now(), `fetchPr threw: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }
