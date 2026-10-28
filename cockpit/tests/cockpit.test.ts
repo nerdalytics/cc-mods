@@ -20,10 +20,6 @@ function shuffled<T>(items: T[]): T[] {
   return items;
 }
 
-// The test host has setTimeout, but the API's globals leave it out; a test waits on it for the hooks it started.
-declare function setTimeout(handler: () => void, ms: number): unknown;
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
-
 // A prompt typed at the composer, as the person sends one.
 const typeAtComposer = ($: Engine, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: "composer" } });
 // What the host hands a pane and a band besides the mod's own props.
@@ -129,13 +125,13 @@ const md = [
 // the hour would round across it.
 const START = Date.parse("2026-10-27T12:00:00Z");
 // The clock a test's `on` answers the mod's time from. The kit takes one registration per test, so the first call makes it, at
-// `now` (the real time when not given), and every later call returns that same clock. The real time is read only when
-// the clock is made, so a later call reads no machine clock.
+// `now`, and every later call returns that same clock. A first call without `now` throws: no clock starts at the real time.
 const clocks = new WeakMap<On, MockClock>();
 function clockOn(on: On, now?: number): MockClock {
   let clock = clocks.get(on);
   if (!clock) {
-    clock = mock.clock(on, { now: now ?? Date.now() });
+    if (now === undefined) throw new Error("clockOn: the test's first call names the time its clock starts at");
+    clock = mock.clock(on, { now });
     clocks.set(on, clock);
   }
   return clock;
@@ -852,9 +848,9 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     let ui = await mount();
     let cache = await chip(ui);
-    // 50 minutes left of the hour (49 once a second passes).
+    // 50 minutes left of the hour.
     expect(flat(cache.children[0])).toBe(" ● ");
-    expect(flat(cache.children[1])).toMatch(/^ (50|49)m \$0\.20 $/);
+    expect(flat(cache.children[1])).toBe(" 50m $0.20 ");
     // Hovered, the explanation line shows what writing it again costs once cold.
     expect(await explanationOf(ui, "cache")).toContain("$8.00");
     // Hoverable, so the value stands on the grey.
