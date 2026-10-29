@@ -1,5 +1,0 @@
-**From:** session 2026-10-26, while working on limit-texts-count-forward
-
-In review round 4 of ticket 01, the reviewer ran `claude plugin test cockpit` 16 times at 105e94f. Fifteen runs printed `263 pass`, `0 fail`; the first printed `262 pass`, `1 fail`, piped through `tail`, so the failing test's name was not captured, and the reviewer could not reproduce it. It guessed a clock-dependent test failing near 23:05 local, which is unverified. The steering session then ran the suite three times at 23:15 CET, all `263 pass`, `0 fail`, exit 0. The cause is not known. Next time it happens, run the suite without a pipe and keep the failing test's name.
-
-Later in the same run, ticket 03's implementer reported one full run of the suite failing once with "draws the subagents' costs as a tag of their own, where the layout puts it", `Error: timed out after 5000 ms` (6096 ms), and passing on the rerun with no change. That is the kind of failure `.do/inbox/2026-10-25-cockpit-tests-time-out.md` describes, so the reviewer's one-off failure may have been the same, but its test name was not captured, so that is not confirmed.

@@ -1,3 +1,0 @@
-# Lanes spare count has no epsilon on its floor
-
-The `lanes` block count adds ε = 1e-9 before rounding an over-pace count up, so an `ahead` that floating point puts a hair above a whole number still counts as that number, but the under-pace count `Math.floor(−ahead)` has no matching ε, so a `−ahead` a hair below a whole number spares one cell too few. The approved prototype (`cockpit/prototype-lanes.mjs`, `blocks`) has the same asymmetry, and ticket 01's reviewer noted it as not checked (review of d081991 on `cockpit/lanes-blocks`). A fix would be `Math.floor(−ahead + 1e-9)` with a test that hits such a value.
