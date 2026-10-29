@@ -1,6 +1,7 @@
 import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, type MockClock, mock, test as kitTest, type TestRest } from "claude-code/testing";
 import type { StatusCredits } from "../types";
+import { timeoutMs } from "./machine.local.ts";
 
 // The host has a console too, which the API's globals leave out.
 declare const console: { log: (...data: unknown[]) => void };
@@ -3834,5 +3835,9 @@ describe("cockpit", () => {
     });
 
   console.log(`cockpit tests in random order, seed ${seed}`);
-  for (const [name, rest] of shuffled(queued)) kitTest(name, ...rest);
+  // Every test gets this machine's timeout; a test's own options and body pass through.
+  for (const [name, rest] of shuffled(queued)) {
+    if (rest.length === 2) kitTest(name, { ...rest[0], timeoutMs }, rest[1]);
+    else kitTest(name, { timeoutMs }, rest[0]);
+  }
 });
