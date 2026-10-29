@@ -3834,6 +3834,12 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // A home whose transcripts hold one row, a refusal, which the scan for refusals finds.
+  const holdingRefusal = (on: On, row: object) => {
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("process.run", (_$, e) => ({ value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${JSON.stringify(row)}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } }));
+  };
+
   // The intervals in which a window read 100%. A session starts at `T` with the readings given; each later `hear` moves the
   // clock on, then a response brings the next readings, which the polls in between read as well. The resets are seconds
   // from the start, so the clock crosses them in a few frames.
@@ -3899,9 +3905,7 @@ describe("cockpit", () => {
   test("counts a refusal that has not reset as a window at 100% in an interval", async ($, on) => {
     stubHint(on, START);
     const T = clockOn(on).now();
-    const refusal = JSON.stringify({ type: "assistant", apiError: "usage_limit_reached", quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((T + 3_600_000) / 1000) } });
-    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
-    on("process.run", (_$, e) => ({ value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } }));
+    holdingRefusal(on, { type: "assistant", apiError: "usage_limit_reached", quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((T + 3_600_000) / 1000) } });
     const run = await usedUpTest($, on, [windowAt(T, "seven_day", 80, 3_600_000)]);
     await run.hear([windowAt(T, "seven_day", 80, 3_600_000)], 2_000);
     expect(run.intervals()).toEqual([{ from: T + 2_000 }]);
@@ -3927,9 +3931,10 @@ describe("cockpit", () => {
   });
 
   // The model answers a main-session request with usage; `reply` sends one through the mod, as a turn's step.
+  const modelReply = (e: { turnId: string; index: number }) => ({ turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn" as const, usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
   const answering = (on: On) =>
     on("turn.step", async function* (_$, e) {
-      return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+      return modelReply(e);
     });
   const reply = async ($: Engine, agentId?: string) => {
     for await (const _chunk of $.turn.step({ turnId: "t1", index: 0, model: "claude-opus-5-5", messageCount: 1, agentId })) {
@@ -3959,7 +3964,7 @@ describe("cockpit", () => {
     const clock = clockOn(on);
     on("turn.step", async function* (_$, e) {
       await clock.sleep(500);
-      return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+      return modelReply(e);
     });
     return clock;
   };
@@ -3974,6 +3979,7 @@ describe("cockpit", () => {
     await answered;
     const ui = await mountHint($);
     expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this pace it resets at ${CLOCK} with ~\\d+% unused\\.$`));
     await ui.unmount();
   });
 
@@ -4013,14 +4019,12 @@ describe("cockpit", () => {
   const workWentOn = async ($: Engine, on: On, refusedAfter: number) => {
     answering(on);
     const T = clockOn(on).now();
-    const refusal = JSON.stringify({
+    holdingRefusal(on, {
       type: "assistant",
       timestamp: new Date(T + refusedAfter).toISOString(),
       apiError: "usage_limit_reached",
       apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt: Math.floor((T + 52.5 * HOUR) / 1000), overageStatus: "rejected", overageDisabledReason: "out_of_credits" } },
     });
-    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
-    on("process.run", (_$, e) => ({ value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } }));
     const first = [SEVEN_USED_UP, reading("five_hour", 10, 0.6)];
     const run = await usedUpTest($, on, first);
     await clockOn(on).advance(1_000);
@@ -4041,6 +4045,7 @@ describe("cockpit", () => {
     stubHint(on, START);
     const ui = await workWentOn($, on, 500);
     expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this pace it resets at ${CLOCK} with ~\\d+% unused\\.$`));
     await ui.unmount();
   });
 
