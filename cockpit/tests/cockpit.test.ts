@@ -137,6 +137,8 @@ function clockOn(on: On, now?: number): MockClock {
   }
   return clock;
 }
+// The session's state already holds the credits a usage lookup left, as a turn's lookup would have.
+const lookupSays = (on: On, credits: StatusCredits) => on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
 // Settling the clock finishes the mod's unawaited work, but its $.state writes draw only at the redraw rate: draw `ui` now.
 async function caughtUp(on: On, ui: { redraw: () => Promise<void> }): Promise<void> {
   await clockOn(on).settle();
@@ -167,8 +169,7 @@ async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
 async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57, reloaded = false, credits }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number; reloaded?: boolean; credits?: StatusCredits } = {}): Promise<string[]> {
   stubHint(on, START);
-  // The lookup's credits, as an earlier turn's lookup left them in the session's state.
-  if (credits) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
+  if (credits) lookupSays(on, credits);
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
   const clock = clockOn(on);
@@ -2070,7 +2071,7 @@ describe("cockpit", () => {
     stubHint(on, START);
     const clock = clockOn(on);
     const ran: string[] = [];
-    if (credits) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
+    if (credits) lookupSays(on, credits);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
@@ -3793,7 +3794,7 @@ describe("cockpit", () => {
   const creditsOf = (extra: Partial<StatusCredits> = {}): StatusCredits => ({ at: START, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null, ...extra });
   const holding = (on: On, credits: StatusCredits, billing?: number, rejected?: Record<string, number>) => {
     clockOn(on);
-    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
+    lookupSays(on, credits);
     if (billing !== undefined) on("state.get", { plugin: "cockpit", key: "billing" }, () => ({ value: { value: billing, version: 1 } }));
     if (rejected) on("state.get", { plugin: "cockpit", key: "rejected" }, () => ({ value: { value: rejected, version: 1 } }));
   };
@@ -4393,8 +4394,9 @@ describe("cockpit", () => {
   });
 
   // The limits are read at the start, a reply comes a second later, and the same limits are read again: work went on.
-  const afterWorkWentOn = async ($: Engine, on: On, limits: SessionRateLimit[]) => {
+  const afterWorkWentOn = async ($: Engine, on: On, limits: SessionRateLimit[], credits?: StatusCredits) => {
     stubHint(on, START);
+    if (credits) lookupSays(on, credits);
     answering(on);
     const run = await usedUpTest($, on, limits);
     await clockOn(on).advance(1_000);
@@ -4513,6 +4515,22 @@ describe("cockpit", () => {
     expect(await explainedAtNoon($, on, creditsOf(), [sevenResettingAt(100, localAt(0, 16)), fiveAt(0, localAt(0, 17))], "limit_5h")).toBe("5h at 0%: it resets at 5 PM.");
   });
 
+  // Both at 100%, covered: each text names the later of the two resets, a limit's own only when it is that one.
+  for (const [what, sevenHour, fiveHour, clock] of [
+    ["the 7d resets later", 20, 17, "8 PM"],
+    ["the 5h resets later", 16, 17, "5 PM"],
+  ] as const)
+    test(`names the later reset in both covered texts when both windows are at 100% and ${what}`, { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+      stubHint(on, localAt(0, 12).getTime());
+      holding(on, creditsOf(), 17);
+      await startWithLimits($, on, [sevenResettingAt(100, localAt(0, sevenHour)), fiveAt(100, localAt(0, fiveHour))]);
+      const ui = await mountHint($);
+      const words = `used up, usage credits cover you until it resets at ${clock}.`;
+      expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: ${words}`);
+      expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: ${words}`);
+      await ui.unmount();
+    });
+
   test("pauses the 5h gauge again, and says it is paused until the 7d resets, when the lookup reports the cap reached", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     stubHint(on, START);
     holding(on, creditsOf({ spent: 1500, capReached: true }), 17);
@@ -4541,15 +4559,13 @@ describe("cockpit", () => {
   // Work went on past the used-up 7d, with no lookup to say so: as the tests above, the 5h is not paused. A lookup that answered
   // takes the place of that guess, whichever way it answered.
   test("reads the covered 7d as covered by credits, not as work going on, when the lookup says credits cover it and work went on", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
-    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: creditsOf(), version: 1 } }));
-    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)], creditsOf());
     expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 100%: used up, usage credits cover you until it resets at ${CLOCK}\\.$`));
     await ui.unmount();
   });
 
   test("keeps the 5h paused when the lookup reports the cap reached, though work went on past the 7d", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
-    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: creditsOf({ spent: 1500, capReached: true }), version: 1 } }));
-    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)], creditsOf({ spent: 1500, capReached: true }));
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
     await ui.unmount();
   });
@@ -4565,6 +4581,16 @@ describe("cockpit", () => {
 
   test("runs the handoff with the 5h at 100% and the 7d at 60% while credits cover the 5h", { options: { usage_lookup: true } }, async ($, on) => {
     expect(await handoffRuns($, on, { rateLimits: [FIVE_100, SEVEN_60], credits: creditsOf() })).toEqual(["cockpit:handoff"]);
+  });
+
+  // Credits pay for a window at 100%, not for one nearly there: the 5h at 98% still holds the handoff.
+  test("runs no handoff with the 5h at 98% while credits are paying", { options: { usage_lookup: true } }, async ($, on) => {
+    expect(await handoffRuns($, on, { rateLimits: [{ kind: "five_hour", percentUsed: 98 }], credits: creditsOf() })).toEqual([]);
+  });
+
+  // The credits in the state are those of an earlier session with the option on: with it off, no lookup speaks for the window.
+  test("runs no handoff with the 7d at 100% when usage_lookup is off, though the state holds credits that cover it", { options: { usage_lookup: false } }, async ($, on) => {
+    expect(await handoffRuns($, on, { rateLimits: [SEVEN_100], credits: creditsOf() })).toEqual([]);
   });
 
   test("pings the cache and then runs the handoff with the 7d at 100% while credits cover it", { options: { usage_lookup: true, keep_warm_pings: 2 } }, async ($, on) => {
