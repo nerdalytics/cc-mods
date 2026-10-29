@@ -193,21 +193,53 @@ function amountOf(minor: number, { decimals, currency }: StatusCredits): string 
   return `${symbol ?? `${currency} `}${(minor / 10 ** decimals).toFixed(decimals)}`;
 }
 
-// The credits tag's explanation: its badge and the share spent, rounded, the amounts against the cap, and when the cap
-// resets, as a date and a clock, when that is known.
-function creditsWords(credits: StatusCredits, resetsAtMs: number | undefined): string {
+// The credits tag has no pace from a lookup older than this, or before this share of the billing month has passed.
+const CREDITS_FRESH_MS = 600_000;
+const CREDITS_PACE_FROM = 0.1;
+
+// The credits tag's explanation: its badge and the share spent, rounded, then one sentence. With a pace it says when the
+// cap runs out or what is left at the reset, from the share of the billing month gone when the spend was read
+// (`credits.at`), the times counted from now. Without one it gives the amounts and the reset, when known.
+function creditsWords(credits: StatusCredits, s: Snapshot): string {
+  const now = s.now * 1000;
+  const seven = limitsOf(s.usage.rateLimits, s.rejected, now).find((r) => r.kind === "seven_day");
+  const head = `${badgeOf(credits)} at ${Math.round(creditsShare(credits))}%`;
+  // Work resumes when the window that is used up resets: the later reset when both are, as limitWords names it.
+  const resetOf = (r: StatusLimit) => (r.resetsAt ? Date.parse(r.resetsAt) : -Infinity);
+  const ends = usedUpWindows(s.usage.rateLimits, s.rejected, now).reduce<StatusLimit | undefined>((a, r) => (a && resetOf(a) >= resetOf(r) ? a : r), undefined);
+  if (credits.capReached && ends) {
+    const at = resetOf(ends);
+    return `${head}: the cap is reached, you can work again when the ${LIMITS.find((l) => l.kind === ends.kind)?.badge} resets${at > now ? ` at ${resetClock(at, now)}` : ""}.`;
+  }
+  if (credits.reason === "out_of_credits") return `${head}: out of usage credits, buy more to keep going.`;
   const spent = `${amountOf(credits.spent, credits)} of ${amountOf(credits.cap, credits)} spent`;
-  return `${badgeOf(credits)} at ${Math.round(creditsShare(credits))}%: ${spent}${resetsAtMs === undefined ? "" : `, it resets on ${dateClock(resetsAtMs)}`}.`;
+  const resetsAt = billingMonth(s.billing, seven, now)?.to;
+  if (resetsAt === undefined) return `${head}: ${spent}.`;
+  const reset = dateClock(resetsAt, now);
+  // The pace is measured over the month the lookup fell in, which tells nothing once that month has ended.
+  const month = billingMonth(s.billing, seven, credits.at);
+  const monthMs = month ? month.to - month.from : 0;
+  const gone = month ? credits.at - month.from : 0;
+  const paced = month?.to === resetsAt && limitStyle !== "classic" && credits.cap > 0 && now - credits.at <= CREDITS_FRESH_MS && gone >= CREDITS_PACE_FROM * monthMs;
+  if (!paced) return `${head}: ${spent}, it resets on ${reset}.`;
+  // Integers in ms until the last division, so a third of a 30-day month reads 10d0h, not 9d23h.
+  const r = (credits.spent * monthMs) / (credits.cap * gone);
+  if (Math.abs(r - 1) <= 0.05) return `${head}: at this pace it reaches the cap as it resets on ${reset}.`;
+  if (r < 1) return `${head}: ${spent}, at this pace ${amountOf(Math.round(credits.cap - (credits.spent * monthMs) / gone), credits)} is left when it resets on ${reset}.`;
+  const hitIn = ((credits.cap - credits.spent) * gone) / credits.spent - (now - credits.at);
+  // A run-out under a minute away, or already due, reads as limitWords reads it, the whole time to the reset before it.
+  const runsOut = hitIn >= 60_000 ? `in ${countdown(hitIn / 1000)}, ${countdown((resetsAt - now - hitIn) / 1000)}` : `any moment, ${countdown((resetsAt - now) / 1000)}`;
+  return `${head}: ${spent}, at this pace the cap runs out ${runsOut} before it resets on ${reset}.`;
 }
 
-// When the credit cap next resets: the next billing day at the 7d reading's local time of day, as nothing reports the
-// cap's own. A month shorter than the billing day ends on its last day. None without a billing day or a 7d reset time.
-function creditsReset(billing: number | undefined, seven: StatusLimit | undefined, nowMs: number): number | undefined {
+// The billing month around `ms`: from the billing day at the 7d reading's local time of day, as nothing reports the cap's
+// own, to the next one. A month shorter than the billing day ends on its last day. None without a billing day or a 7d reset time.
+function billingMonth(billing: number | undefined, seven: StatusLimit | undefined, ms: number): { from: number; to: number } | undefined {
   const time = seven?.resetsAt ? new Date(seven.resetsAt) : undefined;
   if (billing === undefined || time === undefined || Number.isNaN(time.getTime())) return undefined;
-  const today = new Date(nowMs);
-  const reset = (month: number) => new Date(today.getFullYear(), today.getMonth() + month, Math.min(billing, new Date(today.getFullYear(), today.getMonth() + month + 1, 0).getDate()), time.getHours(), time.getMinutes()).getTime();
-  return reset(0) > nowMs ? reset(0) : reset(1);
+  const today = new Date(ms);
+  const boundary = (month: number) => new Date(today.getFullYear(), today.getMonth() + month, Math.min(billing, new Date(today.getFullYear(), today.getMonth() + month + 1, 0).getDate()), time.getHours(), time.getMinutes()).getTime();
+  return boundary(0) <= ms ? { from: boundary(0), to: boundary(1) } : { from: boundary(-1), to: boundary(0) };
 }
 
 // The lines around the prompt, in the layout option: rows of tags, and a line of the mod's own for each offer and for
@@ -1401,8 +1433,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   }
   const credits = creditsShown(s);
   if (credits) {
-    const seven = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000).find((r) => r.kind === "seven_day");
-    out.credits = creditsWords(credits, creditsReset(s.billing, seven, s.now * 1000));
+    out.credits = creditsWords(credits, s);
   }
   if (context.tokens !== undefined && context.window > 0) {
     const usable = usableOf(context, s.compactAt);
@@ -2530,10 +2561,11 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function resetClock(resetMs: number, nowMs: number): string {
   const at = new Date(Math.round(resetMs / 60_000) * 60_000);
   const today = new Date(nowMs);
-  const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate();
-  const day = sameDay ? "" : `${at.getDay() === today.getDay() ? "next " : ""}${WEEKDAYS[at.getDay()]} `;
+  const day = sameLocalDay(at, today) ? "" : `${at.getDay() === today.getDay() ? "next " : ""}${WEEKDAYS[at.getDay()]} `;
   return `${day}${clockOf(at)}`;
 }
+
+const sameLocalDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
 // The hour and minutes of a time on a 12-hour clock: `3 PM`, `3:30 PM`.
 function clockOf(at: Date): string {
@@ -2543,9 +2575,11 @@ function clockOf(at: Date): string {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// A reset by its date and local clock time, `Nov 17 4 PM`, rounded to the minute as resetClock rounds it.
-function dateClock(resetMs: number): string {
+// A reset by its date and local clock time, `Nov 17 4 PM`, rounded to the minute as resetClock rounds it; the clock alone,
+// `4 PM`, when it falls on today's date.
+function dateClock(resetMs: number, nowMs: number): string {
   const at = new Date(Math.round(resetMs / 60_000) * 60_000);
+  if (sameLocalDay(at, new Date(nowMs))) return clockOf(at);
   return `${MONTHS[at.getMonth()]} ${at.getDate()} ${clockOf(at)}`;
 }
 
