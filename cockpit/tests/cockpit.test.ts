@@ -3822,11 +3822,12 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("explains the credits without a reset when the 7d has no reset time", { options: { usage_lookup: true } }, async ($, on) => {
+  test("explains the credits without a reset and draws no month below when the 7d has no reset time", { options: { usage_lookup: true } }, async ($, on) => {
     stubHint(on, START);
     holding(on, creditsOf(), 17);
     await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }]);
     const ui = await mountHint($);
+    expect((await creditsTag(ui))?.bar).toBe("TTTT___");
     expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
     await ui.unmount();
   });
@@ -3842,27 +3843,20 @@ describe("cockpit", () => {
     const day = new Date(now);
     return [sevenResettingAt(100, new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1, hour, minute))];
   };
-  // The credits explanation of a session whose clock starts at `now` and whose state holds `credits` and the billing day.
-  const creditsExplained = async ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => {
+  // What `read` takes from the credits tag of a session whose clock starts at `now` and whose state holds `credits` and the billing day.
+  const creditsRead = async <T>($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits: SessionRateLimit[], read: (ui: Mounted<"terminal", "PromptHint">) => Promise<T>): Promise<T> => {
     stubHint(on, now);
     holding(on, creditsOf({ at: now, ...credits }), billing);
     await startWithLimits($, on, limits);
     const ui = await mountHint($);
-    const text = await explanationOf(ui, "credits");
+    const found = await read(ui);
     await ui.unmount();
-    return text;
+    return found;
   };
-
-  // The credits tag as limitTagOf draws a limit's, for a session whose clock starts at `now`. The billing day is the 1st unless given, with the 7d resetting at 4 PM.
-  const creditsDrawn = async ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => {
-    stubHint(on, now);
-    holding(on, creditsOf({ at: now, ...credits }), billing);
-    await startWithLimits($, on, limits);
-    const ui = await mountHint($);
-    const drawn = await limitTagOf(ui, "credits");
-    await ui.unmount();
-    return drawn;
-  };
+  // The credits explanation.
+  const creditsExplained = ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => creditsRead($, on, now, credits, billing, limits, (ui) => explanationOf(ui, "credits"));
+  // The credits tag as limitTagOf draws a limit's.
+  const creditsDrawn = ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => creditsRead($, on, now, credits, billing, limits, (ui) => limitTagOf(ui, "credits"));
   const SPENT = "#b87a8c";
 
   test("draws the credits lanes under pace: the top lane lit to the spend in the spent colour, the bottom to the month gone, dim", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {

@@ -198,8 +198,7 @@ function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number
   const spentCells = creditsSpentCells(credits, n);
   const monthCells = monthPct === undefined ? 0 : cells(monthPct, n);
   const ahead = paced && monthPct !== undefined ? ((spentPct - monthPct) * n) / 100 : 0;
-  // ε keeps an ahead that floating point puts a hair above a whole number at that number, as lanesCells does.
-  const impacted = Math.min(spentCells, ahead > 0 ? Math.ceil(ahead - 1e-9) : 0);
+  const impacted = Math.min(spentCells, ahead > 0 ? wholeCellsAhead(ahead) : 0);
   const empty = color("empty");
   return [...Array(n).keys()].map((i) => {
     const top = i >= spentCells ? empty : i < spentCells - impacted ? color("credits.spent") : overPace(i - (spentCells - impacted), impacted);
@@ -216,12 +215,11 @@ function creditsNotch(Text: Ui["Text"], credits: StatusCredits, monthPct: number
   const notch = paced && monthPct !== undefined ? cells(monthPct, n) : undefined;
   const empty = color("empty");
   const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });
-  const parts = [...Array(n).keys()].map((i) => {
+  // The notch stays inside the lane: a pace needs the lookup within its billing month, so less than all of it has gone.
+  return [...Array(n).keys()].map((i) => {
     const fill = i >= spentCells ? empty : notch === undefined || i < notch ? color("credits.spent") : overPace(i - notch, spentCells - notch);
     return i === notch ? mark(fill) : Text({ color: hex(fill), backgroundColor: hex(fill), children: " " });
   });
-  if (notch === n) parts.push(mark(empty));
-  return parts;
 }
 
 // The cells the spend lights: its share rounded down, all of them once the cap is reached, though the spend read a
@@ -2261,8 +2259,7 @@ function lanesCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: Sta
   const usageLeft = cells(100 - found.percentUsed, n);
   const parLeft = pace ? cells(100 * (1 - pace.par), n) : timeLeft;
   const ahead = pace ? ((found.percentUsed - 100 * pace.par) * n) / 100 : 0;
-  // ε keeps an ahead that floating point puts a hair above a whole number, such as 2.0000000000000004, at that number.
-  const moved = ahead > 0 ? Math.ceil(ahead - 1e-9) : Math.floor(-ahead);
+  const moved = ahead > 0 ? wholeCellsAhead(ahead) : Math.floor(-ahead);
   const paced = Math.min(usageLeft, moved);
   // More impacted than the token lane holds, a token lane rounded down to none included, would leave the overspend
   // unshown, so the time lane takes the warning.
@@ -2504,6 +2501,12 @@ function dollars(s: StatusSpend): string {
 // A bar's length option in whole cells, at least 1; anything but a number is the default.
 function lengthOf(option: unknown, fallback: number): number {
   return typeof option === "number" ? Math.max(1, Math.floor(option)) : fallback;
+}
+
+// The cells a spend ahead of its pace impacts: any positive `ahead`, in cells, rounded up. ε keeps an ahead that floating
+// point puts a hair above a whole number, such as 2.0000000000000004, at that number.
+function wholeCellsAhead(ahead: number): number {
+  return Math.ceil(ahead - 1e-9);
 }
 
 // The whole cells a percentage covers, floored so a bar only reads full at 100%.
