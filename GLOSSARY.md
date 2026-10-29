@@ -67,3 +67,17 @@ _Avoid_: hover value, tooltip
 **Run-out warning**:
 The text in the explanation line saying a limit reaches its target before its reset at the pace so far, in the words its explanation uses. A refused limit and a paused 5h do not get one.
 _Avoid_: forecast
+
+**Usage credits**:
+Money the account spends to keep Claude Code working while the 5h or the 7d is used up, once extra usage is enabled. Claude Code's own command for it is `/usage-credits`, which replaced `/extra-usage`.
+_Avoid_: extra usage, overage
+
+**Credit cap**:
+The most usage credits the account may spend in one billing month, set by the person on claude.ai. When it is reached, only the plan's windows decide when work can go on.
+_Avoid_: monthly limit, spend limit
+
+**Credits tag**:
+The `credits` tag, showing the usage credits spent against the credit cap. It draws only while a window is used up and extra usage is enabled.
+
+**Billing day**:
+The day of the month the subscription renews, taken from the day of its start date. The credit cap's month ends on it.
