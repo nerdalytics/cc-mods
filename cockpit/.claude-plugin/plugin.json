@@ -1,7 +1,7 @@
 {
   "name": "cockpit",
   "displayName": "Cockpit",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Live gauges around the prompt: model, 7d and 5h limits, prompts and requests, main and subagent costs, the prompt cache's time left, and the project's git and pull request state; plus /cockpit:handoff, which writes a handoff document before the cache goes cold.",
   "author": {
     "name": "nerdalytics"
