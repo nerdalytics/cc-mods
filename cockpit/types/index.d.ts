@@ -5,8 +5,9 @@ export type StatusUsage = {
   rateLimits: StatusLimit[];
 };
 
-// Tokens are all four usage counts summed; `requests` counts model requests, `unpriced` those no price matched.
-export type StatusSpend = { tokens: number; usd: number; requests: number; unpriced: number };
+// Tokens are all four usage counts summed; `requests` counts model requests, `unpriced` those no price matched. `usd` is the
+// total; `after` is the part of it that requests made inside an interval in which a limit window read 100% cost.
+export type StatusSpend = { tokens: number; usd: number; requests: number; unpriced: number; after: number };
 
 // The main conversation's prompt cache as its last request left it: when (ms), how long it lives (s), and what the
 // next prompt's cached prefix costs read while warm and written again once cold (USD; undefined when unpriced).
@@ -88,6 +89,8 @@ declare module "claude-code" {
       // The latest usage lookup's extra_usage, and the billing day: the day of the month, in UTC, of the account's subscription start.
       credits: StatusCredits;
       billing: number;
+      // The amount spent (minor units) that the session's first successful lookup reported: the credits charged since are measured from it.
+      creditsBase: { spent: number };
       // The usage lookup's pacing, kept so a reload of the module keeps it: the time (ms) before which no lookup runs, and the failures in a row so far.
       lookupPace: { notBefore: number; failures: number };
       // The intervals (ms) in which a 5h or 7d window read 100%, a refusal that has not reset counted: `to` is missing while one is open.

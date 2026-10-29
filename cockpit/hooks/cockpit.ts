@@ -39,6 +39,8 @@ type Snapshot = {
   // The latest usage lookup, and the billing day it and the profile gave.
   credits?: StatusCredits;
   billing?: number;
+  // The amount spent that the session's first successful lookup reported.
+  creditsBase?: { spent: number };
   // The order pane's made-up values stand in for the readings: the credits tag draws whatever the limits say.
   sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
@@ -525,6 +527,7 @@ const PR = { plugin: "cockpit", key: "pr" } as const;
 const REJECTED = { plugin: "cockpit", key: "rejected" } as const;
 const CREDITS = { plugin: "cockpit", key: "credits" } as const;
 const BILLING = { plugin: "cockpit", key: "billing" } as const;
+const CREDITS_BASE = { plugin: "cockpit", key: "creditsBase" } as const;
 const LOOKUP_PACE = { plugin: "cockpit", key: "lookupPace" } as const;
 const USED_UP = { plugin: "cockpit", key: "usedUp" } as const;
 const SEEN_AT = { plugin: "cockpit", key: "seenAt" } as const;
@@ -1150,13 +1153,14 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: credits } = await $.state.get(CREDITS);
   const { value: billing } = await $.state.get(BILLING);
+  const { value: creditsBase } = await $.state.get(CREDITS_BASE);
   const { value: { k } = {} } = await $.state.get(PACE_K);
   const { value: usedUp } = await $.state.get(USED_UP);
   const { value: answeredAt } = await $.state.get(ANSWERED_AT);
   const { value: answeredSent } = await $.state.get(ANSWERED_SENT);
   const { value: answeredSeven } = await $.state.get(ANSWERED_SEVEN);
   const { value: refusals } = await $.state.get(REFUSALS);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, creditsBase, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -1167,7 +1171,7 @@ function withSamples(s: Snapshot): Snapshot {
   const kinds = s.usage.rateLimits.map((r) => r.kind);
   const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
   const rateLimits = [...s.usage.rateLimits, ...[limit("seven_day", 40, 259_200), limit("five_hour", 20, 9_000)].filter((r) => !kinds.includes(r.kind))];
-  const spend = (tokens: number, usd: number, requests: number) => ({ tokens, usd, requests, unpriced: 0 });
+  const spend = (tokens: number, usd: number, requests: number) => ({ tokens, usd, requests, unpriced: 0, after: 0 });
   const sampleAgents = { ...spend(300_000, 0.9, 8), count: 2 };
   // Unmerged, the subagents' tag shows made-up costs too until a subagent has run.
   const tokens = s.tokens ? { ...s.tokens, agents: s.tokens.agents.count > 0 || mergeCosts ? s.tokens.agents : sampleAgents } : { main: spend(1_200_000, 4.2, 30), agents: sampleAgents };
@@ -1496,7 +1500,8 @@ async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
   const overlays = STATUS_ROW.flatMap((tag) => {
     const text = texts[tag];
     if (text === undefined || !isShown(tag)) return [];
-    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: [ui.Text({ backgroundColor: grey, children: text })] })];
+    // One Text per line of the explanation, in a column.
+    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", flexDirection: "column", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: text.split("\n").map((line) => ui.Text({ backgroundColor: grey, children: line })) })];
   });
   return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: [...(shown ? [shown] : []), ...overlays] });
 }
@@ -1525,8 +1530,12 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
   }
   if (t) {
     const { all, spend } = costsOf(t, mergeCosts);
-    out.tokens = `${all ? "Main session and subagents" : "Main session"}: ${dollars(spend)} for ${formatTokens(spend.tokens)} tokens.`;
-    if (t.agents.count > 0 && !all) out.agents = `Subagents: ${dollars(t.agents)} for ${formatTokens(t.agents.tokens)} tokens.`;
+    const split = (s.usedUp?.length ?? 0) > 0;
+    const who = all ? "Main session and subagents" : "Main session";
+    // The account-wide credits figure cannot be told apart per session, so the same line follows every split explanation.
+    const charged = usageLookup && s.credits && s.creditsBase ? `\nusage credits charged on the account since this session's first successful lookup: ${amountOf(s.credits.spent - s.creditsBase.spent, s.credits)}` : "";
+    out.tokens = split ? splitWords(who, spend) + charged : `${who}: ${dollars(spend)} for ${formatTokens(spend.tokens)} tokens.`;
+    if (t.agents.count > 0 && !all) out.agents = split ? splitWords("Subagents", t.agents) + charged : `Subagents: ${dollars(t.agents)} for ${formatTokens(t.agents.tokens)} tokens.`;
   }
   const c = t?.cache;
   if (c) {
@@ -1866,6 +1875,8 @@ async function lookupCredits($: EngineInterface): Promise<void> {
   const credits = parseCredits(await get("/api/oauth/usage"), now);
   if (!credits) return failed();
   await $.state.set(CREDITS, credits);
+  // The amount spent at the session's first successful lookup stands for the session: the credits charged since are measured from it.
+  if ((await $.state.get(CREDITS_BASE)).value === undefined) await $.state.set(CREDITS_BASE, { spent: credits.spent });
   // A successful call ends the wait, so a profile call that fails after it starts the waits over at a minute.
   failures = 0;
   await $.state.set(LOOKUP_PACE, { notBefore: now + LOOKUP_GAP_MS, failures });
@@ -2006,8 +2017,13 @@ function parsePrices(md: string): Record<string, Price> {
 async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   const dir = await configDir($);
   const sid = await $.session.id();
-  const main: StatusSpend = { tokens: 0, usd: 0, requests: 0, unpriced: 0 };
-  const agents: StatusSpend = { tokens: 0, usd: 0, requests: 0, unpriced: 0 };
+  const main: StatusSpend = { tokens: 0, usd: 0, requests: 0, unpriced: 0, after: 0 };
+  const agents: StatusSpend = { tokens: 0, usd: 0, requests: 0, unpriced: 0, after: 0 };
+  // A request inside an interval counts as made after a window ran out. One before the mod first saw the session, or with no
+  // timestamp, counts as plan use; an open interval runs to now.
+  const { value: intervals = [] } = await $.state.get(USED_UP);
+  const { value: seenAt = -Infinity } = await $.state.get(SEEN_AT);
+  const afterWindow = (at: number) => at >= seenAt && intervals.some((i) => at >= i.from && (i.to === undefined || at < i.to));
   const agentIds = new Set<string>();
   const seen = new Set<string>();
   // The main conversation's latest request, and the TTL its latest cache write asked for: a read alone lives as long
@@ -2062,7 +2078,10 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     spend.tokens += counts.inp + counts.out + counts.read + counts.w5 + counts.w1;
     const usd = requestCost(model, u.speed, counts);
     if (usd === undefined) spend.unpriced++;
-    else spend.usd += usd;
+    else {
+      spend.usd += usd;
+      if (afterWindow(at)) spend.after += usd;
+    }
   };
   let rest = "";
   const argv = ["find", `${dir}/projects`, "-path", `*${sid}*`, "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"];
@@ -2373,7 +2392,7 @@ function tokenParts(Box: Ui["Box"], Text: Ui["Text"], t: StatusTokens, merged: b
 function costsOf(t: StatusTokens, merged: boolean): { all: boolean; spend: StatusSpend } {
   const { main, agents } = t;
   const all = merged && agents.count > 0;
-  return { all, spend: all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced } : main };
+  return { all, spend: all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced, after: main.after + agents.after } : main };
 }
 
 type Chip = { key: "turns" | "tokens" | "agents" | "cache"; mark: string; value: string; from: RGB; to: RGB };
@@ -2522,6 +2541,17 @@ function cacheLeft(c: StatusCache, sent: number | undefined, now: number): numbe
 
 function usd(n: number | undefined): string {
   return n === undefined ? "$?" : `$${n.toFixed(2)}`;
+}
+
+// A cost explanation once an interval is recorded: the spend's dollars at API prices split into the requests made while the plan
+// covered them and those made after a window ran out.
+function splitWords(who: string, s: StatusSpend): string {
+  // In cents, so what is shown adds up: the after part rounds, and the plan part is the shown total less it.
+  const cents = (n: number) => Math.round(Number(n.toFixed(2)) * 100);
+  const afterCents = cents(s.after);
+  // Unpriced requests mark every figure as they mark the total, and with nothing priced at all each reads $?.
+  const usd = (c: number) => (s.unpriced > 0 && s.usd === 0 ? "$?" : `${s.unpriced > 0 ? "~" : ""}$${(c / 100).toFixed(2)}`);
+  return `${who}: ${formatTokens(s.tokens)} tokens. ${dollars(s)} at API prices: ${usd(cents(s.usd) - afterCents)} while the plan covered it, ${usd(afterCents)} after a window ran out.`;
 }
 
 function dollars(s: StatusSpend): string {

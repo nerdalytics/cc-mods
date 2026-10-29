@@ -63,6 +63,8 @@ const scopeOf = (node: object): unknown => {
 const explanationsIn = async (ui: { find: Mounted["find"] }) => elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position === "absolute");
 // One tag's explanation as the explanation line holds it, hidden or not.
 const explanationOf = async (ui: { find: Mounted["find"] }, tag: string) => flat((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`));
+// One tag's explanation line by line: each line is an element of its own in the explanation's Box.
+const explanationLines = async (ui: { find: Mounted["find"] }, tag: string) => elements(((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`) as Drawn).children).map(flat);
 // The rows of tags: the wrapping Boxes with a gap between their tags, not the offer lines, which wrap with none.
 const tagRows = async (ui: { findAll: Mounted["findAll"] }) => (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap" && b.props.columnGap !== undefined);
 // An element with no children of its own (a spacer, a blank line) is drawn with its props alone.
@@ -137,8 +139,10 @@ function clockOn(on: On, now?: number): MockClock {
   }
   return clock;
 }
+// What the state answers for a key it already holds.
+const held = <T>(value: T) => () => ({ value: { value, version: 1 } });
 // The session's state already holds the credits a usage lookup left, as a turn's lookup would have.
-const lookupSays = (on: On, credits: StatusCredits) => on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
+const lookupSays = (on: On, credits: StatusCredits) => on("state.get", { plugin: "cockpit", key: "credits" }, held(credits));
 // Settling the clock finishes the mod's unawaited work, but its $.state writes draw only at the redraw rate: draw `ui` now.
 async function caughtUp(on: On, ui: { redraw: () => Promise<void> }): Promise<void> {
   await clockOn(on).settle();
@@ -1172,6 +1176,126 @@ describe("cockpit", () => {
       expect(await explanationOf(ui, "cache")).toMatch(shown);
       await ui.unmount();
     });
+
+  // A session whose state holds the intervals a window read 100% (and when the mod first saw it), with the given requests in its
+  // transcript: `at` is hours before START, `agent` marks a subagent's. Opus 5.5 charges $20 per million output tokens, so
+  // 559,000 output tokens cost $11.18 and 998,500 cost $19.97; an unknown model has no price.
+  type Request = { id: string; ago?: number; out: number; agent?: boolean; model?: string };
+  const splitWorld = async ($: Engine, on: On, requests: Request[], intervals: { from: number; to?: number }[], { seenAt = START - 10 * HOUR, lookup }: { seenAt?: number; lookup?: { credits: StatusCredits; creditsBase: { spent: number } } } = {}) => {
+    stubHint(on, START);
+    if (lookup) {
+      lookupSays(on, lookup.credits);
+      on("state.get", { plugin: "cockpit", key: "creditsBase" }, held(lookup.creditsBase));
+    }
+    on("state.get", { plugin: "cockpit", key: "usedUp" }, held(intervals));
+    on("state.get", { plugin: "cockpit", key: "seenAt" }, held(seenAt));
+    const rows = requests.map(({ id, ago, out, agent, model = "claude-opus-5-5" }) =>
+      JSON.stringify({ type: "assistant", requestId: id, ...(ago === undefined ? {} : { timestamp: new Date(START - ago * HOUR).toISOString() }), ...(agent ? { agentId: "a1" } : {}), message: { model, usage: { input_tokens: 0, output_tokens: out, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } } } }),
+    );
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      yield { stream: "stdout", text: rows.join("\n") };
+      return { value: { code: 0, signal: null } };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    return ui;
+  };
+
+  test("splits the tokens explanation into the dollars made while the plan covered them and after a window ran out", async ($, on) => {
+    // The 7d read 100% two hours ago and still does: 559,000 output tokens three hours ago, 998,500 an hour ago.
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }]);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    await ui.unmount();
+  });
+
+  // 200 output tokens cost $0.004: two of them make $0.008, which the tag shows as $0.01. The after part rounds to $0.00 and the
+  // plan part is what the total has left, so the three figures add up as shown.
+  test("shows the plan part as the shown total less the shown after part, so the three figures add up", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 200 }, { id: "B", ago: 1, out: 200 }], [{ from: START - 2 * HOUR }]);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 400 tokens. $0.01 at API prices: $0.01 while the plan covered it, $0.00 after a window ran out.");
+    await ui.unmount();
+  });
+
+  // The pricing table has no row for the unknown model: its request is unpriced, and every figure carries the ~ the tag's total does.
+  test("marks all three figures with ~ when a request is unpriced", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }, { id: "C", ago: 1, out: 5, model: "claude-unknown-9" }], [{ from: START - 2 * HOUR }]);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. ~$31.15 at API prices: ~$11.18 while the plan covered it, ~$19.97 after a window ran out.");
+    await ui.unmount();
+  });
+
+  // The main session's 559,000 output tokens were made before the window ran out; the subagent's 998,500 after.
+  for (const [title, options, tag, text] of [
+    ["the subagents' explanation", {}, "agents", "Subagents: 998.5K tokens. $19.97 at API prices: $0.00 while the plan covered it, $19.97 after a window ran out."],
+    ["the merged explanation", { merge_costs: true }, "tokens", "Main session and subagents: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out."],
+  ] as const)
+    test(`counts a subagent's request made inside an interval in the after part of ${title}`, { options }, async ($, on) => {
+      const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500, agent: true }], [{ from: START - 2 * HOUR }]);
+      expect(await explanationOf(ui, tag)).toBe(text);
+      await ui.unmount();
+    });
+
+  // The interval opened four hours ago, the mod first saw the session two hours ago: the request three hours ago lies inside the
+  // interval yet came before the mod saw the session, so it counts as plan use.
+  test("counts a request earlier than when the mod first saw the session as plan use", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 4 * HOUR }], { seenAt: START - 2 * HOUR });
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    await ui.unmount();
+  });
+
+  test("counts a request with no timestamp as plan use", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }]);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    await ui.unmount();
+  });
+
+  // Two intervals, the first closed: a request in either is after, one between them is plan use. 4.5 and 1 hours ago are inside.
+  test("counts only the requests inside an interval, closed or open, as made after a window ran out", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 4.5, out: 559_000 }, { id: "B", ago: 3, out: 998_500 }, { id: "C", ago: 1, out: 100_000 }], [{ from: START - 5 * HOUR, to: START - 4 * HOUR }, { from: START - 2 * HOUR }]);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.65M tokens. $33.15 at API prices: $19.97 while the plan covered it, $13.18 after a window ran out.");
+    await ui.unmount();
+  });
+
+  test("explains the tokens tag as before, with no split, when no interval is recorded", async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], []);
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: $31.15 for 1.55M tokens.");
+    await ui.unmount();
+  });
+
+  // The first lookup of the session reported €10.11 spent, the latest €28.51.
+  const LOOKUP_STATE = { credits: { at: START, enabled: true, spent: 2851, cap: 5000, decimals: 2, currency: "EUR", capReached: false, reason: null }, creditsBase: { spent: 1011 } };
+  const CHARGED = "usage credits charged on the account since this session's first successful lookup: €18.40";
+  test("adds a second line with the usage credits charged since the session's first successful lookup", { options: { usage_lookup: true } }, async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
+    expect(await explanationLines(ui, "tokens")).toEqual([
+      "Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.",
+      CHARGED,
+    ]);
+    await ui.unmount();
+  });
+
+  for (const [title, options, tag] of [
+    ["subagents'", {}, "agents"],
+    ["merged", { merge_costs: true }, "tokens"],
+  ] as const)
+    test(`adds the credits line to the ${title} split explanation as well`, { options: { usage_lookup: true, ...options } }, async ($, on) => {
+      const ui = await splitWorld($, on, [{ id: "A", ago: 1, out: 998_500, agent: true }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
+      expect((await explanationLines(ui, tag)).at(-1)).toBe(CHARGED);
+      await ui.unmount();
+    });
+
+  // The lookup's credits and base still sit in the state from an earlier session with the option on.
+  test("has no second line, and says nothing of usage credits, with usage_lookup off", { options: { usage_lookup: false } }, async ($, on) => {
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
+    expect(await explanationLines(ui, "tokens")).toEqual(["Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out."]);
+    await ui.unmount();
+  });
 
   // The 5h at 70% resets in 2 hours, the 7d at 20% in 1d1h. Classic says the reset alone; the gauge's 5h is over pace, 1h17m
   // from running out, and its 7d under it with ~76% unused.
@@ -3535,6 +3659,26 @@ describe("cockpit", () => {
       expect(asked.filter((r) => r.url === USAGE_URL)).toHaveLength(1);
       expect(kept).toEqual([{ at: clock.now(), enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: true, reason: "out_of_credits" }]);
     });
+
+  // The first lookup says €10.11 spent, the next €28.51 a minute later: the session keeps the first amount.
+  test("keeps the amount spent that the session's first successful lookup reported, and no later one", { options: { usage_lookup: true } }, async ($, on) => {
+    stubHint(on, START);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const base: unknown[] = [];
+    on("state.set", { plugin: "cockpit", key: "creditsBase" }, ($, e, next) => {
+      base.push(e.value);
+      return next(e);
+    });
+    let spent = 1011;
+    const { asked, clock } = lookupWorld(on, { usage: () => ({ status: 200, text: extraUsage({ used_credits: spent }) }) });
+    await startWithLimits($, on, sevenUsedUp());
+    await endTurn($, on);
+    spent = 2851;
+    await clock.advance(60_000);
+    await endTurn($, on);
+    expect(asked.filter((r) => r.url === USAGE_URL)).toHaveLength(2);
+    expect(base).toEqual([{ spent: 1011 }]);
+  });
 
   test("calls no endpoint at the end of a turn with neither the 5h nor the 7d at 100%", { options: { usage_lookup: true } }, async ($, on) => {
     stubHint(on, START);
