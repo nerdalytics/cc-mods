@@ -1144,7 +1144,9 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: usage } = await $.state.get(USAGE);
   if (!usage) return undefined;
   const { value: model = "" } = await $.state.get(MODEL);
-  const { value: tokens } = await $.state.get(TOKENS);
+  const { value: kept } = await $.state.get(TOKENS);
+  // Spends a copy of the module before the cost split kept have no `after`, until the next scan rewrites them: all plan use.
+  const tokens = kept && { ...kept, main: { ...kept.main, after: kept.main.after ?? 0 }, agents: { ...kept.agents, after: kept.agents.after ?? 0 } };
   const { value: turns } = await $.state.get(TURNS);
   const { value: compactAt } = await $.state.get(COMPACT_AT);
   const { value: sent } = await $.state.get(SENT);
@@ -2549,14 +2551,13 @@ function splitWords(who: string, s: StatusSpend): string {
   // In cents, so what is shown adds up: the after part rounds, and the plan part is the shown total less it.
   const cents = (n: number) => Math.round(Number(n.toFixed(2)) * 100);
   const afterCents = cents(s.after);
-  // Unpriced requests mark every figure as they mark the total, and with nothing priced at all each reads $?.
-  const usd = (c: number) => (s.unpriced > 0 && s.usd === 0 ? "$?" : `${s.unpriced > 0 ? "~" : ""}$${(c / 100).toFixed(2)}`);
-  return `${who}: ${formatTokens(s.tokens)} tokens. ${dollars(s)} at API prices: ${usd(cents(s.usd) - afterCents)} while the plan covered it, ${usd(afterCents)} after a window ran out.`;
+  return `${who}: ${formatTokens(s.tokens)} tokens. ${dollars(s)} at API prices: ${dollars(s, (cents(s.usd) - afterCents) / 100)} while the plan covered it, ${dollars(s, afterCents / 100)} after a window ran out.`;
 }
 
-function dollars(s: StatusSpend): string {
+// The spend's dollars, or `amount` of them, a part of it: unpriced requests mark every figure with ~, and with nothing priced at all each reads $?.
+function dollars(s: StatusSpend, amount = s.usd): string {
   if (s.unpriced > 0 && s.usd === 0) return "$?";
-  return `${s.unpriced > 0 ? "~" : ""}$${s.usd.toFixed(2)}`;
+  return `${s.unpriced > 0 ? "~" : ""}$${amount.toFixed(2)}`;
 }
 
 // A bar's length option in whole cells, at least 1; anything but a number is the default.

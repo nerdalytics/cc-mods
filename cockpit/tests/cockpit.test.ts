@@ -1177,15 +1177,24 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  const HOUR = 3_600_000;
   // A session whose state holds the intervals a window read 100% (and when the mod first saw it), with the given requests in its
-  // transcript: `at` is hours before START, `agent` marks a subagent's. Opus 5.5 charges $20 per million output tokens, so
+  // transcript: `ago` is hours before START, `agent` marks a subagent's. Opus 5.5 charges $20 per million output tokens, so
   // 559,000 output tokens cost $11.18 and 998,500 cost $19.97; an unknown model has no price.
   type Request = { id: string; ago?: number; out: number; agent?: boolean; model?: string };
-  const splitWorld = async ($: Engine, on: On, requests: Request[], intervals: { from: number; to?: number }[], { seenAt = START - 10 * HOUR, lookup }: { seenAt?: number; lookup?: { credits: StatusCredits; creditsBase: { spent: number } } } = {}) => {
+  // The pair the split tests share: $11.18 three hours ago, $19.97 an hour ago, a window having run out two hours ago.
+  const PAIR: [Request, Request] = [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }];
+  const SINCE_2H = [{ from: START - 2 * HOUR }];
+  const SPLIT_TEXT = "Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.";
+  // The first lookup of the session reported €10.11 spent, the latest €28.51.
+  const LOOKUP_STATE = { credits: { at: START, enabled: true, spent: 2851, cap: 5000, decimals: 2, currency: "EUR", capReached: false, reason: null }, creditsBase: { spent: 1011 } };
+  const CHARGED = "usage credits charged on the account since this session's first successful lookup: €18.40";
+  const splitWorld = async ($: Engine, on: On, requests: Request[], intervals: { from: number; to?: number }[], { seenAt = START - 10 * HOUR, lookup, kept }: { seenAt?: number; lookup?: { credits: StatusCredits; creditsBase?: { spent: number } }; kept?: unknown } = {}) => {
     stubHint(on, START);
+    if (kept) on("state.get", { plugin: "cockpit", key: "tokens" }, held(kept));
     if (lookup) {
       lookupSays(on, lookup.credits);
-      on("state.get", { plugin: "cockpit", key: "creditsBase" }, held(lookup.creditsBase));
+      if (lookup.creditsBase) on("state.get", { plugin: "cockpit", key: "creditsBase" }, held(lookup.creditsBase));
     }
     on("state.get", { plugin: "cockpit", key: "usedUp" }, held(intervals));
     on("state.get", { plugin: "cockpit", key: "seenAt" }, held(seenAt));
@@ -1210,8 +1219,8 @@ describe("cockpit", () => {
 
   test("splits the tokens explanation into the dollars made while the plan covered them and after a window ran out", async ($, on) => {
     // The 7d read 100% two hours ago and still does: 559,000 output tokens three hours ago, 998,500 an hour ago.
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }]);
-    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    const ui = await splitWorld($, on, PAIR, SINCE_2H);
+    expect(await explanationOf(ui, "tokens")).toBe(SPLIT_TEXT);
     await ui.unmount();
   });
 
@@ -1225,7 +1234,7 @@ describe("cockpit", () => {
 
   // The pricing table has no row for the unknown model: its request is unpriced, and every figure carries the ~ the tag's total does.
   test("marks all three figures with ~ when a request is unpriced", async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }, { id: "C", ago: 1, out: 5, model: "claude-unknown-9" }], [{ from: START - 2 * HOUR }]);
+    const ui = await splitWorld($, on, [...PAIR, { id: "C", ago: 1, out: 5, model: "claude-unknown-9" }], SINCE_2H);
     expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. ~$31.15 at API prices: ~$11.18 while the plan covered it, ~$19.97 after a window ran out.");
     await ui.unmount();
   });
@@ -1236,7 +1245,7 @@ describe("cockpit", () => {
     ["the merged explanation", { merge_costs: true }, "tokens", "Main session and subagents: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out."],
   ] as const)
     test(`counts a subagent's request made inside an interval in the after part of ${title}`, { options }, async ($, on) => {
-      const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500, agent: true }], [{ from: START - 2 * HOUR }]);
+      const ui = await splitWorld($, on, [PAIR[0], { ...PAIR[1], agent: true }], SINCE_2H);
       expect(await explanationOf(ui, tag)).toBe(text);
       await ui.unmount();
     });
@@ -1244,14 +1253,14 @@ describe("cockpit", () => {
   // The interval opened four hours ago, the mod first saw the session two hours ago: the request three hours ago lies inside the
   // interval yet came before the mod saw the session, so it counts as plan use.
   test("counts a request earlier than when the mod first saw the session as plan use", async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 4 * HOUR }], { seenAt: START - 2 * HOUR });
-    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    const ui = await splitWorld($, on, PAIR, [{ from: START - 4 * HOUR }], { seenAt: START - 2 * HOUR });
+    expect(await explanationOf(ui, "tokens")).toBe(SPLIT_TEXT);
     await ui.unmount();
   });
 
   test("counts a request with no timestamp as plan use", async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }]);
-    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.");
+    const ui = await splitWorld($, on, [{ id: "A", out: 559_000 }, PAIR[1]], SINCE_2H);
+    expect(await explanationOf(ui, "tokens")).toBe(SPLIT_TEXT);
     await ui.unmount();
   });
 
@@ -1262,19 +1271,38 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // The tokens a copy of the module before this change kept in the state have no after part; the scan rewrites them a moment later.
+  test("reads the tokens kept without an after part as all plan use", async ($, on) => {
+    const kept = { main: { tokens: 1_000, usd: 12.5, requests: 2, unpriced: 0 }, agents: { tokens: 0, usd: 0, requests: 0, unpriced: 0, count: 0 } };
+    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 200 }], [{ from: START - 2 * HOUR }], { kept });
+    expect(await explanationOf(ui, "tokens")).toBe("Main session: 1.0K tokens. $12.50 at API prices: $12.50 while the plan covered it, $0.00 after a window ran out.");
+    await ui.unmount();
+  });
+
+  // The credits line belongs to the split: with no interval the explanation is one line, whatever the lookup holds.
+  test("has no second line, with the lookup on and its credits and base kept, when no interval is recorded", { options: { usage_lookup: true } }, async ($, on) => {
+    const ui = await splitWorld($, on, PAIR, [], { lookup: LOOKUP_STATE });
+    expect(await explanationLines(ui, "tokens")).toEqual(["Main session: $31.15 for 1.55M tokens."]);
+    await ui.unmount();
+  });
+
+  // No successful lookup has been made in the session, so there is no base to measure the credits charged from.
+  test("has no second line, with the lookup on and an interval recorded, when the session has no first lookup base", { options: { usage_lookup: true } }, async ($, on) => {
+    const ui = await splitWorld($, on, PAIR, SINCE_2H, { lookup: { credits: LOOKUP_STATE.credits } });
+    expect(await explanationLines(ui, "tokens")).toEqual([SPLIT_TEXT]);
+    await ui.unmount();
+  });
+
   test("explains the tokens tag as before, with no split, when no interval is recorded", async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], []);
+    const ui = await splitWorld($, on, PAIR, []);
     expect(await explanationOf(ui, "tokens")).toBe("Main session: $31.15 for 1.55M tokens.");
     await ui.unmount();
   });
 
-  // The first lookup of the session reported €10.11 spent, the latest €28.51.
-  const LOOKUP_STATE = { credits: { at: START, enabled: true, spent: 2851, cap: 5000, decimals: 2, currency: "EUR", capReached: false, reason: null }, creditsBase: { spent: 1011 } };
-  const CHARGED = "usage credits charged on the account since this session's first successful lookup: €18.40";
   test("adds a second line with the usage credits charged since the session's first successful lookup", { options: { usage_lookup: true } }, async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
+    const ui = await splitWorld($, on, PAIR, SINCE_2H, { lookup: LOOKUP_STATE });
     expect(await explanationLines(ui, "tokens")).toEqual([
-      "Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out.",
+      SPLIT_TEXT,
       CHARGED,
     ]);
     await ui.unmount();
@@ -1285,15 +1313,15 @@ describe("cockpit", () => {
     ["merged", { merge_costs: true }, "tokens"],
   ] as const)
     test(`adds the credits line to the ${title} split explanation as well`, { options: { usage_lookup: true, ...options } }, async ($, on) => {
-      const ui = await splitWorld($, on, [{ id: "A", ago: 1, out: 998_500, agent: true }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
+      const ui = await splitWorld($, on, [{ ...PAIR[1], agent: true }], SINCE_2H, { lookup: LOOKUP_STATE });
       expect((await explanationLines(ui, tag)).at(-1)).toBe(CHARGED);
       await ui.unmount();
     });
 
   // The lookup's credits and base still sit in the state from an earlier session with the option on.
   test("has no second line, and says nothing of usage credits, with usage_lookup off", { options: { usage_lookup: false } }, async ($, on) => {
-    const ui = await splitWorld($, on, [{ id: "A", ago: 3, out: 559_000 }, { id: "B", ago: 1, out: 998_500 }], [{ from: START - 2 * HOUR }], { lookup: LOOKUP_STATE });
-    expect(await explanationLines(ui, "tokens")).toEqual(["Main session: 1.55M tokens. $31.15 at API prices: $11.18 while the plan covered it, $19.97 after a window ran out."]);
+    const ui = await splitWorld($, on, PAIR, SINCE_2H, { lookup: LOOKUP_STATE });
+    expect(await explanationLines(ui, "tokens")).toEqual([SPLIT_TEXT]);
     await ui.unmount();
   });
 
@@ -1494,7 +1522,6 @@ describe("cockpit", () => {
   // The 5h's coupling to the 7d. Each reading is 5h used, its reset, 7d used and its reset, the resets in ms from the
   // test's start. The first starts the session, each later one comes in a response, and the last is a second old.
   type Reading = [five: number, fiveResetsIn: number, seven: number, sevenResetsIn: number];
-  const HOUR = 3_600_000;
   const DAYS_3 = 72 * HOUR;
   const fedReadings = async ($: Engine, on: On, readings: Reading[]) => {
     const start = clockOn(on).now();
