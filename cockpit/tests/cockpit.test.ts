@@ -4054,6 +4054,17 @@ describe("cockpit", () => {
     expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
   });
 
+  // A third of the month is 2 cells; 1000 of 1500 would be 4 cells, 3 of them ahead, were there a pace. The lookup's state takes it away.
+  for (const [title, state, lit] of [
+    ["draws the credits lanes without a pace once the cap is reached: every top cell in the spent colour, the month below dim", { capReached: true }, 7],
+    ["draws the credits lanes without a pace once the credits are out: the spent cells all in the spent colour, the month below dim", { reason: "out_of_credits" }, 4],
+  ] as const)
+    test(title, { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+      const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent: 1000, ...state }, 1);
+      expect(drawn.colors).toEqual([...Array(lit).fill(SPENT), ...Array(7 - lit).fill(GREY)]);
+      expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+    });
+
   test("draws the credits lanes in classic with the spent colour on every lit cell and the month below, however far ahead the spend is", { options: { usage_lookup: true, limit_style: "classic" } }, async ($, on) => {
     // 1400 of 1500 is 93%, 6 cells, 5 of them ahead of a third of the month, yet none amber or red.
     const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent: 1400 }, 1);

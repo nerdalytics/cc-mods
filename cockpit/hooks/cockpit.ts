@@ -265,13 +265,13 @@ const CREDITS_PACE_FROM = 0.1;
 
 // Whether the credits tag has a pace, and the billing month it is measured over: its length and the part gone when the spend
 // was read (`credits.at`), in ms. The words and the drawing share it. The pace tells nothing once the month the lookup fell
-// in has ended.
+// in has ended, and nothing once the cap is reached or the credits are out.
 function creditsPace(credits: StatusCredits, s: Snapshot, seven: StatusLimit | undefined): { paced: boolean; monthMs: number; gone: number } {
   const now = s.now * 1000;
   const month = billingMonth(s.billing, seven, credits.at);
   const monthMs = month ? month.to - month.from : 0;
   const gone = month ? credits.at - month.from : 0;
-  const paced = month !== undefined && month.to === billingMonth(s.billing, seven, now)?.to && limitStyle !== "classic" && credits.cap > 0 && now - credits.at <= CREDITS_FRESH_MS && gone >= CREDITS_PACE_FROM * monthMs;
+  const paced = month !== undefined && month.to === billingMonth(s.billing, seven, now)?.to && limitStyle !== "classic" && !credits.capReached && credits.reason !== "out_of_credits" && credits.cap > 0 && now - credits.at <= CREDITS_FRESH_MS && gone >= CREDITS_PACE_FROM * monthMs;
   return { paced, monthMs, gone };
 }
 
