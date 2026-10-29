@@ -78,7 +78,7 @@ const SEGMENTS = {
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
-// `cover` is set while work goes on past a used-up 7d. `endsAt` is the latest reset among the windows at 100%, in ms: the
+// `cover` is set while credits cover a used-up window or work goes on past a used-up 7d. `endsAt` is the latest reset among the windows at 100%, in ms: the
 // one that ends the block. `target` is the percent the limit is paced against. `bound` is set while the 7d bounds the 5h's
 // target below 100%: the 7d's percent used and k, which the 5h's sentence reads the 7d's run-out and what it has left from.
 type LimitReading = {
@@ -97,7 +97,7 @@ type LimitReading = {
 // A limit tag's window, its reading, the seconds until it resets (none without a reset time) and its pace, none until a
 // reading has it. Every pace style's tag and the explanation read the pace here, the gauge and the words its r against
 // the target, lanes and notch its par, so they agree. While the 7d is used up, a refusal still in force included, the 5h
-// cannot be spent: it is paused, with no pace, and `paused.until` holds the 7d's reset in ms (none without a reset time).
+// cannot be spent, unless a cover says it can: it is paused, with no pace, and `paused.until` holds the 7d's reset in ms (none without a reset time).
 function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitReading | undefined {
   const limit = LIMITS.find((l) => l.badge === badge);
   const limits = limitsOf(s.usage.rateLimits, s.rejected, s.now * 1000);
@@ -122,17 +122,21 @@ function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: nu
   return Math.min(100, five.percentUsed + (100 - seven.percentUsed) / k);
 }
 
-// How a used-up 7d is covered, "went-on" when work went on past it with no lookup to say so: a main-session request got a reply
-// after the interval opened, that reply still read the 7d at 100%, and no refusal on the 7d is newer than it. A lookup that
-// answered stands in the way of this guess, so with one it is nothing. The 7d percent is the one the reply's own reading
-// held, saved with its time: the current reading is overwritten by a poll every 2 s, and a refusal's made-up 100% is not a reply's.
-type Cover = "went-on";
+// How a used-up window is covered. "credits" when the latest lookup says they pay for it. "went-on" when work went on past a
+// used-up 7d with no lookup to say so: a main-session request got a reply after the interval opened, that reply still read the
+// 7d at 100%, and no refusal on the 7d is newer than it. A lookup that answered outranks that guess: credits off, the cap
+// reached or the credits out leave it nothing. The 7d percent is the one the reply's own reading held, saved with its time:
+// the current reading is overwritten by a poll every 2 s, and a refusal's made-up 100% is not a reply's.
+type Cover = "credits" | "went-on";
 function coverOf(s: Snapshot): Cover | undefined {
-  if (usageLookup && s.credits) return undefined;
+  if (usageLookup && s.credits) return creditsPay(s.credits) && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000) ? "credits" : undefined;
   const open = s.usedUp?.at(-1);
   const refusedSince = (s.refusals?.seven_day?.at ?? 0) > (s.answeredAt ?? 0);
   return open && open.to === undefined && (s.answeredSeven ?? 0) >= 100 && s.answeredAt !== undefined && s.answeredAt > open.from && !refusedSince ? "went-on" : undefined;
 }
+
+// Whether the lookup says usage credits pay for a window at 100%: extra usage enabled, the cap not reached, the credits not out.
+const creditsPay = (credits: StatusCredits | undefined) => credits?.enabled === true && !credits.capReached && credits.reason !== "out_of_credits";
 
 // One limit's tag, none until a reading has it: its badge, then its bar in the limit_style. The gauge's badge also reads
 // the percent used, rounded as the run-out warning rounds it. Hovered, the explanation line shows the countdown.
@@ -1317,13 +1321,16 @@ async function maybeCompact($: EngineInterface): Promise<void> {
 }
 
 // A limit reached refuses the request of a handoff or a compaction, and one nearly reached is better left to the
-// person's own prompts: Fable and Mythos stop at 90% of the 5h window, the others at 98%.
+// person's own prompts: Fable and Mythos stop at 90% of the 5h window, the others at 98%. A window at 100% that usage
+// credits cover refuses nothing, so it holds nothing.
 async function limitsNear($: EngineInterface): Promise<boolean> {
   const { value: usage } = await $.state.get(USAGE);
   const { value: rejected } = await $.state.get(REJECTED);
   const { value: model = "" } = await $.state.get(MODEL);
+  const { value: credits } = await $.state.get(CREDITS);
   const cap = /fable|mythos/i.test(model) ? 90 : 98;
-  return limitsOf(usage?.rateLimits ?? [], rejected, await $.clock.now()).some((r) => r.percentUsed >= 100 || (r.kind === "five_hour" && r.percentUsed >= cap));
+  const covered = usageLookup && creditsPay(credits);
+  return limitsOf(usage?.rateLimits ?? [], rejected, await $.clock.now()).some((r) => (r.percentUsed >= 100 ? !covered : r.kind === "five_hour" && r.percentUsed >= cap));
 }
 
 // A subagent still at work keeps the session alive: its answer comes back to the main conversation, which writes the
@@ -1529,9 +1536,10 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, cover, endsAt, tar
   const ahead = (ms: number | undefined) => (ms !== undefined && ms > now ? ms : undefined);
   // The 7d at 100% is used up, and so is the 5h, which classic does not pause and reads as it would anywhere. Both name the
   // reset that ends the block: the latest of the resets of the windows at 100%, their own only when it is that one.
-  if (cover === "went-on" && found.percentUsed >= 100 && (limit.badge === "7d" || !classic)) {
+  // Credits cover either window in every style; with no lookup, classic keeps the 5h's ordinary sentence.
+  if (cover && found.percentUsed >= 100 && (cover === "credits" || limit.badge === "7d" || !classic)) {
     const ends = ahead(endsAt);
-    return `${head}: used up, work goes on${ends === undefined ? "" : ` until it resets at ${resetClock(ends, now)}`}.`;
+    return `${head}: used up, ${cover === "credits" ? "usage credits cover you" : "work goes on"}${ends === undefined ? "" : ` until it resets at ${resetClock(ends, now)}`}.`;
   }
   if (shownPause) {
     const sevenResets = ahead(shownPause.until);

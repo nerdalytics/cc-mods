@@ -165,8 +165,10 @@ async function startWithLimits($: Engine, on: On, rateLimits?: SessionRateLimit[
 
 // A session idle with its cache 3 minutes from cold: the commands the mod runs over 2 polls (none, before the
 // person's first prompt is asserted), then a prompt typed at the composer, then 3 polls more.
-async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57, reloaded = false }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number; reloaded?: boolean } = {}): Promise<string[]> {
+async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateLimits = [], ttl = "1h", agents = [], after = 3, trace = [], settings = {}, ago = 57, reloaded = false, credits }: { model?: string; rateLimits?: SessionRateLimit[]; ttl?: string; agents?: AgentInfo[]; after?: number; trace?: string[]; settings?: Record<string, unknown>; ago?: number; reloaded?: boolean; credits?: StatusCredits } = {}): Promise<string[]> {
   stubHint(on, START);
+  // The lookup's credits, as an earlier turn's lookup left them in the session's state.
+  if (credits) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
   // An hour-TTL write 57 minutes ago: 3 minutes left, inside the 5-minute lead. A five-minute write 3 minutes ago has 2 left;
   // "5m-late", 4.5 minutes ago, has 30 seconds, inside the 1-minute lead of a five-minute cache.
   const clock = clockOn(on);
@@ -2063,19 +2065,14 @@ describe("cockpit", () => {
     await again.unmount();
   });
 
-  for (const [title, tokens, runs, options, agents] of [
-    ["compacts once while idle when 90% of the smart zone is used", 190_000, ["compact"], { auto_compact: true }, idle],
-    ["compacts nothing below 90% of the smart zone", 170_000, [], { auto_compact: true }, idle],
-    ["compacts nothing with auto_compact off", 190_000, [], {}, idle],
-    ["compacts nothing with the smart zone off", 190_000, [], { auto_compact: true, smart_zone: false }, idle],
-    ["compacts nothing while a subagent is at work", 190_000, [], { auto_compact: true }, working],
-  ] as const)
-  test(title, { options }, async ($, on) => {
+  // The commands a session at `tokens` of context runs: none before the person's first prompt, then what the polls after one run.
+  const compactionRuns = async ($: Engine, on: On, tokens: number, agents: AgentInfo[], rateLimits: SessionRateLimit[] = [], credits?: StatusCredits): Promise<string[]> => {
     stubHint(on, START);
     const clock = clockOn(on);
     const ran: string[] = [];
+    if (credits) on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: credits, version: 1 } }));
     on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
     on("agent.list", () => ({ value: agents }));
@@ -2101,8 +2098,19 @@ describe("cockpit", () => {
     // A prompt typed at the composer: one compaction, and the polls after it do not run another.
     await typeAtComposer($, "hi");
     await polls(3);
-    expect(ran).toEqual(runs);
     await ui.unmount();
+    return ran;
+  };
+
+  for (const [title, tokens, runs, options, agents] of [
+    ["compacts once while idle when 90% of the smart zone is used", 190_000, ["compact"], { auto_compact: true }, idle],
+    ["compacts nothing below 90% of the smart zone", 170_000, [], { auto_compact: true }, idle],
+    ["compacts nothing with auto_compact off", 190_000, [], {}, idle],
+    ["compacts nothing with the smart zone off", 190_000, [], { auto_compact: true, smart_zone: false }, idle],
+    ["compacts nothing while a subagent is at work", 190_000, [], { auto_compact: true }, working],
+  ] as const)
+  test(title, { options }, async ($, on) => {
+    expect(await compactionRuns($, on, tokens, agents)).toEqual(runs);
   });
 
   test("runs the handoff skill once before the cache goes cold, while idle and after a prompt of the person's own", async ($, on) => {
@@ -4450,6 +4458,136 @@ describe("cockpit", () => {
     expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d resets at ${named(sevenResetsAt, "4 PM")}.`);
     await ui.unmount();
   });
+
+  // Credits cover a used-up window: the lookup says extra usage is enabled, the cap is not reached and the credits are not out.
+
+  test("draws the 5h lanes with a pace and no pause while credits cover the used-up 7d", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    stubHint(on, START);
+    holding(on, creditsOf(), 17);
+    await startWithLimits($, on, [SEVEN_USED_UP, FIVE_AT_40]);
+    const ui = await mountHint($);
+    const tag = await limitTagOf(ui, "five_hour");
+    expect([...tag.colors, ...tag.backgrounds]).not.toEqual(Array(20).fill(GREY));
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 40%: at this pace it reaches its target as it resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // k is 0.05 from the first two readings. The third reads the 7d at 100%, which resets after the 5h window ends. Bounded by the
+  // 7d the 5h's target would be its own 20%; with credits covering the 7d it is 100%, and 20% with 2 of its 5 hours gone is
+  // half the pace of that target: ~50% unused, and the 7d not named.
+  test("sets the 5h target to 100% with k measured while credits cover the 7d, and names no 7d in its explanation", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on, START);
+    holding(on, creditsOf(), 17);
+    await fedReadings($, on, [
+      [10, 3 * HOUR, 99, DAYS_3],
+      [20, 3 * HOUR, 99.5, DAYS_3],
+      [20, 3 * HOUR, 100, DAYS_3],
+    ]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this pace it resets at ${CLOCK} with ~(?:49|50)% unused\\.$`));
+    await ui.unmount();
+  });
+
+  // The clock is at noon, the 7d resets at 4 PM and the 5h at 5 PM, both later today; the lookup is the given credits.
+  const explainedAtNoon = async ($: Engine, on: On, credits: StatusCredits, limits: SessionRateLimit[], tag: string) => {
+    stubHint(on, localAt(0, 12).getTime());
+    holding(on, credits, 17);
+    await startWithLimits($, on, limits);
+    const ui = await mountHint($);
+    const text = await explanationOf(ui, tag);
+    await ui.unmount();
+    return text;
+  };
+
+  for (const style of ["gauge", "lanes", "notch", "classic"] as const) {
+    test(`reads the used-up 7d as covered by usage credits in ${style}`, { options: { usage_lookup: true, limit_style: style } }, async ($, on) => {
+      expect(await explainedAtNoon($, on, creditsOf(), [sevenResettingAt(100, localAt(0, 16)), fiveAt(40, localAt(0, 17))], "limit_7d")).toBe("7d at 100%: used up, usage credits cover you until it resets at 4 PM.");
+    });
+
+    test(`reads the 5h at 100% with the 7d at 60% as covered by usage credits in ${style}`, { options: { usage_lookup: true, limit_style: style } }, async ($, on) => {
+      expect(await explainedAtNoon($, on, creditsOf(), [sevenResettingAt(60, localAt(3, 16)), fiveAt(100, localAt(0, 17))], "limit_5h")).toBe("5h at 100%: used up, usage credits cover you until it resets at 5 PM.");
+    });
+  }
+
+  test("reads a 5h at 0% with no pace yet as its ordinary sentence while credits cover the 7d", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    expect(await explainedAtNoon($, on, creditsOf(), [sevenResettingAt(100, localAt(0, 16)), fiveAt(0, localAt(0, 17))], "limit_5h")).toBe("5h at 0%: it resets at 5 PM.");
+  });
+
+  test("pauses the 5h gauge again, and says it is paused until the 7d resets, when the lookup reports the cap reached", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on, START);
+    holding(on, creditsOf({ spent: 1500, capReached: true }), 17);
+    await startWithLimits($, on, [SEVEN_USED_UP, FIVE_AT_40]);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 40%: it is paused until the 7d resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  for (const [what, credits] of [
+    ["credits off", creditsOf({ enabled: false })],
+    ["out of credits", creditsOf({ reason: "out_of_credits" })],
+  ] as const)
+    test(`pauses the 5h again and reads the 7d as it did before, with no mention of credits, when the lookup reports ${what}`, { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+      stubHint(on, localAt(0, 12).getTime());
+      holding(on, credits, 17);
+      await startWithLimits($, on, [sevenResettingAt(100, localAt(0, 16)), fiveAt(40, localAt(0, 17))]);
+      const ui = await mountHint($);
+      expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+      expect(await explanationOf(ui, "limit_5h")).toBe("5h at 40%: it is paused until the 7d resets at 4 PM.");
+      expect(await explanationOf(ui, "limit_7d")).toBe("7d at 100%: at this pace it reaches its target as it resets at 4 PM.");
+      await ui.unmount();
+    });
+
+  // Work went on past the used-up 7d, with no lookup to say so: as the tests above, the 5h is not paused. A lookup that answered
+  // takes the place of that guess, whichever way it answered.
+  test("reads the covered 7d as covered by credits, not as work going on, when the lookup says credits cover it and work went on", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: creditsOf(), version: 1 } }));
+    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 100%: used up, usage credits cover you until it resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  test("keeps the 5h paused when the lookup reports the cap reached, though work went on past the 7d", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    on("state.get", { plugin: "cockpit", key: "credits" }, () => ({ value: { value: creditsOf({ spent: 1500, capReached: true }), version: 1 } }));
+    const ui = await afterWorkWentOn($, on, [SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    await ui.unmount();
+  });
+
+  // The automatic handoff, compaction and keep-warm pings wait on no window that usage credits cover, the 7d or the 5h.
+  const SEVEN_100: SessionRateLimit = { kind: "seven_day", percentUsed: 100 };
+  const FIVE_100: SessionRateLimit = { kind: "five_hour", percentUsed: 100 };
+  const SEVEN_60: SessionRateLimit = { kind: "seven_day", percentUsed: 60 };
+
+  test("runs the handoff with the 7d at 100% while credits cover it", { options: { usage_lookup: true } }, async ($, on) => {
+    expect(await handoffRuns($, on, { rateLimits: [SEVEN_100], credits: creditsOf() })).toEqual(["cockpit:handoff"]);
+  });
+
+  test("runs the handoff with the 5h at 100% and the 7d at 60% while credits cover the 5h", { options: { usage_lookup: true } }, async ($, on) => {
+    expect(await handoffRuns($, on, { rateLimits: [FIVE_100, SEVEN_60], credits: creditsOf() })).toEqual(["cockpit:handoff"]);
+  });
+
+  test("pings the cache and then runs the handoff with the 7d at 100% while credits cover it", { options: { usage_lookup: true, keep_warm_pings: 2 } }, async ($, on) => {
+    expect(await handoffRuns($, on, { rateLimits: [SEVEN_100], credits: creditsOf(), after: 14 })).toEqual(["ping", "ping", "cockpit:handoff"]);
+  });
+
+  test("compacts with the 7d at 100% while credits cover it", { options: { usage_lookup: true, auto_compact: true } }, async ($, on) => {
+    expect(await compactionRuns($, on, 190_000, [], [SEVEN_100], creditsOf())).toEqual(["compact"]);
+  });
+
+  for (const [what, credits] of [
+    ["the cap reached", creditsOf({ spent: 1500, capReached: true })],
+    ["credits off", creditsOf({ enabled: false })],
+    ["out of credits", creditsOf({ reason: "out_of_credits" })],
+  ] as const) {
+    test(`runs no handoff with the 7d at 100% when the lookup reports ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
+      expect(await handoffRuns($, on, { rateLimits: [SEVEN_100], credits })).toEqual([]);
+    });
+
+    test(`runs no compaction with the 7d at 100% when the lookup reports ${what}`, { options: { usage_lookup: true, auto_compact: true } }, async ($, on) => {
+      expect(await compactionRuns($, on, 190_000, [], [SEVEN_100], credits)).toEqual([]);
+    });
+  }
 
   console.log(`cockpit tests in random order, seed ${seed}`);
   // Every test gets this machine's timeout; a test's own options and body pass through.
