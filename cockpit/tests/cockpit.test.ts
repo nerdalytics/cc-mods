@@ -4405,14 +4405,14 @@ describe("cockpit", () => {
 
   // A refusal on the 7d that resets at `resetsAt`, with the extra-usage fields given, in a transcript the scan finds. The session
   // hears the 7d at 100% as well, so the texts under test are those of a window both used up and refused on.
-  const refusedWith = async ($: Engine, on: On, limits: SessionRateLimit[], overage: Record<string, string>, resetsAt = localAt(1, 16), credits?: StatusCredits) => {
+  const refusedWith = async ($: Engine, on: On, limits: SessionRateLimit[], overage: Record<string, string>, resetsAt = localAt(1, 16), credits?: StatusCredits, kind = "seven_day") => {
     stubHint(on, START);
     if (credits) lookupSays(on, credits);
     holdingRefusal(on, {
       type: "assistant",
       timestamp: new Date(START).toISOString(),
       apiError: "usage_limit_reached",
-      apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt: Math.floor(resetsAt.getTime() / 1000), ...overage } },
+      apiErrorParams: { rate_limit_info: { rateLimitType: kind, resetsAt: Math.floor(resetsAt.getTime() / 1000), ...overage } },
     });
     await startWithLimits($, on, limits);
     const ui = await mountHint($);
@@ -4506,6 +4506,28 @@ describe("cockpit", () => {
     expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d and the 5h reset at ${named(fiveResetsAt, "5 PM")}, ${NOT_AVAILABLE}.`);
     await ui.unmount();
   });
+
+  // A refusal whose reset has passed is no longer in force: the 7d reads 100% only from a response, and neither text cites the refusal.
+  test("reads no refusal text when the refusal on the 7d has reset and a response still reads the 7d at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), reading("five_hour", 40, 0.4)], REJECTED, new Date(START - HOUR));
+    expect(await explanationOf(ui, "limit_7d")).not.toContain("last refusal");
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it is paused until the 7d resets at ${named(resetsAt, "4 PM")}.`);
+    await ui.unmount();
+  });
+
+  // The 5h at 100% with the 7d not used up is not paused; its own refusal explains it. Classic reads the ordinary sentence.
+  for (const [style, words] of [
+    ["gauge", (at: Date) => `used up, ${NOT_AVAILABLE}, it resets at ${named(at, "10 AM")}.`],
+    ["classic", (at: Date) => `it resets at ${named(at, "10 AM")}.`],
+  ] as const) {
+    test(`reads the ${style} 5h at 100% as ${style === "gauge" ? "used up with credits not available at its own last refusal" : "its ordinary sentence"}, the 7d not used up`, { options: { limit_style: style } }, async ($, on) => {
+      const fiveResetsAt = localAt(1, 10);
+      const ui = await refusedWith($, on, [sevenResettingAt(50, localAt(3, 16)), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }], REJECTED, fiveResetsAt, undefined, "five_hour");
+      expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: ${words(fiveResetsAt)}`);
+      await ui.unmount();
+    });
+  }
 
   // The refusal texts are for a session with no lookup result: a lookup that answered, here the cap reached, says what the 7d and
   // the 5h read instead, and the refusal's own fields are not read.
