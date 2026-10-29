@@ -227,8 +227,9 @@ function creditsWords(credits: StatusCredits, s: Snapshot): string {
   if (Math.abs(r - 1) <= 0.05) return `${head}: at this pace it reaches the cap as it resets on ${reset}.`;
   if (r < 1) return `${head}: ${spent}, at this pace ${amountOf(Math.round(credits.cap - (credits.spent * monthMs) / gone), credits)} is left when it resets on ${reset}.`;
   const hitIn = ((credits.cap - credits.spent) * gone) / credits.spent - (now - credits.at);
-  // A run-out under a minute away, or already due, reads as limitWords reads it, the whole time to the reset before it.
-  const runsOut = hitIn >= 60_000 ? `in ${countdown(hitIn / 1000)}, ${countdown((resetsAt - now - hitIn) / 1000)}` : `any moment, ${countdown((resetsAt - now) / 1000)}`;
+  // A run-out under a minute away reads "any moment" with the whole time to the reset before it, as limitWords reads it;
+  // one already passed (the lookup's reading is up to 10 minutes old) has no time to count, so it leaves the time out.
+  const runsOut = hitIn >= 60_000 ? `in ${countdown(hitIn / 1000)}, ${countdown((resetsAt - now - hitIn) / 1000)}` : hitIn >= 0 ? `any moment, ${countdown((resetsAt - now) / 1000)}` : "any moment";
   return `${head}: ${spent}, at this pace the cap runs out ${runsOut} before it resets on ${reset}.`;
 }
 

@@ -3439,7 +3439,18 @@ describe("cockpit", () => {
   type Answer = { status: number; text: string } | { deny: string };
   type Auth = { handle: string; kind: "bearer" | "api-key" } | null;
   const extraUsage = (extra: Record<string, unknown> = {}) => JSON.stringify({ extra_usage: { is_enabled: true, used_credits: 1011, monthly_limit: 1500, decimal_places: 2, currency: "EUR", spend_limit_reached: false, disabled_reason: null, ...extra } });
-  const lookupWorld = (on: On, { auth = { handle: "handle-1", kind: "bearer" }, usage = () => ({ status: 200, text: extraUsage() }), profile = () => ({ status: 200, text: JSON.stringify({ organization: { subscription_created_at: "2024-07-17T23:34:49Z" } }) }) }: { auth?: Auth; usage?: () => Answer; profile?: () => Answer } = {}) => {
+  // A profile answer whose subscription began 2024-07-17T23:34:49Z, billing day 17 in UTC.
+  const profileOk = (): Answer => ({ status: 200, text: JSON.stringify({ organization: { subscription_created_at: "2024-07-17T23:34:49Z" } }) });
+  // The billing days the mod writes to its state, in order.
+  const billingKept = (on: On) => {
+    const days: unknown[] = [];
+    on("state.set", { plugin: "cockpit", key: "billing" }, ($, e, next) => {
+      days.push(e.value);
+      return next(e);
+    });
+    return days;
+  };
+  const lookupWorld = (on: On, { auth = { handle: "handle-1", kind: "bearer" }, usage = () => ({ status: 200, text: extraUsage() }), profile = profileOk }: { auth?: Auth; usage?: () => Answer; profile?: () => Answer } = {}) => {
     const asked: { url: string; auth?: string; beta?: string }[] = [];
     // The mod times its lookups by the engine's clock, which a test moves.
     const clock = clockOn(on);
@@ -3664,11 +3675,7 @@ describe("cockpit", () => {
   test("keeps the UTC day of the subscription's start as the billing day", { options: { usage_lookup: true } }, async ($, on) => {
     stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
-    const days: unknown[] = [];
-    on("state.set", { plugin: "cockpit", key: "billing" }, ($, e, next) => {
-      days.push(e.value);
-      return next(e);
-    });
+    const days = billingKept(on);
     lookupWorld(on);
     await startWithLimits($, on, sevenUsedUp());
     await endTurn($, on);
@@ -3707,12 +3714,8 @@ describe("cockpit", () => {
     stubHint(on, START);
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     let profileCalls = 0;
-    const days: unknown[] = [];
-    on("state.set", { plugin: "cockpit", key: "billing" }, ($, e, next) => {
-      days.push(e.value);
-      return next(e);
-    });
-    const { asked, clock } = lookupWorld(on, { profile: () => (++profileCalls === 1 ? { status: 500, text: "" } : { status: 200, text: JSON.stringify({ organization: { subscription_created_at: "2024-07-17T23:34:49Z" } }) }) });
+    const days = billingKept(on);
+    const { asked, clock } = lookupWorld(on, { profile: () => (++profileCalls === 1 ? { status: 500, text: "" } : profileOk()) });
     await startWithLimits($, on, sevenUsedUp());
     // Turns at 0 s, 30 s, 60 s and 120 s: the first profile call fails, the second turn is within the minute it waits.
     for (const gap of [0, 30_000, 30_000, 60_000]) {
@@ -3723,7 +3726,7 @@ describe("cockpit", () => {
     expect(days).toEqual([17]);
   });
 
-  test("waits a minute after a failed usage lookup, and makes none within it",{ options: { usage_lookup: true } }, async ($, on) => {
+  test("waits a minute after a failed usage lookup, and makes none within it", { options: { usage_lookup: true } }, async ($, on) => {
     // Turns at 0 s (fails), 59.9 s and 60 s.
     const { calls } = await turnsAt($, on, [0, MINUTE - 100, 100], ["fail"]);
     expect(calls).toEqual([0, 2]);
@@ -3833,7 +3836,6 @@ describe("cockpit", () => {
     const start = new Date(START);
     return new Date(start.getFullYear(), start.getMonth() + 1, day, hour, minute);
   };
-  const startPlus = (at: Date): number => START + (at.getTime() - START);
   // The 7d at 100%, resetting at `hour` local on the day after `now`'s: its time of day is the billing month's.
   const sevenAfter = (now: number, hour = 16, minute = 0): SessionRateLimit[] => {
     const day = new Date(now);
@@ -3852,46 +3854,77 @@ describe("cockpit", () => {
 
   test("explains an over-pace cap with when it runs out from now and how long before its reset that is", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // Half the cap spent a third into the 30-day month that began Nov 1 4 PM: at this pace the cap lasts 10 days more.
-    const text = await creditsExplained($, on, startPlus(inNovember(11)), { spent: 750 }, 1);
+    const text = await creditsExplained($, on, inNovember(11).getTime(), { spent: 750 }, 1);
     expect(text).toBe("€ at 50%: €7.50 of €15.00 spent, at this pace the cap runs out in 10d0h, 10d0h before it resets on Dec 1 4 PM.");
   });
 
   test("counts the run-out from now, not from the lookup, while the pace is the share of the month gone at the lookup", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // The spend was read 10 days and 5 minutes into the month, so the cap runs out 10 days and 5 minutes after that
     // reading; the clock reads 9 minutes later, which makes it 9d23h56m from now, not 10d0h.
-    const at = startPlus(inNovember(11)) + 5 * MINUTE;
+    const at = inNovember(11).getTime() + 5 * MINUTE;
     const text = await creditsExplained($, on, at + 9 * MINUTE, { at, spent: 750 }, 1);
     expect(text).toBe("€ at 50%: €7.50 of €15.00 spent, at this pace the cap runs out in 9d23h, 9d23h before it resets on Dec 1 4 PM.");
   });
 
   test("explains a cap that runs out within the minute as running out any moment, the time to its reset before it", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
-    // At 9 minutes old the reading puts the run-out in the past: 172 s after it, less the 9 minutes.
-    const now = startPlus(inNovember(11));
+    // The reading puts the run-out 576 s after it; the clock reads 9 minutes later, so it is 36 s away.
+    const now = inNovember(11).getTime();
     const text = await creditsExplained($, on, now, { at: now - 9 * MINUTE, spent: 1499 }, 1);
     expect(text).toBe("€ at 100%: €14.99 of €15.00 spent, at this pace the cap runs out any moment, 20d0h before it resets on Dec 1 4 PM.");
   });
 
+  test("explains a cap whose run-out has already passed as running out any moment, with no time to its reset", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    // At 10 minutes old the same run-out is 24 s past.
+    const now = inNovember(11).getTime();
+    const text = await creditsExplained($, on, now, { at: now - 10 * MINUTE, spent: 1499 }, 1);
+    expect(text).toBe("€ at 100%: €14.99 of €15.00 spent, at this pace the cap runs out any moment before it resets on Dec 1 4 PM.");
+  });
+
+  test("draws a spend above the cap with every cell spent and explains it over its pace", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    // Claude Code ends a turn gracefully past the cap: $15.37 of $15.00 is 102%.
+    const now = inNovember(11).getTime();
+    stubHint(on, now);
+    holding(on, creditsOf({ at: now, spent: 1537, currency: "USD" }), 1);
+    await startWithLimits($, on, sevenAfter(now));
+    const ui = await mountHint($);
+    expect(await creditsTag(ui)).toEqual({ badge: " $ ", bar: "BBBBBBB" });
+    expect(await explanationOf(ui, "credits")).toBe("$ at 102%: $15.37 of $15.00 spent, at this pace the cap runs out any moment before it resets on Dec 1 4 PM.");
+    await ui.unmount();
+  });
+
+  test("explains a lookup read just before a billing day, and heard just after it, without a pace and with the next month's reset", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    // The month the spend fell in ended at Nov 1 4 PM: the lookup is 8 minutes old, so fresh, but of the month before.
+    const now = inNovember(1, 16, 3).getTime();
+    const text = await creditsExplained($, on, now, { at: inNovember(1, 15, 55).getTime() }, 1);
+    expect(text).toBe("€ at 67%: €10.11 of €15.00 spent, it resets on Dec 1 4 PM.");
+  });
+
+  test("explains the reached cap without a clock when the used-up window has no reset time", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    const { now, credits } = capReached(() => []);
+    expect(await creditsExplained($, on, now, credits, 17, [{ kind: "seven_day", percentUsed: 100 }])).toBe("€ at 100%: the cap is reached, you can work again when the 7d resets.");
+  });
+
   test("runs a billing month from the billing day at the 7d's local time of day to the next", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // The month began Nov 1 at 9:30 AM, the 7d's time of day: at 9:30 AM on the 11th a third of it has passed.
-    const now = startPlus(inNovember(11, 9, 30));
+    const now = inNovember(11, 9, 30).getTime();
     const text = await creditsExplained($, on, now, { spent: 750 }, 1, sevenAfter(now, 9, 30));
     expect(text).toBe("€ at 50%: €7.50 of €15.00 spent, at this pace the cap runs out in 10d0h, 10d0h before it resets on Dec 1 9:30 AM.");
   });
 
   test("ends a month shorter than the billing day on its last day", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // The billing day is the 31st: the month that began Oct 31 4 PM ends Nov 30, and on Nov 10 a third of it has passed.
-    const text = await creditsExplained($, on, startPlus(inNovember(10)), { spent: 500 }, 31);
+    const text = await creditsExplained($, on, inNovember(10).getTime(), { spent: 500 }, 31);
     expect(text).toBe("€ at 33%: at this pace it reaches the cap as it resets on Nov 30 4 PM.");
   });
 
   test("explains an under-pace cap with what is left when it resets", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // €3.00 spent two thirds into the month: €4.50 by the reset at this pace.
-    const text = await creditsExplained($, on, startPlus(inNovember(21)), { spent: 300 }, 1);
+    const text = await creditsExplained($, on, inNovember(21).getTime(), { spent: 300 }, 1);
     expect(text).toBe("€ at 20%: €3.00 of €15.00 spent, at this pace €10.50 is left when it resets on Dec 1 4 PM.");
   });
 
   test("explains an on-pace cap as reaching the cap as it resets", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
-    const text = await creditsExplained($, on, startPlus(inNovember(11)), { spent: 500 }, 1);
+    const text = await creditsExplained($, on, inNovember(11).getTime(), { spent: 500 }, 1);
     expect(text).toBe("€ at 33%: at this pace it reaches the cap as it resets on Dec 1 4 PM.");
   });
 
@@ -3908,14 +3941,14 @@ describe("cockpit", () => {
   });
 
   test("names a credits reset later today by its clock alone", { options: { usage_lookup: true, limit_style: "classic" } }, async ($, on) => {
-    const now = startPlus(localAt(0, 10));
+    const now = localAt(0, 10).getTime();
     const text = await creditsExplained($, on, now, {}, new Date(now).getDate());
     expect(text).toBe("€ at 67%: €10.11 of €15.00 spent, it resets on 4 PM.");
   });
 
   // The cap reached: all of it spent, the clock at 10 AM local on START's day.
   const capReached = (limits: (now: number) => SessionRateLimit[], credits: Partial<StatusCredits> = {}) => {
-    const now = startPlus(localAt(0, 10));
+    const now = localAt(0, 10).getTime();
     return { now, limits: limits(now), credits: { spent: 1500, capReached: true, ...credits } };
   };
   const fiveAt = (percentUsed: number, resetsAt: Date): SessionRateLimit => ({ kind: "five_hour", percentUsed, resetsAt: resetsAt.toISOString() });
