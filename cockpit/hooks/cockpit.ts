@@ -47,8 +47,9 @@ type Snapshot = {
   // that reply left: coverOf reads them.
   usedUp?: { from: number; to?: number }[];
   answeredAt?: number;
+  answeredSent?: number;
   answeredSeven?: number;
-  refusals?: Record<string, { at: number }>;
+  refusals?: Record<string, { at: number; overageStatus?: string; overageDisabledReason?: string }>;
   now: number;
   phase: number;
 };
@@ -89,6 +90,7 @@ type LimitReading = {
   paused?: { until?: number };
   resetsAtMs?: number;
   cover?: Cover;
+  refusal?: { said: string };
   endsAt?: number;
   target: number;
   bound?: { sevenUsed: number; k: number };
@@ -109,9 +111,9 @@ function limitOf(s: Snapshot, badge: (typeof LIMITS)[number]["badge"]): LimitRea
   const cover = coverOf(s);
   const endsAt = Math.max(0, ...usedUpWindows(limits, undefined, s.now * 1000).flatMap((r) => (r.resetsAt && Date.parse(r.resetsAt) > s.now * 1000 ? [Date.parse(r.resetsAt)] : []))) || undefined;
   const target = badge === "5h" ? fiveHourTarget(found, seven, s.k, cover) : 100;
-  if (badge === "5h" && seven && seven.percentUsed >= 100 && !cover) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, endsAt, target };
+  if (badge === "5h" && seven && seven.percentUsed >= 100 && !cover) return { limit, found, left, paused: { until: seven.resetsAt ? Date.parse(seven.resetsAt) : undefined }, resetsAtMs, refusal: refusalOf(s, "seven_day"), endsAt, target };
   const bound = badge === "5h" && seven && s.k !== undefined && target < 100 ? { sevenUsed: seven.percentUsed, k: s.k } : undefined;
-  return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, cover, endsAt, target, bound };
+  return { limit, found, left, pace: paceOf(limit, found, s.now * 1000, target), resetsAtMs, cover, refusal: refusalOf(s, limit.kind), endsAt, target, bound };
 }
 
 // The 5h's target: what the 7d can still pay for at k 7d percent per 5h percent, up to its whole allowance. Its whole
@@ -124,15 +126,25 @@ function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: nu
 
 // How a used-up window is covered. "credits" when the latest lookup says they pay for it. "went-on" when work went on past a
 // used-up 7d with no lookup to say so: a main-session request got a reply after the interval opened, that reply still read the
-// 7d at 100%, and no refusal on the 7d is newer than it. A lookup that answered outranks that guess: credits off, the cap
+// 7d at 100%, and no refusal on the 7d is newer than the time that request was sent. A lookup that answered outranks that guess: credits off, the cap
 // reached or the credits out leave it nothing. The 7d percent is the one the reply's own reading held, saved with its time:
 // the current reading is overwritten by a poll every 2 s, and a refusal's made-up 100% is not a reply's.
 type Cover = "credits" | "went-on";
 function coverOf(s: Snapshot): Cover | undefined {
   if (usageLookup && s.credits) return creditsPay(s.credits) && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000) ? "credits" : undefined;
   const open = s.usedUp?.at(-1);
-  const refusedSince = (s.refusals?.seven_day?.at ?? 0) > (s.answeredAt ?? 0);
+  // A reply in flight at a refusal was sent before it and says nothing of work going on past it, whenever it arrived.
+  const refusedSince = (s.refusals?.seven_day?.at ?? 0) > (s.answeredSent ?? 0);
   return open && open.to === undefined && (s.answeredSeven ?? 0) >= 100 && s.answeredAt !== undefined && s.answeredAt > open.from && !refusedSince ? "went-on" : undefined;
+}
+
+// The refusal that explains a used-up window with no lookup result: the window's newest, still in force, whose rate-limit info
+// said usage credits were rejected. A lookup that answered outranks it.
+function refusalOf(s: Snapshot, kind: string): LimitReading["refusal"] {
+  const refusal = s.refusals?.[kind];
+  if ((usageLookup && s.credits) || refusal?.overageStatus !== "rejected" || (s.rejected?.[kind] ?? 0) <= s.now * 1000) return undefined;
+  // Only org_level_disabled has wording; org_level_disabled_until and any other value print none.
+  return { said: `usage credits were not available at the last refusal${refusal.overageDisabledReason === "org_level_disabled" ? " (your organization has them off)" : ""}` };
 }
 
 // Whether the lookup says usage credits pay for a window at 100%: extra usage enabled, the cap not reached, the credits not out.
@@ -517,6 +529,7 @@ const LOOKUP_PACE = { plugin: "cockpit", key: "lookupPace" } as const;
 const USED_UP = { plugin: "cockpit", key: "usedUp" } as const;
 const SEEN_AT = { plugin: "cockpit", key: "seenAt" } as const;
 const ANSWERED_AT = { plugin: "cockpit", key: "answeredAt" } as const;
+const ANSWERED_SENT = { plugin: "cockpit", key: "answeredSent" } as const;
 const ANSWERED_SEVEN = { plugin: "cockpit", key: "answeredSeven" } as const;
 const REFUSALS = { plugin: "cockpit", key: "refusals" } as const;
 const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
@@ -934,20 +947,22 @@ export const register: Register = (on, options) => {
 
   on("turn.step", async function* ($, e, next) {
     const { value: before = 0 } = await $.state.get(SENT);
+    const sentAt = await $.clock.now();
     if (!e.agentId) {
       busy = true;
       effort = e.effort ?? "none";
       // The main conversation's request goes out now: its cache lives a TTL from here.
-      void $.state.set(SENT, await $.clock.now());
+      void $.state.set(SENT, sentAt);
     }
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
-    // When the reply arrived, and the 7d percent of the reading it left. Limits written before this hook resumes are older
+    // When the reply arrived, when its request was sent, and the 7d percent of the reading it left. Limits written before this hook resumes are older
     // than it, so a reply that brought the 7d to 100% itself counts as coming after the interval it opened; whether a host
     // writes them before or after is unchecked.
     if (!e.agentId && response.usage) {
       await $.state.set(ANSWERED_AT, await $.clock.now());
+      await $.state.set(ANSWERED_SENT, sentAt);
       await $.state.set(ANSWERED_SEVEN, (await $.state.get(USAGE)).value?.rateLimits.find((r) => r.kind === "seven_day")?.percentUsed ?? 0);
     }
     tokensStale = true;
@@ -1138,9 +1153,10 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: { k } = {} } = await $.state.get(PACE_K);
   const { value: usedUp } = await $.state.get(USED_UP);
   const { value: answeredAt } = await $.state.get(ANSWERED_AT);
+  const { value: answeredSent } = await $.state.get(ANSWERED_SENT);
   const { value: answeredSeven } = await $.state.get(ANSWERED_SEVEN);
   const { value: refusals } = await $.state.get(REFUSALS);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
@@ -1528,8 +1544,9 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // less the percent used, at the rate the window has run at so far. A run-out under a minute from now, or already due, runs
 // out "any moment" and the whole time to the reset precedes it: a countdown would read it as 0m.
 // `classic` draws no pace and no pause, so its sentence is the one a limit without either gets: its own reset alone.
+// With no cover and no lookup result, a used-up window or the paused 5h says when the refusal it rests on found usage credits unavailable.
 // The run-out warning asks for the over-pace sentence (`overPace`) on a limit just over its pace too, which a hover reads as on pace.
-function limitWords({ limit, found, pace, paused, resetsAtMs, cover, endsAt, target, bound }: LimitReading, now: number, { classic = false, overPace = false } = {}): string {
+function limitWords({ limit, found, pace, paused, resetsAtMs, cover, refusal, endsAt, target, bound }: LimitReading, now: number, { classic = false, overPace = false } = {}): string {
   const head = `${limit.badge} at ${Math.round(found.percentUsed)}%`;
   const shownPace = classic ? undefined : pace;
   const shownPause = classic ? undefined : paused;
@@ -1541,12 +1558,18 @@ function limitWords({ limit, found, pace, paused, resetsAtMs, cover, endsAt, tar
     const ends = ahead(endsAt);
     return `${head}: used up, ${cover === "credits" ? "usage credits cover you" : "work goes on"}${ends === undefined ? "" : ` until it resets at ${resetClock(ends, now)}`}.`;
   }
+  if (refusal && !shownPause && found.percentUsed >= 100 && (limit.badge === "7d" || !classic)) {
+    const ends = ahead(endsAt);
+    return `${head}: used up, ${refusal.said}${ends === undefined ? "" : `, it resets at ${resetClock(ends, now)}`}.`;
+  }
   if (shownPause) {
     const sevenResets = ahead(shownPause.until);
     // The 5h at 100% too: the pause ends at the latest of their resets, the 5h's own named only when it is that one.
     const ends = ahead(endsAt);
-    if (sevenResets !== undefined && ends !== undefined && ends > sevenResets) return `${head}: it is paused until the 7d and the 5h reset at ${resetClock(ends, now)}.`;
-    return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}.`;
+    // The 7d pauses the 5h, so the 7d's refusal is the one that explains it.
+    const why = refusal ? `, ${refusal.said}` : "";
+    if (sevenResets !== undefined && ends !== undefined && ends > sevenResets) return `${head}: it is paused until the 7d and the 5h reset at ${resetClock(ends, now)}${why}.`;
+    return `${head}: it is paused until the 7d resets${sevenResets !== undefined ? ` at ${resetClock(sevenResets, now)}` : ""}${why}.`;
   }
   const until = ahead(resetsAtMs);
   if (until === undefined) return `${head}.`;

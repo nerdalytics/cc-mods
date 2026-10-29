@@ -4349,7 +4349,7 @@ describe("cockpit", () => {
     stubHint(on, START);
     const ui = await workWentOn($, on, 2_000);
     expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
-    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}, usage credits were not available at the last refusal\\.$`));
     await ui.unmount();
   });
 
@@ -4371,6 +4371,159 @@ describe("cockpit", () => {
     });
     const ui = await workWentOn($, on, 2_000);
     expect(kept).toEqual({ seven_day: { at: T + 2_000, overageStatus: "rejected", overageDisabledReason: "out_of_credits" } });
+    await ui.unmount();
+  });
+
+  // A row with both a quota limits object and rate-limit info: the quota limits row is read whole, so the reason the rate-limit
+  // info holds is not mixed into it, and `rejected` still holds the reset in ms.
+  test("keeps the refusal's overage fields from its quota limits row alone, and leaves rejected as the resets", async ($, on) => {
+    stubHint(on, START);
+    const T = clockOn(on).now();
+    const resetsAt = Math.floor((T + 52.5 * HOUR) / 1000);
+    let refusals: unknown;
+    let rejected: unknown;
+    on("state.set", { plugin: "cockpit", key: "refusals" }, ($, e, next) => {
+      refusals = e.value;
+      return next(e);
+    });
+    on("state.set", { plugin: "cockpit", key: "rejected" }, ($, e, next) => {
+      rejected = e.value;
+      return next(e);
+    });
+    holdingRefusal(on, {
+      type: "assistant",
+      timestamp: new Date(T + 2_000).toISOString(),
+      apiError: "usage_limit_reached",
+      quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt, overageStatus: "rejected" },
+      apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt, overageStatus: "allowed", overageDisabledReason: "org_level_disabled" } },
+    });
+    await startWithLimits($, on, [SEVEN_USED_UP]);
+    await clockOn(on).settle();
+    expect(refusals).toEqual({ seven_day: { at: T + 2_000, overageStatus: "rejected" } });
+    expect(rejected).toEqual({ seven_day: resetsAt * 1000 });
+  });
+
+  // A refusal on the 7d that resets at `resetsAt`, with the extra-usage fields given, in a transcript the scan finds. The session
+  // hears the 7d at 100% as well, so the texts under test are those of a window both used up and refused on.
+  const refusedWith = async ($: Engine, on: On, limits: SessionRateLimit[], overage: Record<string, string>, resetsAt = localAt(1, 16), credits?: StatusCredits) => {
+    stubHint(on, START);
+    if (credits) lookupSays(on, credits);
+    holdingRefusal(on, {
+      type: "assistant",
+      timestamp: new Date(START).toISOString(),
+      apiError: "usage_limit_reached",
+      apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt: Math.floor(resetsAt.getTime() / 1000), ...overage } },
+    });
+    await startWithLimits($, on, limits);
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    return ui;
+  };
+  const REJECTED = { overageStatus: "rejected" };
+  const NOT_AVAILABLE = "usage credits were not available at the last refusal";
+
+  test("explains the 7d at 100% as used up with credits not available at the last refusal, when the refusal carried overageStatus rejected", async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt)], REJECTED, resetsAt);
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, ${NOT_AVAILABLE}, it resets at ${named(resetsAt, "4 PM")}.`);
+    await ui.unmount();
+  });
+
+  test("explains the paused 5h as waiting for the 7d, with credits not available at the last refusal", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const five = reading("five_hour", 40, 0.4);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), five], REJECTED, resetsAt);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it is paused until the 7d resets at ${named(resetsAt, "4 PM")}, ${NOT_AVAILABLE}.`);
+    await ui.unmount();
+  });
+
+  test("reads the classic 5h's ordinary sentence after a refusal on the 7d with credits not available", { options: { limit_style: "classic" } }, async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const fiveResetsAt = localAt(1, 10);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), { kind: "five_hour", percentUsed: 40, resetsAt: fiveResetsAt.toISOString() }], REJECTED, resetsAt);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it resets at ${named(fiveResetsAt, "10 AM")}.`);
+    await ui.unmount();
+  });
+
+  for (const [reason, said] of [
+    ["org_level_disabled", " (your organization has them off)"],
+    ["org_level_disabled_until", ""],
+    ["out_of_credits", ""],
+  ] as const) {
+    test(`prints ${said === "" ? "no reason" : "the organization's reason"} in both texts for the refusal's overageDisabledReason ${reason}`, { options: { limit_style: "gauge" } }, async ($, on) => {
+      const resetsAt = localAt(1, 16);
+      const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), reading("five_hour", 40, 0.4)], { ...REJECTED, overageDisabledReason: reason }, resetsAt);
+      const clock = named(resetsAt, "4 PM");
+      expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, ${NOT_AVAILABLE}${said}, it resets at ${clock}.`);
+      expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it is paused until the 7d resets at ${clock}, ${NOT_AVAILABLE}${said}.`);
+      await ui.unmount();
+    });
+  }
+
+  // After a refusal with the option off, no limit text and no other tag's text points at switching the option on. The refusal
+  // texts do name usage credits, so the check is for the option and for switching it on.
+  test("never mentions the usage_lookup option or switching it on in any tag or explanation after a refusal with it off", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), reading("five_hour", 40, 0.4)], { ...REJECTED, overageDisabledReason: "org_level_disabled" }, resetsAt);
+    const texts = [...(await ui.findAll({ type: "Text" })).map(flat), ...(await explanationsIn(ui)).map(flat)].join(" ");
+    expect(texts).toContain(NOT_AVAILABLE);
+    expect(texts).not.toMatch(/lookup|switch|turn(?:ed)? on|enable/i);
+    await ui.unmount();
+  });
+
+  // A reply counts as work going on past a refusal only when its request went out after the refusal (Q202 a). This request goes
+  // out at the start, a refusal on the 7d comes a quarter second in, and the reply arrives half a second in, still reading
+  // the 7d at 100%: it was in flight at the refusal, so the 5h stays paused and the refusal text shows.
+  test("keeps the 5h paused, with the refusal text, when the reply that still read the 7d at 100% was sent before the refusal", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on, START);
+    const clock = slowReply(on);
+    holdingRefusal(on, {
+      type: "assistant",
+      timestamp: new Date(START + 250).toISOString(),
+      apiError: "usage_limit_reached",
+      apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt: Math.floor((START + 52.5 * HOUR) / 1000), overageStatus: "rejected" } },
+    });
+    const limits = [SEVEN_USED_UP, reading("five_hour", 10, 0.6)];
+    const run = await usedUpTest($, on, limits);
+    const answered = reply($);
+    await clock.advance(500);
+    await answered;
+    await run.hear(limits);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}, ${NOT_AVAILABLE}\\.$`));
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 100%: used up, ${NOT_AVAILABLE}, it resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // Both windows at 100% with the 5h resetting last: each text names that later reset, and the paused 5h's refusal sentence is
+  // the 7d's, which pauses it.
+  test("names the 5h's later reset in both refusal texts when the 5h at 100% resets after the refused 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const sevenResetsAt = localAt(1, 16);
+    const fiveResetsAt = localAt(1, 17);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }], REJECTED, sevenResetsAt);
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, ${NOT_AVAILABLE}, it resets at ${named(fiveResetsAt, "5 PM")}.`);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d and the 5h reset at ${named(fiveResetsAt, "5 PM")}, ${NOT_AVAILABLE}.`);
+    await ui.unmount();
+  });
+
+  // The refusal texts are for a session with no lookup result: a lookup that answered, here the cap reached, says what the 7d and
+  // the 5h read instead, and the refusal's own fields are not read.
+  test("reads neither refusal text when the lookup answered that the cap is reached", { options: { limit_style: "gauge", usage_lookup: true } }, async ($, on) => {
+    const resetsAt = localAt(1, 16);
+    const ui = await refusedWith($, on, [sevenResettingAt(100, resetsAt), reading("five_hour", 40, 0.4)], REJECTED, resetsAt, creditsOf({ capReached: true }));
+    expect(await explanationOf(ui, "limit_7d")).not.toContain("last refusal");
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 40%: it is paused until the 7d resets at ${named(resetsAt, "4 PM")}.`);
+    await ui.unmount();
+  });
+
+  // Work went on past the refusal when a reply to a request sent after it still read the 7d at 100%: the went-on text wins over the
+  // refusal's, though the refusal carried rejected (Q201 a), and the 5h is not paused.
+  test("reads the went-on text, not the refusal text, when work went on past a refusal that carried rejected", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on, START);
+    const ui = await workWentOn($, on, 500);
+    expect(await explanationOf(ui, "limit_7d")).toMatch(new RegExp(`^7d at 100%: used up, work goes on until it resets at ${CLOCK}\\.$`));
+    expect(await explanationOf(ui, "limit_5h")).not.toMatch(/paused|usage credits/);
     await ui.unmount();
   });
 
