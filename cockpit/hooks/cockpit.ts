@@ -43,9 +43,11 @@ type Snapshot = {
   sampled?: true;
   // The 7d percent that 1% of the 5h costs, once this session measured it.
   k?: number;
-  // The intervals a window read 100%, and when the latest main-session reply with usage arrived: coverOf reads them.
+  // The intervals a window read 100%, when the latest main-session reply with usage arrived and the 7d percent of the reading
+  // that reply left: coverOf reads them.
   usedUp?: { from: number; to?: number }[];
   answeredAt?: number;
+  answeredSeven?: number;
   refusals?: Record<string, { at: number }>;
   now: number;
   phase: number;
@@ -122,16 +124,14 @@ function fiveHourTarget(five: StatusLimit, seven: StatusLimit | undefined, k: nu
 
 // How a used-up 7d is covered, "went-on" when work went on past it with no lookup to say so: a main-session request got a reply
 // after the interval opened, that reply still read the 7d at 100%, and no refusal on the 7d is newer than it. A lookup that
-// answered stands in the way of this guess, so with one it is nothing. The reading is the one reported, not limitsOf's, as
-// a refusal's made-up 100% is not a reply's.
+// answered stands in the way of this guess, so with one it is nothing. The 7d percent is the one the reply's own reading
+// held, saved with its time: the current reading is overwritten by a poll every 2 s, and a refusal's made-up 100% is not a reply's.
 type Cover = "went-on";
 function coverOf(s: Snapshot): Cover | undefined {
   if (usageLookup && s.credits) return undefined;
   const open = s.usedUp?.at(-1);
-  const seven = s.usage.rateLimits.find((r) => r.kind === "seven_day");
-  const reads100 = seven !== undefined && seven.percentUsed >= 100 && (!seven.resetsAt || Date.parse(seven.resetsAt) > s.now * 1000);
   const refusedSince = (s.refusals?.seven_day?.at ?? 0) > (s.answeredAt ?? 0);
-  return open && open.to === undefined && reads100 && s.answeredAt !== undefined && s.answeredAt > open.from && !refusedSince ? "went-on" : undefined;
+  return open && open.to === undefined && (s.answeredSeven ?? 0) >= 100 && s.answeredAt !== undefined && s.answeredAt > open.from && !refusedSince ? "went-on" : undefined;
 }
 
 // One limit's tag, none until a reading has it: its badge, then its bar in the limit_style. The gauge's badge also reads
@@ -424,6 +424,7 @@ const LOOKUP_PACE = { plugin: "cockpit", key: "lookupPace" } as const;
 const USED_UP = { plugin: "cockpit", key: "usedUp" } as const;
 const SEEN_AT = { plugin: "cockpit", key: "seenAt" } as const;
 const ANSWERED_AT = { plugin: "cockpit", key: "answeredAt" } as const;
+const ANSWERED_SEVEN = { plugin: "cockpit", key: "answeredSeven" } as const;
 const REFUSALS = { plugin: "cockpit", key: "refusals" } as const;
 const HANDOFF = { plugin: "cockpit", key: "handoff" } as const;
 const TICK = { plugin: "cockpit", key: "tick" } as const;
@@ -849,9 +850,13 @@ export const register: Register = (on, options) => {
     const response = yield* next(e);
     // No response (a limit refused the request, or it failed): the cache was not touched.
     if (!e.agentId && !response.usage) void $.state.set(SENT, before);
-    // When the reply arrived. Limits written before this hook resumes are older than it, so a reply that brought the 7d to
-    // 100% itself counts as coming after the interval it opened; whether a host writes them before or after is unchecked.
-    if (!e.agentId && response.usage) await $.state.set(ANSWERED_AT, await $.clock.now());
+    // When the reply arrived, and the 7d percent of the reading it left. Limits written before this hook resumes are older
+    // than it, so a reply that brought the 7d to 100% itself counts as coming after the interval it opened; whether a host
+    // writes them before or after is unchecked.
+    if (!e.agentId && response.usage) {
+      await $.state.set(ANSWERED_AT, await $.clock.now());
+      await $.state.set(ANSWERED_SEVEN, (await $.state.get(USAGE)).value?.rateLimits.find((r) => r.kind === "seven_day")?.percentUsed ?? 0);
+    }
     tokensStale = true;
     return response;
   });
@@ -1040,8 +1045,9 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: { k } = {} } = await $.state.get(PACE_K);
   const { value: usedUp } = await $.state.get(USED_UP);
   const { value: answeredAt } = await $.state.get(ANSWERED_AT);
+  const { value: answeredSeven } = await $.state.get(ANSWERED_SEVEN);
   const { value: refusals } = await $.state.get(REFUSALS);
-  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, turns, compactAt, sent, git, pr, rejected, credits, billing, k, usedUp, answeredAt, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 

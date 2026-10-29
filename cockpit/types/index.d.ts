@@ -98,6 +98,8 @@ declare module "claude-code" {
       refusals: Record<string, { at: number; overageStatus?: string; overageDisabledReason?: string }>;
       // When the latest main-session reply with usage arrived (ms).
       answeredAt: number;
+      // The 7d percent of the reading that reply left, which coverOf asks whether it still read 100%.
+      answeredSeven: number;
     };
   }
 }
