@@ -3621,7 +3621,8 @@ describe("cockpit", () => {
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     await caughtUp(on, ui);
-    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBB___" });
+    // The sample's billing month is unknown, so the bottom lane is empty.
+    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "TTTT___" });
     expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
     await ui.unmount();
   });
@@ -3629,7 +3630,7 @@ describe("cockpit", () => {
   // The badge and the spent cells as drawn, colour by colour.
   const creditsColors = async (ui: { find: Mounted["find"] }) => {
     const [badge, ...bar] = elements(must(await ui.find({ type: "Box", key: "credits" }), "the credits tag").children);
-    return { badge: badge?.props, spent: bar.slice(0, 4).map(({ props }) => props.backgroundColor) };
+    return { badge: badge?.props, spent: bar.slice(0, 4).map(({ props }) => props.color) };
   };
 
   test("draws the credits badge and spent cells in the muted rose credits.spent, the label black on it", { options: { usage_lookup: true } }, async ($, on) => {
@@ -3805,8 +3806,8 @@ describe("cockpit", () => {
     holding(on, creditsOf(), billing.getDate());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
-    // 1011 of 1500 is 67%: 4 of the 7d's 7 cells.
-    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBB___" });
+    // 1011 of 1500 is 67%: 4 of the 7d's 7 cells on the top lane. The month that began on the 1st is about 84% gone, 5 cells below.
+    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBBU__" });
     expect(await explanationOf(ui, "credits")).toBe(`€ at 67%: €10.11 of €15.00 spent, it resets on ${dateAt(billing)}.`);
     await ui.unmount();
   });
@@ -3816,8 +3817,8 @@ describe("cockpit", () => {
     holding(on, creditsOf());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
-    // 67% of 10 cells, floored.
-    expect((await creditsTag(ui))?.bar).toBe("BBBBBB____");
+    // 67% of 10 cells, floored, with no billing day for a month below.
+    expect((await creditsTag(ui))?.bar).toBe("TTTTTT____");
     await ui.unmount();
   });
 
@@ -3852,6 +3853,100 @@ describe("cockpit", () => {
     return text;
   };
 
+  // The credits tag as limitTagOf draws a limit's, for a session whose clock starts at `now`. The billing day is the 1st unless given, with the 7d resetting at 4 PM.
+  const creditsDrawn = async ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => {
+    stubHint(on, now);
+    holding(on, creditsOf({ at: now, ...credits }), billing);
+    await startWithLimits($, on, limits);
+    const ui = await mountHint($);
+    const drawn = await limitTagOf(ui, "credits");
+    await ui.unmount();
+    return drawn;
+  };
+  const SPENT = "#b87a8c";
+
+  test("draws the credits lanes under pace: the top lane lit to the spend in the spent colour, the bottom to the month gone, dim", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    // €5.00 of €15.00 is 33%, 2 of 7 cells; 18 of the 30 days of the month that began Nov 1 4 PM are 60%, 4 cells.
+    const drawn = await creditsDrawn($, on, inNovember(19).getTime(), { spent: 500 }, 1);
+    expect(drawn.bar).toBe("▀▀▀▀▀▀▀");
+    expect(drawn.colors).toEqual([SPENT, SPENT, GREY, GREY, GREY, GREY, GREY]);
+    expect(drawn.backgrounds).toEqual([DIM, DIM, DIM, DIM, GREY, GREY, GREY]);
+  });
+
+  test("draws the credits lanes over pace: the last cells of the top lane amber to red, one per cell ahead of the month, rounded up", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    // €10.00 of €15.00 is 67%, 4 of 7 cells; a third of the month is 2.33 cells, so the spend is 2.33 cells ahead: 3 impacted.
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent: 1000 }, 1);
+    expect(drawn.colors).toEqual([SPENT, "#fbbf24", "#f58234", RED, GREY, GREY, GREY]);
+    expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+  });
+
+  test("draws the credits lanes in classic with the spent colour on every lit cell and the month below, however far ahead the spend is", { options: { usage_lookup: true, limit_style: "classic" } }, async ($, on) => {
+    // 1400 of 1500 is 93%, 6 cells, 5 of them ahead of a third of the month, yet none amber or red.
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent: 1400 }, 1);
+    expect(drawn.colors).toEqual([...Array(6).fill(SPENT), GREY]);
+    expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+  });
+
+  // A third of the 30-day month gone. €10.11 of €15.00 is 67%, r 2.02: it runs out with half the month to go, 3 halves right
+  // of the pipe, amber turning red. €3.00 is 20%, r 0.6: 40% of the pace unused, 2 halves left of it, in slate.
+  for (const [title, spent, badge, bar, colors] of [
+    ["fills the credits gauge right of the pipe amber to red over pace, and reads the share spent in the badge", 1011, " € 67% ", "   │█▌ ", [GREY, GREY, GREY, "#e5e7eb", "#fbbf24", "#f58234", GREY]],
+    ["fills the credits gauge left of the pipe in slate under pace", 300, " € 20% ", "  █│   ", [GREY, GREY, "#94a3b8", "#e5e7eb", GREY, GREY, GREY]],
+  ] as const)
+    test(title, { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+      const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent }, 1);
+      expect(drawn.badge).toBe(badge);
+      expect(drawn.bar).toBe(bar);
+      expect(drawn.colors).toEqual([...colors]);
+    });
+
+  // A third of the month is 2 cells, so the notch sits after the 2nd. 67% of the cap is 4 cells: the 2 before the notch in the
+  // spent colour, the 2 past it amber to red. 20% is 1 cell, which stops short of the notch.
+  for (const [title, spent, backgrounds] of [
+    ["draws the credits notch after the cells of the month gone, the spent cells past it amber to red", 1000, [SPENT, SPENT, "#fbbf24", RED, GREY, GREY, GREY]],
+    ["draws the credits notch with the spent cells short of it all in the spent colour", 300, [SPENT, GREY, GREY, GREY, GREY, GREY, GREY]],
+  ] as const)
+    test(title, { options: { usage_lookup: true, limit_style: "notch" } }, async ($, on) => {
+      const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent }, 1);
+      expect(drawn.bar).toBe("  ▏    ");
+      expect(drawn.backgrounds).toEqual([...backgrounds]);
+      expect(drawn.colors[2]).toBe("#e5e7eb");
+    });
+
+  test("leaves the credits bottom lane empty without a billing day, lighting the top lane to the spend alone", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    // 500 of 1500 is 33%, 2 of 7 cells.
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent: 500 }, undefined);
+    expect(drawn.colors).toEqual([SPENT, SPENT, GREY, GREY, GREY, GREY, GREY]);
+    expect(drawn.backgrounds).toEqual(Array(7).fill(GREY));
+  });
+
+  // A lookup 11 minutes old has no pace, though a third of the month, 2 cells, is known to have gone.
+  const STALE = { at: inNovember(11).getTime() - 11 * MINUTE };
+
+  test("keeps the credits bottom lane lit to the month gone, with no amber or red, when the lookup is too old for a pace", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
+    expect(drawn.colors).toEqual([SPENT, SPENT, SPENT, SPENT, GREY, GREY, GREY]);
+    expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+  });
+
+  test("leaves the credits gauge's cells blank round a dim pipe without a pace", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
+    expect(drawn.bar).toBe("   │   ");
+    expect(drawn.colors).toEqual([GREY, GREY, GREY, DIM, GREY, GREY, GREY]);
+  });
+
+  test("draws the credits notch lane with no notch without a pace", { options: { usage_lookup: true, limit_style: "notch" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
+    expect(drawn.bar).toBe("       ");
+    expect(drawn.backgrounds).toEqual([SPENT, SPENT, SPENT, SPENT, GREY, GREY, GREY]);
+  });
+
+  test("lights every cell of the credits top lane once the cap is reached, though the spend rounds lower", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    // 1499 of 1500 is 99.9%, 6 of 7 cells; the lookup says the cap is reached. With no billing day there is no pace to colour any.
+    const drawn = await creditsDrawn($, on, START, { spent: 1499, capReached: true }, undefined);
+    expect(drawn.colors).toEqual(Array(7).fill(SPENT));
+  });
+
   test("explains an over-pace cap with when it runs out from now and how long before its reset that is", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     // Half the cap spent a third into the 30-day month that began Nov 1 4 PM: at this pace the cap lasts 10 days more.
     const text = await creditsExplained($, on, inNovember(11).getTime(), { spent: 750 }, 1);
@@ -3880,16 +3975,44 @@ describe("cockpit", () => {
     expect(text).toBe("€ at 100%: €14.99 of €15.00 spent, at this pace the cap runs out any moment before it resets on Dec 1 4 PM.");
   });
 
-  test("draws a spend above the cap with every cell spent and explains it over its pace", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
-    // Claude Code ends a turn gracefully past the cap: $15.37 of $15.00 is 102%.
+  // Claude Code ends a turn gracefully past the cap: $15.37 of $15.00 is 102%, a third into the month.
+  const ABOVE_CAP = { spent: 1537, currency: "USD" };
+
+  test("explains a spend above the cap over its pace and reads it in the gauge's badge", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
     const now = inNovember(11).getTime();
     stubHint(on, now);
-    holding(on, creditsOf({ at: now, spent: 1537, currency: "USD" }), 1);
+    holding(on, creditsOf({ at: now, ...ABOVE_CAP }), 1);
     await startWithLimits($, on, sevenAfter(now));
     const ui = await mountHint($);
-    expect(await creditsTag(ui)).toEqual({ badge: " $ ", bar: "BBBBBBB" });
+    expect((await creditsTag(ui))?.badge).toBe(" $ 102% ");
     expect(await explanationOf(ui, "credits")).toBe("$ at 102%: $15.37 of $15.00 spent, at this pace the cap runs out any moment before it resets on Dec 1 4 PM.");
     await ui.unmount();
+  });
+
+  // The spend above the cap lights every cell it can in each style: 4.8 cells ahead of the month, the last 5 of the 7 over pace
+  // in lanes; in the notch lane every cell, the 5 past the notch after the 2nd over pace; the gauge's right side 4 halves.
+  test("draws a spend above the cap in lanes with every top-lane cell lit, the last 5 amber to red", { options: { usage_lookup: true, limit_style: "lanes" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
+    expect(drawn.colors).toEqual([SPENT, SPENT, "#fbbf24", "#f8a12c", "#f58234", "#f2633c", RED]);
+    expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+  });
+
+  test("draws a spend above the cap in classic with every top-lane cell lit in the spent colour", { options: { usage_lookup: true, limit_style: "classic" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
+    expect(drawn.colors).toEqual(Array(7).fill(SPENT));
+    expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
+  });
+
+  test("draws a spend above the cap in the notch lane with every cell lit, the 5 past the notch amber to red", { options: { usage_lookup: true, limit_style: "notch" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
+    expect(drawn.bar).toBe("  ▏    ");
+    expect(drawn.backgrounds).toEqual([SPENT, SPENT, "#fbbf24", "#f8a12c", "#f58234", "#f2633c", RED]);
+  });
+
+  test("draws a spend above the cap in the gauge reading $ 102%, its right side filled 4 halves", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    const drawn = await creditsDrawn($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
+    expect(drawn.badge).toBe(" $ 102% ");
+    expect(drawn.bar).toBe("   │██ ");
   });
 
   test("explains a lookup read just before a billing day, and heard just after it, without a pace and with the next month's reset", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
@@ -4016,7 +4139,7 @@ describe("cockpit", () => {
       holding(on, credits, 17, rejected);
       await startWithLimits($, on, [...limits]);
       const ui = await mountHint($);
-      expect(await creditsTag(ui)).toEqual(drawn ? { badge: " € ", bar: "BBBB___" } : undefined);
+      expect(await creditsTag(ui)).toEqual(drawn ? { badge: " € ", bar: "BBTT___" } : undefined);
       await ui.unmount();
     });
 

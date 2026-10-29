@@ -146,7 +146,7 @@ function limitSegment({ Box, Text }: Ui, s: Snapshot, badge: (typeof LIMITS)[num
   const drawn = paused === undefined ? found : { ...found, percentUsed: 100 };
   const bar =
     limitStyle === "gauge"
-      ? gaugeCells(Text, limit, pace)
+      ? gaugeCells(Text, barCells[limit.badge], pace)
       : limitStyle === "lanes"
         ? lanesCells(Text, limit, drawn, paused === undefined ? timeLeft : 0, pace)
         : limitStyle === "notch"
@@ -163,20 +163,70 @@ function creditsShown(s: Snapshot): StatusCredits | undefined {
   return s.sampled || (usageLookup && s.credits?.enabled && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000)) ? s.credits : undefined;
 }
 
-// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent as cells in
-// the 7d bar's length. Classic's form, with no pace: a spent cell lights both halves of its ▀, the rest are empty.
+// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent in the 7d
+// bar's length, drawn against the share of the billing month gone: that share counts while the month is known, and the
+// pace only while creditsPace says there is one.
 function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
   const credits = creditsShown(s);
   if (!credits) return [];
   const spent = color("credits.spent");
-  const lit = cells(creditsShare(credits), barCells["7d"]);
-  const bar = [...Array(barCells["7d"]).keys()].map((i) => {
-    const rgb = hex(i < lit ? spent : color("empty"));
-    return Text({ color: rgb, backgroundColor: rgb, children: "▀" });
-  });
-  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${badgeOf(credits)} ` });
+  const now = s.now * 1000;
+  const seven = limitsOf(s.usage.rateLimits, s.rejected, now).find((r) => r.kind === "seven_day");
+  const { paced, monthMs, gone } = creditsPace(credits, s, seven);
+  // With a pace the month the lookup fell in; without one the month now, which a stale lookup may have left.
+  const month = billingMonth(s.billing, seven, now);
+  const monthPct = paced ? (gone * 100) / monthMs : month ? ((now - month.from) * 100) / (month.to - month.from) : undefined;
+  const share = creditsShare(credits);
+  const bar =
+    limitStyle === "gauge"
+      ? gaugeCells(Text, barCells["7d"], paced && monthPct !== undefined ? { r: share / monthPct } : undefined)
+      : limitStyle === "notch"
+        ? creditsNotch(Text, credits, monthPct, paced)
+        : creditsLanes(Text, credits, monthPct, paced);
+  const label = limitStyle === "gauge" ? `${badgeOf(credits)} ${Math.round(share)}%` : badgeOf(credits);
+  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${label} ` });
   return [Box({ key: "credits", flexDirection: "row", hover: { scope: explainScope("credits") }, children: [badge, ...bar] })];
 }
+
+// Two lanes of ▀: the top one lit to the share of the cap spent, in credits.spent, the bottom one to the share of the
+// billing month gone, in pace.none, none of it with the month unknown. Both are rounded down to whole cells. With a pace,
+// the spent cells ahead of the month, counted from the unrounded shares and rounded up, at most all of them, are the top
+// lane's last, amber turning red toward its end.
+function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
+  const n = barCells["7d"];
+  const spentPct = creditsShare(credits);
+  const spentCells = creditsSpentCells(credits, n);
+  const monthCells = monthPct === undefined ? 0 : cells(monthPct, n);
+  const ahead = paced && monthPct !== undefined ? ((spentPct - monthPct) * n) / 100 : 0;
+  // ε keeps an ahead that floating point puts a hair above a whole number at that number, as lanesCells does.
+  const impacted = Math.min(spentCells, ahead > 0 ? Math.ceil(ahead - 1e-9) : 0);
+  const empty = color("empty");
+  return [...Array(n).keys()].map((i) => {
+    const top = i >= spentCells ? empty : i < spentCells - impacted ? color("credits.spent") : overPace(i - (spentCells - impacted), impacted);
+    return Text({ color: hex(top), backgroundColor: hex(i < monthCells ? color("pace.none") : empty), children: "▀" });
+  });
+}
+
+// One lane of ▏-marked cells lit to the share of the cap spent, with a notch on the left edge of the cell after the cells
+// of the month gone, both rounded down. Without a pace there is no notch and every spent cell is in credits.spent; with
+// one the spent cells past the notch are amber turning red away from it.
+function creditsNotch(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
+  const n = barCells["7d"];
+  const spentCells = creditsSpentCells(credits, n);
+  const notch = paced && monthPct !== undefined ? cells(monthPct, n) : undefined;
+  const empty = color("empty");
+  const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });
+  const parts = [...Array(n).keys()].map((i) => {
+    const fill = i >= spentCells ? empty : notch === undefined || i < notch ? color("credits.spent") : overPace(i - notch, spentCells - notch);
+    return i === notch ? mark(fill) : Text({ color: hex(fill), backgroundColor: hex(fill), children: " " });
+  });
+  if (notch === n) parts.push(mark(empty));
+  return parts;
+}
+
+// The cells the spend lights: its share rounded down, all of them once the cap is reached, though the spend read a
+// little under it, as the lookup rounds it.
+const creditsSpentCells = (credits: StatusCredits, n: number) => (credits.capReached ? n : cells(creditsShare(credits), n));
 
 // The share of the cap spent, in percent; none of it with no cap.
 const creditsShare = ({ spent, cap }: StatusCredits) => (cap > 0 ? (spent * 100) / cap : 0);
@@ -197,6 +247,18 @@ function amountOf(minor: number, { decimals, currency }: StatusCredits): string 
 const CREDITS_FRESH_MS = 600_000;
 const CREDITS_PACE_FROM = 0.1;
 
+// Whether the credits tag has a pace, and the billing month it is measured over: its length and the part gone when the spend
+// was read (`credits.at`), in ms. The words and the drawing share it. The pace tells nothing once the month the lookup fell
+// in has ended.
+function creditsPace(credits: StatusCredits, s: Snapshot, seven: StatusLimit | undefined): { paced: boolean; monthMs: number; gone: number } {
+  const now = s.now * 1000;
+  const month = billingMonth(s.billing, seven, credits.at);
+  const monthMs = month ? month.to - month.from : 0;
+  const gone = month ? credits.at - month.from : 0;
+  const paced = month !== undefined && month.to === billingMonth(s.billing, seven, now)?.to && limitStyle !== "classic" && credits.cap > 0 && now - credits.at <= CREDITS_FRESH_MS && gone >= CREDITS_PACE_FROM * monthMs;
+  return { paced, monthMs, gone };
+}
+
 // The credits tag's explanation: its badge and the share spent, rounded, then one sentence. With a pace it says when the
 // cap runs out or what is left at the reset, from the share of the billing month gone when the spend was read
 // (`credits.at`), the times counted from now. Without one it gives the amounts and the reset, when known.
@@ -216,11 +278,7 @@ function creditsWords(credits: StatusCredits, s: Snapshot): string {
   const resetsAt = billingMonth(s.billing, seven, now)?.to;
   if (resetsAt === undefined) return `${head}: ${spent}.`;
   const reset = dateClock(resetsAt, now);
-  // The pace is measured over the month the lookup fell in, which tells nothing once that month has ended.
-  const month = billingMonth(s.billing, seven, credits.at);
-  const monthMs = month ? month.to - month.from : 0;
-  const gone = month ? credits.at - month.from : 0;
-  const paced = month?.to === resetsAt && limitStyle !== "classic" && credits.cap > 0 && now - credits.at <= CREDITS_FRESH_MS && gone >= CREDITS_PACE_FROM * monthMs;
+  const { paced, monthMs, gone } = creditsPace(credits, s, seven);
   if (!paced) return `${head}: ${spent}, it resets on ${reset}.`;
   // Integers in ms until the last division, so a third of a 30-day month reads 10d0h, not 9d23h.
   const r = (credits.spent * monthMs) / (credits.cap * gone);
@@ -2246,8 +2304,8 @@ function notchCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], found: Sta
 // outward from the pipe by the share of the target that goes unused, 1 - r; over pace the right side by the share of
 // the window still to go when the limit runs out, 1 - 1/r, from amber at the pipe to red at the far end, so a worse
 // pace reads redder. Each side fills in half cells. Without a pace every cell is blank and the pipe dim.
-function gaugeCells(Text: Ui["Text"], limit: (typeof LIMITS)[number], pace: { r: number } | undefined) {
-  const side = Math.floor(barCells[limit.badge] / 2);
+function gaugeCells(Text: Ui["Text"], length: number, pace: { r: number } | undefined) {
+  const side = Math.floor(length / 2);
   const under = pace !== undefined && pace.r < 1;
   const halves = pace === undefined ? 0 : Math.round((under ? 1 - pace.r : 1 - 1 / pace.r) * 2 * side);
   const empty = hex(color("empty"));
