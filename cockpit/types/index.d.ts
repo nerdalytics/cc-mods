@@ -90,6 +90,14 @@ declare module "claude-code" {
       billing: number;
       // The usage lookup's pacing, kept so a reload of the module keeps it: the time (ms) before which no lookup runs, and the failures in a row so far.
       lookupPace: { notBefore: number; failures: number };
+      // The intervals (ms) in which a 5h or 7d window read 100%, a refusal that has not reset counted: `to` is missing while one is open.
+      usedUp: { from: number; to?: number }[];
+      // When the mod first saw the session (ms).
+      seenAt: number;
+      // The newest refusal of each window kind in the sessions' transcripts: when it came (ms), and what its rate-limit info said of extra usage.
+      refusals: Record<string, { at: number; overageStatus?: string; overageDisabledReason?: string }>;
+      // When the latest main-session reply with usage arrived (ms).
+      answeredAt: number;
     };
   }
 }

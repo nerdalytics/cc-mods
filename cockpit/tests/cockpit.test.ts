@@ -3834,6 +3834,301 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // The intervals in which a window read 100%. A session starts at `T` with the readings given; each later `hear` moves the
+  // clock on, then a response brings the next readings, which the polls in between read as well. The resets are seconds
+  // from the start, so the clock crosses them in a few frames.
+  const usedUpTest = async ($: Engine, on: On, first: SessionRateLimit[], T: number) => {
+    const limits = [...first];
+    let recorded: unknown;
+    on("state.set", { plugin: "cockpit", key: "usedUp" }, ($, e, next) => {
+      recorded = e.value;
+      return next(e);
+    });
+    on("session.measure", (_$, e) => ({ changed: e.changed }));
+    await startWithLimits($, on, limits, T);
+    const clock = clockOn(on);
+    return {
+      hear: async (next: SessionRateLimit[], after = 0) => {
+        await clock.advance(after);
+        limits.splice(0, limits.length, ...next);
+        await $.session.measure({ context: { window: 1_000_000 }, rateLimits: next, changed: ["rateLimits"] });
+      },
+      intervals: () => recorded,
+    };
+  };
+  const windowAt = (T: number, kind: "seven_day" | "five_hour", percentUsed: number, resetsIn: number): SessionRateLimit => ({ kind, percentUsed, resetsAt: new Date(T + resetsIn).toISOString() });
+
+  test("opens an interval at the first reading in which a window reads 100%", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    const run = await usedUpTest($, on, [windowAt(T, "seven_day", 100, 3_600_000), windowAt(T, "five_hour", 20, 3_600_000)], T);
+    expect(await run.intervals()).toEqual([{ from: T }]);
+  });
+
+  test("ends the interval at the reset of the only window at 100%, when the next reading shows none", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    const run = await usedUpTest($, on, [windowAt(T, "five_hour", 100, 3_500), windowAt(T, "seven_day", 40, 3_600_000)], T);
+    await run.hear([windowAt(T, "five_hour", 30, 18_000_000), windowAt(T, "seven_day", 40, 3_600_000)], 6_000);
+    expect(run.intervals()).toEqual([{ from: T, to: T + 3_500 }]);
+  });
+
+  test("keeps the interval open after the 5h resets while the 7d still reads 100%, and ends it at the 7d's reset", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    const run = await usedUpTest($, on, [windowAt(T, "five_hour", 100, 3_500), windowAt(T, "seven_day", 100, 9_500)], T);
+    await run.hear([windowAt(T, "five_hour", 20, 18_000_000), windowAt(T, "seven_day", 100, 9_500)], 6_000);
+    expect(run.intervals()).toEqual([{ from: T }]);
+    await run.hear([windowAt(T, "five_hour", 20, 18_000_000), windowAt(T, "seven_day", 5, 604_800_000)], 6_000);
+    expect(run.intervals()).toEqual([{ from: T, to: T + 9_500 }]);
+  });
+
+  test("ends the interval at the first reading in which no window reads 100%, when no reset came first", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    const run = await usedUpTest($, on, [windowAt(T, "seven_day", 100, 3_600_000)], T);
+    await run.hear([windowAt(T, "seven_day", 90, 3_600_000)], 1_000);
+    expect(run.intervals()).toEqual([{ from: T, to: T + 1_000 }]);
+  });
+
+  // The 7d reads 80%, but a transcript holds a refusal on it that resets in an hour: the first poll after the scan opens an interval.
+  test("counts a refusal that has not reset as a window at 100% in an interval", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    const refusal = JSON.stringify({ type: "assistant", apiError: "usage_limit_reached", quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: Math.floor((T + 3_600_000) / 1000) } });
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("process.run", (_$, e) => ({ value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } }));
+    const run = await usedUpTest($, on, [windowAt(T, "seven_day", 80, 3_600_000)], T);
+    await run.hear([windowAt(T, "seven_day", 80, 3_600_000)], 2_000);
+    expect(run.intervals()).toEqual([{ from: T + 2_000 }]);
+  });
+
+  // The module loads again at a later start of the same session: what the state holds stands, and the session was first seen at T.
+  test("records when the session was first seen once, and keeps the intervals across a reload of the module", async ($, on) => {
+    stubHint(on);
+    const T = clockOn(on).now();
+    let seen: unknown[] = [];
+    on("state.set", { plugin: "cockpit", key: "seenAt" }, ($, e, next) => {
+      seen = [...seen, e.value];
+      return next(e);
+    });
+    const run = await usedUpTest($, on, [windowAt(T, "five_hour", 100, 3_500)], T);
+    expect(seen).toEqual([T]);
+    await run.hear([windowAt(T, "five_hour", 30, 18_000_000)], 6_000);
+    expect(run.intervals()).toEqual([{ from: T, to: T + 3_500 }]);
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    await run.hear([windowAt(T, "five_hour", 100, 18_000_000)], 1_000);
+    expect(seen).toEqual([T]);
+    expect(run.intervals()).toEqual([{ from: T, to: T + 3_500 }, { from: T + 7_000 }]);
+  });
+
+  // The model answers a main-session request with usage; `reply` sends one through the mod, as a turn's step.
+  const answering = (on: On) =>
+    on("turn.step", async function* (_$, e) {
+      return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+    });
+  const reply = async ($: Engine, agentId?: string) => {
+    for await (const _chunk of $.turn.step({ turnId: "t1", index: 0, model: "claude-opus-5-5", messageCount: 1, agentId })) {
+      // The chunks are not read; the step's end is.
+    }
+  };
+
+  // With usage_lookup off nothing says whether the work goes on past a used-up 7d, but a response that came after the 7d ran
+  // out and still reads it at 100% does. The 5h then draws as a normal window: 10% with 60% of its window gone is on pace, ~67% unused.
+  test("leaves the 5h not paused, drawn with its pace, when a later response still reads the 7d at 100% and the interval opened earlier", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    answering(on);
+    const first = [SEVEN_USED_UP, reading("five_hour", 10, 0.6)];
+    const run = await usedUpTest($, on, first, clockOn(on).now());
+    await clockOn(on).advance(1_000);
+    await reply($);
+    await run.hear(first);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: at this pace it resets at ${CLOCK} with ~\\d+% unused\\.$`));
+    await ui.unmount();
+  });
+
+  // A reply is stamped when it arrives. This one takes half a second, and the 7d reads 100% in limits that come a quarter in,
+  // so the interval opened before the reply arrived: the reply counts as a later response.
+  const slowReply = (on: On) => {
+    const clock = clockOn(on);
+    on("turn.step", async function* (_$, e) {
+      await clock.sleep(500);
+      return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+    });
+    return clock;
+  };
+  test("counts a reply that arrives after a later reading of the 7d at 100% as a later response, leaving the 5h not paused", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const clock = slowReply(on);
+    const run = await usedUpTest($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)], clock.now());
+    const answered = reply($);
+    await clock.advance(250);
+    await run.hear([SEVEN_USED_UP, reading("five_hour", 10, 0.6)]);
+    await clock.advance(250);
+    await answered;
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    await ui.unmount();
+  });
+
+  // The single response that brings the 7d to 100% used it up. Its limits arrive after the reply is stamped, so no reply
+  // came after the interval opened.
+  test("keeps the 5h paused after a single response that reads the 7d at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    const clock = slowReply(on);
+    const run = await usedUpTest($, on, [{ ...SEVEN_USED_UP, percentUsed: 80 }, reading("five_hour", 10, 0.6)], clock.now());
+    const answered = reply($);
+    await clock.advance(500);
+    await answered;
+    await run.hear([SEVEN_USED_UP, reading("five_hour", 10, 0.6)], 100);
+    const ui = await mountHint($);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  // The readings of the test above, and a refusal on the 7d another session met `refusedAfter` ms after the start, in that
+  // session's transcript, as a transcript row holds it: its own timestamp, and the rate-limit info under apiErrorParams.
+  const workWentOn = async ($: Engine, on: On, refusedAfter: number) => {
+    stubHint(on);
+    answering(on);
+    const T = clockOn(on).now();
+    const refusal = JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(T + refusedAfter).toISOString(),
+      apiError: "usage_limit_reached",
+      apiErrorParams: { rate_limit_info: { rateLimitType: "seven_day", resetsAt: Math.floor((Date.now() + 52.5 * HOUR) / 1000), overageStatus: "rejected", overageDisabledReason: "out_of_credits" } },
+    });
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("process.run", (_$, e) => ({ value: { exitCode: e.argv[0] === "sh" ? 0 : 1, stdout: e.argv[0] === "sh" ? `${refusal}\n` : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } }));
+    const first = [SEVEN_USED_UP, reading("five_hour", 10, 0.6)];
+    const run = await usedUpTest($, on, first, T);
+    await clockOn(on).advance(1_000);
+    await reply($);
+    await run.hear(first);
+    return mountHint($);
+  };
+
+  test("keeps the 5h paused when a refusal on the 7d is newer than the reply that showed work going on", { options: { limit_style: "gauge", usage_lookup: false } }, async ($, on) => {
+    const ui = await workWentOn($, on, 2_000);
+    expect((await limitTagOf(ui, "five_hour")).bar).toBe("     │     ");
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 10%: it is paused until the 7d resets at ${CLOCK}\\.$`));
+    await ui.unmount();
+  });
+
+  test("does not count a refusal on the 7d older than the reply against the work going on", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const ui = await workWentOn($, on, 500);
+    expect((await limitTagOf(ui, "five_hour")).bar).not.toBe("     │     ");
+    await ui.unmount();
+  });
+
+  test("keeps when the refusal on the 7d came, with what its rate-limit info says of extra usage", async ($, on) => {
+    const T = clockOn(on).now();
+    let kept: unknown;
+    on("state.set", { plugin: "cockpit", key: "refusals" }, ($, e, next) => {
+      kept = e.value;
+      return next(e);
+    });
+    const ui = await workWentOn($, on, 2_000);
+    expect(kept).toEqual({ seven_day: { at: T + 2_000, overageStatus: "rejected", overageDisabledReason: "out_of_credits" } });
+    await ui.unmount();
+  });
+
+  // k is 0.05 from the first two readings (the 7d 99% to 99.5% over the 5h's 10% to 20%), the 7d reads 100% from the third on,
+  // and the fourth comes after a reply. Bounded by the 7d the 5h's target would be its own 20%; while work goes on it is
+  // 100%, and 20% with 2 of its 5 hours gone is half the pace of that target: ~50% unused, and the 7d not named.
+  test("sets the 5h target to 100% with k measured while work goes on past the 7d, and names no 7d in its explanation", { options: { limit_style: "gauge" } }, async ($, on) => {
+    stubHint(on);
+    answering(on);
+    const T = clockOn(on).now();
+    const windows = (five: number, seven: number) => [windowAt(T, "five_hour", five, 3 * HOUR), windowAt(T, "seven_day", seven, DAYS_3)];
+    const run = await usedUpTest($, on, windows(10, 99), T);
+    await run.hear(windows(20, 99.5));
+    await run.hear(windows(20, 100));
+    await clockOn(on).advance(1_000);
+    await reply($);
+    await run.hear(windows(20, 100));
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toMatch(new RegExp(`^5h at 20%: at this pace it resets at ${CLOCK} with ~(?:49|50)% unused\\.$`));
+    await ui.unmount();
+  });
+
+  // The limits are read at the start, a reply comes a second later, and the same limits are read again: work went on.
+  const afterWorkWentOn = async ($: Engine, on: On, limits: SessionRateLimit[]) => {
+    clockOn(on, NOON);
+    stubHint(on);
+    answering(on);
+    const run = await usedUpTest($, on, limits, clockOn(on).now());
+    await clockOn(on).advance(1_000);
+    await reply($);
+    await run.hear(limits);
+    return mountHint($);
+  };
+  // The tests below name resets by the day: both their dates and the mod's clock are pinned to noon on a fixed local date,
+  // so a run that crosses midnight cannot move "tomorrow".
+  const NOON = new Date(2026, 9, 14, 12).getTime();
+  const dayAt = (days: number, hour: number) => new Date(2026, 9, 14 + days, hour);
+  const named = (at: Date, hour: string) => `${WEEKDAYS[at.getDay()]} ${hour}`;
+
+  test("explains the 7d at 100% as used up with work going on, without naming credits, when no lookup says so", async ($, on) => {
+    const resetsAt = dayAt(1, 16);
+    const ui = await afterWorkWentOn($, on, [sevenResettingAt(100, resetsAt), reading("five_hour", 10, 0.6)]);
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, work goes on until it resets at ${named(resetsAt, "4 PM")}.`);
+    await ui.unmount();
+  });
+
+  // Both at 100% with work going on: each text names the latest reset of the two, and a limit's own only when it is that one.
+  test("names the 5h's later reset in both texts when the 5h at 100% resets after the 7d, with work going on", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const fiveResetsAt = dayAt(1, 15);
+    const ui = await afterWorkWentOn($, on, [sevenResettingAt(100, dayAt(1, 10)), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
+    const words = `used up, work goes on until it resets at ${named(fiveResetsAt, "3 PM")}.`;
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: ${words}`);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: ${words}`);
+    await ui.unmount();
+  });
+
+  test("names the 7d's later reset in both texts when the 7d resets after the 5h at 100%, with work going on", { options: { limit_style: "gauge" } }, async ($, on) => {
+    const sevenResetsAt = dayAt(1, 16);
+    const ui = await afterWorkWentOn($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: dayAt(1, 10).toISOString() }]);
+    const words = `used up, work goes on until it resets at ${named(sevenResetsAt, "4 PM")}.`;
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: ${words}`);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: ${words}`);
+    await ui.unmount();
+  });
+
+  // Classic does not pause the 5h, so at 100% it reads its ordinary sentence; the 7d reads used up all the same.
+  test("reads the classic 5h at 100% as its ordinary sentence and the 7d as used up, with work going on", async ($, on) => {
+    const fiveResetsAt = dayAt(1, 10);
+    const sevenResetsAt = dayAt(1, 16);
+    const ui = await afterWorkWentOn($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
+    expect(await explanationOf(ui, "limit_7d")).toBe(`7d at 100%: used up, work goes on until it resets at ${named(sevenResetsAt, "4 PM")}.`);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it resets at ${named(fiveResetsAt, "10 AM")}.`);
+    await ui.unmount();
+  });
+
+  // The paused 5h at 100% too names the latest reset of the limits at 100%: the 5h's own when it is the latest, and says so.
+  test("names the 5h's later reset when the paused 5h at 100% resets after the 7d", { options: { limit_style: "gauge" } }, async ($, on) => {
+    clockOn(on, NOON);
+    stubHint(on);
+    const fiveResetsAt = dayAt(1, 15);
+    await startWithLimits($, on, [sevenResettingAt(100, dayAt(1, 10)), { kind: "five_hour", percentUsed: 100, resetsAt: fiveResetsAt.toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d and the 5h reset at ${named(fiveResetsAt, "3 PM")}.`);
+    await ui.unmount();
+  });
+
+  test("names the 7d's later reset when the 7d resets after the paused 5h at 100%", { options: { limit_style: "gauge" } }, async ($, on) => {
+    clockOn(on, NOON);
+    stubHint(on);
+    const sevenResetsAt = dayAt(1, 16);
+    await startWithLimits($, on, [sevenResettingAt(100, sevenResetsAt), { kind: "five_hour", percentUsed: 100, resetsAt: dayAt(1, 10).toISOString() }]);
+    const ui = await mountHint($);
+    expect(await explanationOf(ui, "limit_5h")).toBe(`5h at 100%: it is paused until the 7d resets at ${named(sevenResetsAt, "4 PM")}.`);
+    await ui.unmount();
+  });
+
   console.log(`cockpit tests in random order, seed ${seed}`);
   // Every test gets this machine's timeout; a test's own options and body pass through.
   for (const [name, rest] of shuffled(queued)) {
