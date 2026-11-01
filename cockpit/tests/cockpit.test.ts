@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
+import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, ProcessRunResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, type MockClock, mock, test as kitTest, type TestRest } from "claude-code/testing";
 import type { StatusCredits } from "../types";
 import { timeoutMs } from "./machine.local.ts";
@@ -2837,6 +2837,111 @@ describe("cockpit", () => {
       expect(asks).toBe(calls);
     });
   }
+
+  // A session in /r, by default on feat, which origin has, its pull request's one check `status`; `head` is what rev-parse
+  // prints in place of that. `out` is what each command prints, for the test to change; `asks` and `scans` count the gh
+  // and git calls. With `hold`, gh answers only once `release`d.
+  async function prSession($: Engine, on: On, status: string, head = "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n", hold = false) {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
+    const out: Record<string, string> = {
+      "git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}": head,
+      "git symbolic-ref refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+      "git rev-list --left-right --count HEAD...origin/feat": "0\t0\n",
+      "git remote get-url origin": "git@github.com:o/r.git\n",
+      "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
+    };
+    let asks = 0;
+    let scans = 0;
+    const held: (() => void)[] = [];
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r" }));
+    on("session.cwd", () => ({ value: "/r" }));
+    on("fs.exists", () => ({ value: false }));
+    on("process.run", (_$, e) => {
+      if (e.argv[0] === "gh") asks++;
+      else scans++;
+      const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
+      const value: ProcessRunResult = { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false };
+      return hold && e.argv[0] === "gh" ? new Promise<{ value: ProcessRunResult }>((answer) => held.push(() => answer({ value }))) : { value };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+    await clock.settle();
+    return {
+      clock,
+      out,
+      asks: () => asks,
+      scans: () => scans,
+      polls: async (n: number) => {
+        for (let i = 0; i < n; i++) await clock.advance(2_000);
+      },
+      // A gh call still held when the test ends would leave the mod's job for it running into the next test.
+      release: () => held.splice(0).forEach((answer) => answer()),
+    };
+  }
+
+  // The schedule the README states, with nothing in the repository changing: every 10 s while a check is running or
+  // queued, once a minute while none is.
+  for (const { name, status, seconds, calls } of [
+    { name: "queued checks", status: "QUEUED", seconds: 30, calls: 4 },
+    { name: "finished checks", status: "COMPLETED", seconds: 120, calls: 3 },
+  ]) {
+    test(`asks gh ${calls} times in ${seconds} s of unchanged git for ${name}`, async ($, on) => {
+      const { polls, asks } = await prSession($, on, status);
+      await polls(seconds / 2);
+      expect(asks()).toBe(calls);
+    });
+  }
+
+  // A branch switched to is asked for its own pull request at once, not a minute after the last branch's.
+  test("asks gh for a new branch's pull request on the next poll", async ($, on) => {
+    const { polls, asks, out } = await prSession($, on, "COMPLETED");
+    await polls(2);
+    expect(asks()).toBe(1);
+    out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] =
+      "/r/.git\n/r/.git\n/r\nother\norigin/other\n";
+    await polls(1);
+    expect(asks()).toBe(2);
+  });
+
+  // The default branch has no pull request of its own, and a branch no remote has cannot have one yet.
+  for (const { name, head } of [
+    { name: "on the default branch", head: "/r/.git\n/r/.git\n/r\nmain\norigin/main\n" },
+    { name: "for a branch no remote has", head: "/r/.git\n/r/.git\n/r\nfeat\n" },
+  ]) {
+    test(`never asks gh ${name}`, async ($, on) => {
+      const { polls, asks, scans } = await prSession($, on, "QUEUED", head);
+      await polls(15);
+      // git ran, so no ask means one skipped.
+      expect(scans()).toBeGreaterThan(0);
+      expect(asks()).toBe(0);
+    });
+  }
+
+  // gh goes over the network and can take seconds to answer; the git row keeps its 2 s polls meanwhile.
+  test("draws a pull from the remote while gh has not answered yet", async ($, on) => {
+    const { polls, out, clock, release } = await prSession($, on, "COMPLETED", undefined, true);
+    const ui = await $.ui.mount({
+      plugin: "cockpit",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
+    const behind = async () => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://github.com/o/r/commits/feat");
+    await caughtUp(on, ui);
+    expect(await behind()).toBe(false);
+    out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t1\n";
+    await polls(1);
+    await caughtUp(on, ui);
+    const drawn = await behind();
+    release();
+    await clock.settle();
+    await ui.unmount();
+    expect(drawn).toBe(true);
+  });
 
   // The line that closes a turn gets the tokens the turn generated per second in its verb: its output tokens over the
   // seconds, in the status row's units (plain under 1000, K to a tenth, M to a hundredth).

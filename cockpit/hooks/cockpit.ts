@@ -1259,6 +1259,7 @@ function poll($: EngineInterface): void {
   void $.session.usage().then((u) => setUsage($, u));
   serial("handoff", () => findHandoff($));
   refreshGit($);
+  refreshPr($);
   if (tokensStale) {
     tokensStale = false;
     refreshTokens($);
@@ -1960,10 +1961,19 @@ function refreshTokens($: EngineInterface): void {
 
 function refreshGit($: EngineInterface): void {
   serial("git", async () => {
-    const git = await scanGit($);
-    await $.state.set(GIT, git);
-    // statusline.zsh asked gh only for a branch on a remote that is not the default; gh goes over the network,
-    // so the git parts draw first. Nor is it asked while no shown part draws what it answers.
+    await $.state.set(GIT, await scanGit($));
+    refreshPr($);
+  }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+// The branch's pull request, on its own schedule from the last git scan stored: gh goes over the network, so it runs in
+// a job of its own, and a slow answer holds no scan.
+function refreshPr($: EngineInterface): void {
+  serial("pr", async () => {
+    const { value: git } = await $.state.get(GIT);
+    if (!git) return;
+    // statusline.zsh asked gh only for a branch on a remote that is not the default. Nor is it asked while no shown part
+    // draws what it answers.
     const named = git.branch !== "" && git.branch !== "HEAD" && git.branch !== git.defaultBranch;
     const branch = named && !git.vsDefault && PR_TAGS.some(isShown) ? `${git.top}:${git.branch}` : "";
     const now = await $.clock.now();
@@ -1974,7 +1984,7 @@ function refreshGit($: EngineInterface): void {
     prBusy = (pr?.checks.pending ?? 0) > 0;
     trace($, `fetch branch=${branch || "-"} pr=${pr ? `#${pr.number} pending=${pr.checks.pending} ok=${pr.checks.success} fail=${pr.checks.failure}` : "null"}`);
     await $.state.set(PR, pr);
-  }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
+  }, undefined, (err) => trace($, `pr job failed: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 async function fetchPrices($: EngineInterface): Promise<Record<string, Price> | undefined> {
