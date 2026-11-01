@@ -1259,7 +1259,9 @@ function poll($: EngineInterface): void {
   void $.session.usage().then((u) => setUsage($, u));
   serial("handoff", () => findHandoff($));
   refreshGit($);
-  refreshPr($);
+  // A scan under way asks for the pull request once it stores; asking now would read the scan before it, and fetch the
+  // branch just switched away from.
+  if (!running.has("git")) refreshPr($);
   if (tokensStale) {
     tokensStale = false;
     refreshTokens($);

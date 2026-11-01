@@ -2907,6 +2907,17 @@ describe("cockpit", () => {
     expect(asks()).toBe(2);
   });
 
+  // A switch on the poll where the minute runs out asks for the new branch alone, not for the old one first.
+  test("asks gh once when a branch switch meets the end of the minute", async ($, on) => {
+    const { polls, asks, out } = await prSession($, on, "COMPLETED");
+    await polls(29);
+    expect(asks()).toBe(1);
+    out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] =
+      "/r/.git\n/r/.git\n/r\nother\norigin/other\n";
+    await polls(1);
+    expect(asks()).toBe(2);
+  });
+
   // The default branch has no pull request of its own, and a branch no remote has cannot have one yet.
   for (const { name, head } of [
     { name: "on the default branch", head: "/r/.git\n/r/.git\n/r\nmain\norigin/main\n" },
@@ -2931,16 +2942,18 @@ describe("cockpit", () => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     const behind = async () => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://github.com/o/r/commits/feat");
-    await caughtUp(on, ui);
-    expect(await behind()).toBe(false);
-    out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t1\n";
-    await polls(1);
-    await caughtUp(on, ui);
-    const drawn = await behind();
-    release();
-    await clock.settle();
-    await ui.unmount();
-    expect(drawn).toBe(true);
+    try {
+      await caughtUp(on, ui);
+      expect(await behind()).toBe(false);
+      out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t1\n";
+      await polls(1);
+      await caughtUp(on, ui);
+      expect(await behind()).toBe(true);
+    } finally {
+      release();
+      await clock.settle();
+      await ui.unmount();
+    }
   });
 
   // The line that closes a turn gets the tokens the turn generated per second in its verb: its output tokens over the
