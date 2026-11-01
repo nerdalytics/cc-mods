@@ -2934,7 +2934,7 @@ describe("cockpit", () => {
 
   // gh goes over the network and can take seconds to answer; the git row keeps its 2 s polls meanwhile.
   test("draws a pull from the remote while gh has not answered yet", async ($, on) => {
-    const { polls, out, clock, release } = await prSession($, on, "COMPLETED", undefined, true);
+    const { polls, out, clock, release, asks } = await prSession($, on, "COMPLETED", undefined, true);
     const ui = await $.ui.mount({
       plugin: "cockpit",
       surface: "terminal",
@@ -2945,10 +2945,13 @@ describe("cockpit", () => {
     try {
       await caughtUp(on, ui);
       expect(await behind()).toBe(false);
+      // The one gh call, still held.
+      expect(asks()).toBe(1);
       out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t1\n";
       await polls(1);
       await caughtUp(on, ui);
       expect(await behind()).toBe(true);
+      expect(asks()).toBe(1);
     } finally {
       release();
       await clock.settle();
