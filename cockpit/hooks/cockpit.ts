@@ -1973,13 +1973,20 @@ const COMMON_DIR_FILES = ["config", "packed-refs", "reftable/tables.list", "refs
 let watched: { paths: string[]; remotes: string; branch: string } = { paths: [], remotes: "", branch: "" };
 let gitSeen: string | undefined;
 let gitScanAt = -Infinity;
+// The branch's base as the last scan read it, by the branch and HEAD's signature: each change to the reflog entry it
+// comes from, a branch created, renamed or made again, changes one of the two.
+let basedOffSeen: { key: string; from: string } | undefined;
 
-// The root, the current folder, each watched path's kind, size and mtime, and the remotes' names, sorted as a listing
-// need not be, read with no process. Size beside mtime tells two writes in one millisecond apart. A read that rejects,
-// a missing path above all, is one state of its own.
+// A path's kind, size and mtime, read with no process. Size beside mtime tells two writes in one millisecond apart. A
+// read that rejects, a missing path above all, is one state of its own.
+function statSignature($: EngineInterface, path: string): Promise<string> {
+  return $.fs.stat(path).then((s) => `${s.kind}:${s.size}:${s.mtimeMs}`, () => "missing");
+}
+
+// The root, the current folder, each watched path's signature, and the remotes' names, sorted as a listing need not be.
 async function gitSignature($: EngineInterface): Promise<string> {
   const missing = () => "missing";
-  const stat = (path: string) => $.fs.stat(path).then((s) => `${s.kind}:${s.size}:${s.mtimeMs}`, missing);
+  const stat = (path: string) => statSignature($, path);
   const { paths, remotes, branch } = watched;
   // Every remote, not only the one the last scan counted against: a branch no remote has yet counts against whichever
   // remote its first push creates a copy on. shortcut: a remote named with a `/` lists as its first part, so its copy
@@ -2208,18 +2215,18 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     return { root, cwd, top: "", web: "", base: "", branch: "", defaultBranch: "", basedOff: "", worktree: "", ahead: 0, behind: 0, vsDefault: false, added: 0, deleted: 0, changed: 0, conflict: false };
   }
   const named = branch !== "" && branch !== "HEAD";
-  const [symref, initDefault, track, numstat, unmerged, midway] = await Promise.all([
-    git("symbolic-ref", "refs/remotes/origin/HEAD"),
-    git("config", "init.defaultBranch"),
+  const [defaultBranch, track, numstat, unmerged, midway, head] = await Promise.all([
+    // ponytail: with no origin to name it, the branch new repositories start on stands in for the default, asked only
+    // then; a repository whose main branch differs shows that branch as an ordinary one.
+    git("symbolic-ref", "refs/remotes/origin/HEAD").then((ref) => ref.replace(/^refs\/remotes\/origin\//, "") || git("config", "init.defaultBranch")),
     // A branch need not live on origin (a fork's), so any remote's copy tracks it.
     upstream || (named ? git("for-each-ref", "--count=1", "--format=%(refname:short)", `refs/remotes/*/${branch}`) : ""),
     git("diff", "--numstat", "HEAD"),
     git("ls-files", "--unmerged"),
     Promise.all(GIT_MARKERS.map((f) => $.fs.exists(`${gitDir}/${f}`))),
+    // Read before the reflog, so a branch made again after this read is keyed apart from the base read for it.
+    statSignature($, `${gitDir}/HEAD`),
   ]);
-  // ponytail: with no origin to name it, the branch new repositories start on stands in for the default; a repository
-  // whose main branch differs shows that branch as an ordinary one.
-  const defaultBranch = symref.replace(/^refs\/remotes\/origin\//, "") || initDefault;
   let main: Promise<string> | undefined;
   // Each default-branch ref tried, found or not, for the poll to watch: a fetch that creates or moves one changes
   // what the branch counts against.
@@ -2260,7 +2267,12 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     if (target) conflict = !(await ok("merge-tree", "--write-tree", "HEAD", target));
   }
 
-  const madeFrom = named && branch !== defaultBranch ? await basedOff(git, branch) : "";
+  let madeFrom = "";
+  if (named && branch !== defaultBranch) {
+    const key = `${branch}\n${head}`;
+    if (basedOffSeen?.key !== key) basedOffSeen = { key, from: await basedOff(git, branch) };
+    madeFrom = basedOffSeen.from;
+  }
   // An upstream named apart from the branch, such as fork/other for feat, has no copy among the remotes' listed refs
   // for it. One named <remote>/<branch> is one of them already; one with no `/` names a local branch, not a remote's ref.
   const ownUpstream = upstream.includes("/") && upstream.slice(upstream.indexOf("/") + 1) !== branch;

@@ -2957,6 +2957,74 @@ describe("cockpit", () => {
     expect(runs()).toBe(started);
   });
 
+  // On the default branch, which origin/HEAD names, with an upstream not behind: rev-parse, symbolic-ref, diff, ls-files,
+  // remote get-url and rev-list. init.defaultBranch is not asked, as origin names the default.
+  test("starts 6 git processes for a scan of the default branch with an upstream not behind", async ($, on) => {
+    const { polls, out, scans, stats } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nmain\norigin/main\n");
+    out["git rev-list --left-right --count HEAD...origin/main"] = "0\t0\n";
+    await polls(2);
+    const before = scans();
+    stats["/r/.git/index"] = gitFile(START + 4_000, 900);
+    await polls(1);
+    expect(scans() - before).toBe(6);
+  });
+
+  // On another branch, made by `checkout -b` off develop, the first scan reads both reflogs for its base. A scan after it,
+  // with HEAD as it was, reads neither: the same 6 as on the default branch.
+  test("starts 6 git processes for a later scan of another branch with an upstream not behind and HEAD unchanged", async ($, on) => {
+    const { polls, out, scans, stats } = await prSession($, on, "COMPLETED");
+    out["git reflog show feat --format=%gs"] = "commit: wip\nbranch: Created from HEAD\n";
+    out["git reflog --format=%gs"] = "commit: wip\ncheckout: moving from develop to feat\n";
+    await polls(2);
+    const before = scans();
+    stats["/r/.git/index"] = gitFile(START + 4_000, 900);
+    await polls(1);
+    expect(scans() - before).toBe(6);
+  });
+
+  // The base is read again only once HEAD's signature changes: a stage writes the index alone, and the base drawn stays
+  // the one read before it; a branch created, renamed or made again changes HEAD or the branch's name.
+  test("reads the branch's base again once HEAD changes, and keeps the one read before while HEAD stays", async ($, on) => {
+    const { polls, out, stats, clock } = await prSession($, on, "COMPLETED");
+    const ui = await gitRow($);
+    out["git reflog show feat --format=%gs"] = "branch: Created from refs/heads/develop\n";
+    stats["/r/.git/HEAD"] = gitFile(START + 2_000, 30);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ develop ⎇ feat" })).toBeDefined();
+    out["git reflog show feat --format=%gs"] = "branch: Created from refs/heads/next\n";
+    stats["/r/.git/index"] = gitFile(START + 4_000, 900);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ develop ⎇ feat" })).toBeDefined();
+    stats["/r/.git/HEAD"] = gitFile(START + 6_000, 30);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ next ⎇ feat" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A branch of another name, with HEAD's signature as it was, has a base of its own: a HEAD written with the same size
+  // in the same millisecond.
+  test("reads the branch's base again once the branch's name changes, with HEAD's signature as it was", async ($, on) => {
+    const { polls, out, stats, clock } = await prSession($, on, "COMPLETED");
+    const ui = await gitRow($);
+    out["git reflog show feat --format=%gs"] = "branch: Created from refs/heads/develop\n";
+    stats["/r/.git/HEAD"] = gitFile(START + 2_000, 30);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ develop ⎇ feat" })).toBeDefined();
+    out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] = "/r/.git\n/r/.git\n/r\nfix\n";
+    out["git reflog show fix --format=%gs"] = "branch: Created from refs/heads/next\n";
+    stats["/r/.git/index"] = gitFile(START + 4_000, 900);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ next ⎇ fix" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
   // Each file of the checkout's git folder a commit, checkout, stage, fetch, merge or rebase writes: one already there
   // written again, or one missing at the last poll that appears.
   for (const [file, written] of [
@@ -3231,6 +3299,44 @@ describe("cockpit", () => {
     const started = gits;
     expect(started).toBeGreaterThan(0);
     for (let i = 0; i < 10; i++) await clock.advance(2_000);
+    expect(gits).toBe(started);
+  });
+
+  // The base's reflog read is the scan's last git call: one that rejects fails the scan before it names the paths to
+  // watch, so the polls after it watch only the root and the current folder, not the common folder's config.
+  test("starts no git on the next poll after a scan whose reflog read failed, though config changes", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    let gits = 0;
+    let reflogs = 0;
+    const out: Record<string, string> = {
+      "rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}": "/r/.git\n/r/.git\n/r\nfeat\n",
+      "symbolic-ref refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+    };
+    const stats: Record<string, FsStat> = { "/r/.git/HEAD": gitFile(START), "/r/.git/config": gitFile(START, 300) };
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r" }));
+    on("session.cwd", () => ({ value: "/r" }));
+    on("fs.exists", () => ({ value: false }));
+    statsOn(on, stats);
+    on("process.run", (_$, e) => {
+      if (e.argv[0] === "git") gits++;
+      if (e.argv.includes("reflog")) {
+        reflogs++;
+        throw new Error("git failed");
+      }
+      const stdout = out[e.argv.slice(1).filter((a) => a !== "--no-optional-locks").join(" ")];
+      return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+    await clock.settle();
+    expect(reflogs).toBeGreaterThan(0);
+    const started = gits;
+    stats["/r/.git/config"] = gitFile(START + 1_000, 380);
+    await clock.advance(2_000);
     expect(gits).toBe(started);
   });
 
