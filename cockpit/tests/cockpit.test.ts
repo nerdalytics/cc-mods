@@ -2875,7 +2875,8 @@ describe("cockpit", () => {
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.root", () => ({ value: "/r" }));
     on("session.cwd", () => ({ value: "/r" }));
-    on("fs.exists", () => ({ value: false }));
+    // A merge or rebase midway exists as it stats.
+    on("fs.exists", (_$, e) => ({ value: e.path in stats }));
     statsOn(on, stats);
     on("process.run", (_$, e) => {
       if (e.argv[0] === "gh") asks++;
@@ -2955,6 +2956,113 @@ describe("cockpit", () => {
     });
   }
 
+  // A merge that starts writes MERGE_HEAD: the next poll scans, and the row warns of it.
+  test("draws the conflict warning on the next poll once MERGE_HEAD appears", async ($, on) => {
+    const { polls, stats, clock } = await prSession($, on, "COMPLETED");
+    const ui = await $.ui.mount({
+      plugin: "cockpit",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
+    await caughtUp(on, ui);
+    await polls(2);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "" })).toBeUndefined();
+    stats["/r/.git/MERGE_HEAD"] = gitFile(START + 1_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A poll that scans because HEAD changed starts the 30 s over, as a turn's end does.
+  test("counts the next 30 s from a scan a changed HEAD caused, not from the scan before it", async ($, on) => {
+    const { polls, scans, stats } = await prSession($, on, "COMPLETED");
+    await polls(9);
+    stats["/r/.git/HEAD"] = gitFile(START + 19_000, 30);
+    await polls(1);
+    const changed = scans();
+    // 48 s: past 30 s from the session's start, 28 s from the poll at 20 s.
+    await polls(14);
+    expect(scans()).toBe(changed);
+    await polls(2);
+    expect(scans()).toBeGreaterThan(changed);
+  });
+
+  // A scan that fails is tried again by the 30 s scan, not on every poll after it.
+  test("starts no git in 20 s of polls after a scan that failed", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    let gits = 0;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r" }));
+    on("session.cwd", () => ({ value: "/r" }));
+    on("fs.exists", () => ({ value: false }));
+    statsOn(on, { "/r/.git/HEAD": gitFile(START) });
+    // rev-parse finds the repository; every git call after it rejects, and so does the scan.
+    on("process.run", (_$, e, next) => {
+      if (e.argv[0] === "git") gits++;
+      if (!e.argv.includes("--show-toplevel")) return next(e);
+      return { value: { exitCode: 0, stdout: "/r/.git\n/r/.git\n/r\nfeat\n", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+    await clock.settle();
+    const started = gits;
+    expect(started).toBeGreaterThan(0);
+    for (let i = 0; i < 10; i++) await clock.advance(2_000);
+    expect(gits).toBe(started);
+  });
+
+  // A checkout that lands while a scan runs, after rev-parse read the branch, shows at the next poll.
+  test("scans again on the next poll when HEAD is written while a scan runs", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    let branch = "feat-a";
+    let checkout = false;
+    const stats: Record<string, FsStat> = { "/r/.git/HEAD": gitFile(START) };
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r" }));
+    on("session.cwd", () => ({ value: "/r" }));
+    on("fs.exists", () => ({ value: false }));
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    statsOn(on, stats);
+    on("process.run", (_$, e) => {
+      const rev = e.argv.includes("--show-toplevel");
+      const stdout = rev ? `/r/.git\n/r/.git\n/r\n${branch}\n` : "";
+      if (rev && checkout) {
+        checkout = false;
+        branch = "feat-b";
+        stats["/r/.git/HEAD"] = gitFile(START + 5_000, 30);
+      }
+      return { value: { exitCode: rev ? 0 : 1, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+    const ui = await $.ui.mount({
+      plugin: "cockpit",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
+    await caughtUp(on, ui);
+    await clock.advance(4_000);
+    checkout = true;
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ feat-a" })).toBeDefined();
+    await clock.advance(2_000);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ feat-b" })).toBeDefined();
+    await ui.unmount();
+  });
+
   // A turn's end scans whatever the git files say, as Claude's edits touch none, and the 30 s count starts over from it.
   for (const [whose, agentId] of [["the main session's", undefined], ["a subagent's", "a1"]] as const) {
     test(`scans at once when ${whose} turn completes, and counts the next 30 s from that scan`, async ($, on) => {
@@ -2988,15 +3096,22 @@ describe("cockpit", () => {
     expect(asks()).toBe(2);
   });
 
-  // A switch on the poll where the minute runs out asks for the new branch alone, not for the old one first.
+  // A switch on the poll where the minute runs out asks for the new branch alone, not for the old one first. A turn's
+  // end at 10 s moves the 30 s scans to 40 s and 70 s, so only the changed HEAD makes the poll at 60 s scan.
   test("asks gh once when a branch switch meets the end of the minute", async ($, on) => {
-    const { polls, asks, out, stats } = await prSession($, on, "COMPLETED");
-    await polls(29);
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const { polls, asks, out, stats, clock } = await prSession($, on, "COMPLETED");
+    await polls(5);
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
+    await clock.settle();
+    await polls(24);
     expect(asks()).toBe(1);
     out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] =
       "/r/.git\n/r/.git\n/r\nother\norigin/other\n";
     stats["/r/.git/HEAD"] = gitFile(START + 59_000);
     await polls(1);
+    expect(asks()).toBe(2);
+    await polls(5);
     expect(asks()).toBe(2);
   });
 

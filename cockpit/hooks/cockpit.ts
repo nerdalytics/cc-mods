@@ -1960,10 +1960,12 @@ function refreshTokens($: EngineInterface): void {
   });
 }
 
+// What a merge or rebase midway leaves in the git dir.
+const GIT_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply"];
 // The checkout's own git files a commit, checkout, stage, merge or rebase writes, under its git dir.
-const GIT_DIR_FILES = ["HEAD", "index", "logs/HEAD", "FETCH_HEAD", "MERGE_HEAD", "rebase-merge", "rebase-apply"];
-// The paths the last scan named for the poll to stat, none outside a repository; what the poll read of them, the root
-// and the current folder after that scan; and when the scan ran, by the engine's clock.
+const GIT_DIR_FILES = ["HEAD", "index", "logs/HEAD", "FETCH_HEAD", ...GIT_MARKERS];
+// The paths the last scan named for the poll to stat, none outside a repository; what the last scan read of them, the
+// root and the current folder; and when the scan ran, by the engine's clock.
 let watched: string[] = [];
 let gitSeen: string | undefined;
 let gitScanAt = -Infinity;
@@ -1992,9 +1994,18 @@ async function pollGit($: EngineInterface): Promise<void> {
 function refreshGit($: EngineInterface): void {
   serial("git", async () => {
     gitScanAt = await $.clock.now();
-    await $.state.set(GIT, await scanGit($));
-    // Read after the scan, which names the paths, so its own reads never count as a change.
-    gitSeen = await gitSignature($);
+    // Read before the scan, so a file written while it runs still differs at the next poll. The scan's own git calls run
+    // with --no-optional-locks and write none of the watched files.
+    const named = watched.join("\n");
+    let seen = await gitSignature($);
+    try {
+      await $.state.set(GIT, await scanGit($));
+    } finally {
+      // Stored even when the scan fails, which then waits for the 30 s scan rather than running on every poll. Paths the
+      // scan named anew, as in the session's first scan, are read now.
+      if (watched.join("\n") !== named) seen = await gitSignature($);
+      gitSeen = seen;
+    }
     refreshPr($);
   }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
 }
@@ -2188,7 +2199,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     upstream || (named ? git("for-each-ref", "--count=1", "--format=%(refname:short)", `refs/remotes/*/${branch}`) : ""),
     git("diff", "--numstat", "HEAD"),
     git("ls-files", "--unmerged"),
-    Promise.all(["MERGE_HEAD", "rebase-merge", "rebase-apply"].map((f) => $.fs.exists(`${gitDir}/${f}`))),
+    Promise.all(GIT_MARKERS.map((f) => $.fs.exists(`${gitDir}/${f}`))),
   ]);
   // ponytail: with no origin to name it, the branch new repositories start on stands in for the default; a repository
   // whose main branch differs shows that branch as an ordinary one.
