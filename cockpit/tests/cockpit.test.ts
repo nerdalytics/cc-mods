@@ -2856,8 +2856,8 @@ describe("cockpit", () => {
   // prints in place of that. `out` is what each command prints, and `stats` what the git folder's files stat as, for the
   // test to change; `remotes` the remotes listed under the common folder's refs/remotes, which is missing while there is
   // none; `asks` and `scans` count the gh and git calls, `runs` every process run. With `hold`, gh answers only once
-  // `release`d.
-  async function prSession($: Engine, on: On, status: string, head = "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n", hold = false) {
+  // `release`d. `more` is what further commands print from the session's first scan on.
+  async function prSession($: Engine, on: On, status: string, head = "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n", hold = false, more: Record<string, string> = {}) {
     stubHint(on, START);
     const clock = clockOn(on);
     const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false, statusCheckRollup: [{ __typename: "CheckRun", status, conclusion: "" }] };
@@ -2867,6 +2867,7 @@ describe("cockpit", () => {
       "git rev-list --left-right --count HEAD...origin/feat": "0\t0\n",
       "git remote get-url origin": "git@github.com:o/r.git\n",
       "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
+      ...more,
     };
     let asks = 0;
     let scans = 0;
@@ -2972,14 +2973,20 @@ describe("cockpit", () => {
   // On another branch, made by `checkout -b` off develop, the first scan reads both reflogs for its base. A scan after it,
   // with HEAD as it was, reads neither: the same 6 as on the default branch.
   test("starts 6 git processes for a later scan of another branch with an upstream not behind and HEAD unchanged", async ($, on) => {
-    const { polls, out, scans, stats } = await prSession($, on, "COMPLETED");
-    out["git reflog show feat --format=%gs"] = "commit: wip\nbranch: Created from HEAD\n";
-    out["git reflog --format=%gs"] = "commit: wip\ncheckout: moving from develop to feat\n";
+    const { polls, scans, stats, clock } = await prSession($, on, "COMPLETED", undefined, false, {
+      "git reflog show feat --format=%gs": "commit: wip\nbranch: Created from HEAD\n",
+      "git reflog --format=%gs": "commit: wip\ncheckout: moving from develop to feat\n",
+    });
+    const ui = await gitRow($);
     await polls(2);
     const before = scans();
     stats["/r/.git/index"] = gitFile(START + 4_000, 900);
     await polls(1);
     expect(scans() - before).toBe(6);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "⎇ develop ⎇ feat" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
   });
 
   // The base is read again only once HEAD's signature changes: a stage writes the index alone, and the base drawn stays
