@@ -2879,7 +2879,7 @@ describe("cockpit", () => {
     statsOn(on, stats);
     on("process.run", (_$, e) => {
       if (e.argv[0] === "gh") asks++;
-      else scans++;
+      else if (e.argv[0] === "git") scans++;
       const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
       const value: ProcessRunResult = { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false };
       return hold && e.argv[0] === "gh" ? new Promise<{ value: ProcessRunResult }>((answer) => held.push(() => answer({ value }))) : { value };
@@ -2913,6 +2913,16 @@ describe("cockpit", () => {
     });
   }
 
+  // Whether a poll scans does not move the pull request's schedule: a poll that starts no git still asks gh when it is due.
+  test("asks gh every 10 s while checks are queued, on polls that start no git", async ($, on) => {
+    const { polls, asks, scans } = await prSession($, on, "QUEUED");
+    const started = scans();
+    expect(asks()).toBe(1);
+    await polls(10);
+    expect(scans()).toBe(started);
+    expect(asks()).toBe(3);
+  });
+
   // Nothing in the checkout changes: polls start no git, until the scan at least every 30 s, which one poll may overrun.
   test("starts no git in 20 s of polls with nothing changed, and scans again by 30 s after the last scan", async ($, on) => {
     const { polls, scans } = await prSession($, on, "COMPLETED");
@@ -2923,6 +2933,48 @@ describe("cockpit", () => {
     await polls(2);
     expect(scans()).toBeGreaterThan(started);
   });
+
+  // Each file of the checkout's git folder a commit, checkout, stage, fetch, merge or rebase writes: one already there
+  // written again, or one missing at the last poll that appears.
+  for (const [file, written] of [
+    ["HEAD", gitFile(START + 1_000, 30)],
+    ["index", gitFile(START + 1_000, 900)],
+    ["logs/HEAD", gitFile(START + 1_000, 82)],
+    ["FETCH_HEAD", gitFile(START + 1_000)],
+    ["MERGE_HEAD", gitFile(START + 1_000)],
+    ["rebase-merge", { kind: "dir", size: 0, mtimeMs: START + 1_000, isLink: false }],
+    ["rebase-apply", { kind: "dir", size: 0, mtimeMs: START + 1_000, isLink: false }],
+  ] as [string, FsStat][]) {
+    test(`scans on the next poll once ${file} in the git folder changes`, async ($, on) => {
+      const { polls, scans, stats } = await prSession($, on, "COMPLETED");
+      await polls(2);
+      const before = scans();
+      stats[`/r/.git/${file}`] = written;
+      await polls(1);
+      expect(scans()).toBeGreaterThan(before);
+    });
+  }
+
+  // A turn's end scans whatever the git files say, as Claude's edits touch none, and the 30 s count starts over from it.
+  for (const [whose, agentId] of [["the main session's", undefined], ["a subagent's", "a1"]] as const) {
+    test(`scans at once when ${whose} turn completes, and counts the next 30 s from that scan`, async ($, on) => {
+      on("turn.complete", (_$, e) => ({ text: e.answer }));
+      const { polls, scans, clock } = await prSession($, on, "COMPLETED");
+      // The session's start scanned at once too.
+      expect(scans()).toBeGreaterThan(0);
+      await polls(10);
+      const before = scans();
+      await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000, agentId });
+      await clock.settle();
+      expect(scans()).toBeGreaterThan(before);
+      const ended = scans();
+      // 30 s after the session's start, but only 20 s after the turn's end.
+      await polls(10);
+      expect(scans()).toBe(ended);
+      await polls(6);
+      expect(scans()).toBeGreaterThan(ended);
+    });
+  }
 
   // A branch switched to is asked for its own pull request at once, not a minute after the last branch's.
   test("asks gh for a new branch's pull request on the next poll", async ($, on) => {
@@ -3097,6 +3149,64 @@ describe("cockpit", () => {
     expect(await usageLeft()).toBe(0);
     await hint.unmount();
     await ui.unmount();
+  });
+
+  // A cd changes no git file, yet the folders show the new folder at the next poll.
+  test("scans on the next poll once the session's current folder changes, and the folders follow it", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    let cwd = "/r";
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/r" }));
+    on("session.cwd", () => ({ value: cwd }));
+    on("fs.exists", () => ({ value: false }));
+    statsOn(on, { "/r/.git/HEAD": gitFile(START), "/r/.git/index": gitFile(START) });
+    on("process.run", (_$, e) => {
+      const rev = e.argv.includes("--show-toplevel");
+      return { value: { exitCode: rev ? 0 : 1, stdout: rev ? "/r/.git\n/r/.git\n/r\nfeat\n" : "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
+    const ui = await $.ui.mount({
+      plugin: "cockpit",
+      surface: "terminal",
+      component: "AbovePrompt",
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+    });
+    const shown = async () => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "file:///r/cockpit");
+    await caughtUp(on, ui);
+    await clock.advance(4_000);
+    await caughtUp(on, ui);
+    expect(await shown()).toBe(false);
+    cwd = "/r/cockpit";
+    await clock.advance(2_000);
+    await caughtUp(on, ui);
+    expect(await shown()).toBe(true);
+    await ui.unmount();
+  });
+
+  // Outside a repository a poll asks git nothing; only the 30 s check asks whether the folder has become one.
+  test("starts at most 2 git processes in 60 s of polls outside a repository", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    let gits = 0;
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.root", () => ({ value: "/work/cc-mods" }));
+    on("session.cwd", () => ({ value: "/work/cc-mods" }));
+    on("process.run", (_$, e) => {
+      if (e.argv[0] === "git") gits++;
+      return { value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } };
+    });
+
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work/cc-mods" });
+    await clock.settle();
+    const started = gits;
+    for (let i = 0; i < 30; i++) await clock.advance(2_000);
+    expect(gits - started).toBeLessThanOrEqual(2);
   });
 
   test("shows the folder outside a repository, and nothing of git", async ($, on) => {
