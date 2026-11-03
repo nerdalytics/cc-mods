@@ -2260,12 +2260,18 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     if (target) conflict = !(await ok("merge-tree", "--write-tree", "HEAD", target));
   }
 
-  // Named once the scan knows every ref it tried, so a poll during the scan reads what the last one named.
+  const madeFrom = named && branch !== defaultBranch ? await basedOff(git, branch) : "";
+  // An upstream named apart from the branch, such as fork/other for feat, has no copy among the remotes' listed refs
+  // for it. One named <remote>/<branch> is one of them already; one with no `/` names a local branch, not a remote's ref.
+  const ownUpstream = upstream.includes("/") && upstream.slice(upstream.indexOf("/") + 1) !== branch;
+  // Named once the scan has run every git call, so a poll during the scan reads what the last one named, and a scan
+  // that fails leaves it so.
   watched = {
     paths: [
       ...GIT_DIR_FILES.map((f) => `${gitDir}/${f}`),
       ...COMMON_DIR_FILES.map((f) => `${commonDir}/${f}`),
       ...(named ? [`${commonDir}/refs/heads/${branch}`] : []),
+      ...(ownUpstream ? [`${commonDir}/refs/remotes/${upstream}`] : []),
       ...tried,
     ],
     remotes: `${commonDir}/refs/remotes`,
@@ -2279,7 +2285,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     base: web ? track.slice(remote.length + 1) : "",
     branch,
     defaultBranch,
-    basedOff: named && branch !== defaultBranch ? await basedOff(git, branch) : "",
+    basedOff: madeFrom,
     // A linked worktree keeps its own git dir apart from the repository's.
     worktree: commonDir !== gitDir ? (top.split("/").pop() ?? "") : "",
     ahead,

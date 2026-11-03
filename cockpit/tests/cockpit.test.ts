@@ -3054,12 +3054,12 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // A first push of a branch no remote has, to a second remote and without -u, writes only the ref it creates under
-  // refs/remotes/fork. The branch then counts against that copy, which `push fork HEAD~1:feat` left one commit behind.
+  // A first push of a branch no remote has, to a second remote never fetched and without -u, writes only the folder
+  // refs/remotes/fork and the ref it creates there. The branch then counts against that copy, which
+  // `push fork HEAD~1:feat` left one commit behind.
   test("scans on the next poll once a first push to a second remote creates the branch's ref there, and sync counts against it without the ?", async ($, on) => {
     on("turn.complete", (_$, e) => ({ text: e.answer }));
     const { polls, out, remotes, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\n");
-    remotes.push("fork");
     out["git rev-parse --verify origin/main"] = "abc\n";
     out["git rev-list --left-right --count HEAD...origin/main"] = "2\t0\n";
     await turnEnds($, clock);
@@ -3070,6 +3070,7 @@ describe("cockpit", () => {
     out["git for-each-ref --count=1 --format=%(refname:short) refs/remotes/*/feat"] = "fork/feat\n";
     out["git rev-list --left-right --count HEAD...fork/feat"] = "1\t0\n";
     out["git remote get-url fork"] = "git@github.com:me/r.git\n";
+    remotes.push("fork");
     stats["/r/.git/refs/remotes/fork/feat"] = gitFile(START + 4_000);
     await polls(1);
     await caughtUp(on, ui);
@@ -3112,6 +3113,26 @@ describe("cockpit", () => {
     await caughtUp(on, ui);
     const links = (await ui.findAll({ type: "Link" })).map((l) => [l.props.href, flat(l)]);
     expect(links).toContainEqual(["https://github.com/me/r/commits/feat", "↓3"]);
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // An upstream named apart from the branch has no copy under refs/remotes/<remote>/feat: its own ref is watched.
+  test("scans on the next poll once the ref of an upstream named apart from the branch changes, and sync counts against it", async ($, on) => {
+    const { polls, out, remotes, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\nfork/other\n");
+    remotes.push("fork");
+    out["git rev-list --left-right --count HEAD...fork/other"] = "0\t0\n";
+    out["git remote get-url fork"] = "git@github.com:me/r.git\n";
+    stats["/r/.git/refs/remotes/fork/other"] = gitFile(START);
+    const ui = await gitRow($);
+    await polls(2);
+    await caughtUp(on, ui);
+    out["git rev-list --left-right --count HEAD...fork/other"] = "0\t3\n";
+    stats["/r/.git/refs/remotes/fork/other"] = gitFile(START + 4_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    const links = (await ui.findAll({ type: "Link" })).map((l) => [l.props.href, flat(l)]);
+    expect(links).toContainEqual(["https://github.com/me/r/commits/other", "↓3"]);
     await clock.settle();
     await ui.unmount();
   });
