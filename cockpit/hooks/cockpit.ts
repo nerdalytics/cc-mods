@@ -544,8 +544,8 @@ const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md
 // The tick also paces the animations: $.ui.invalidate caps the band at thirty redraws a second.
 const FRAME_MS = 100;
 // What no event announces is polled: limits (other sessions spend them too) and git (edits and branch switches from
-// anywhere). A scan is about 0.15 s of git work, so a poll runs one only when the checkout's git files, the root or the
-// current folder changed, and at least every GIT_SCAN_MS, for edits that touch no git file. The PR goes over the network,
+// anywhere). A scan is about 0.15 s of git work, so a poll runs one only when the checkout's or the repository's git
+// files, the root or the current folder changed, and at least every GIT_SCAN_MS, for edits that touch no git file. The PR goes over the network,
 // so on a branch change or once a minute, and every 10 s while its checks are running or queued.
 const POLL_MS = 2_000;
 const GIT_SCAN_MS = 30_000;
@@ -1964,22 +1964,38 @@ function refreshTokens($: EngineInterface): void {
 const GIT_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply"];
 // The checkout's own git files a commit, checkout, stage, merge or rebase writes, under its git dir.
 const GIT_DIR_FILES = ["HEAD", "index", "logs/HEAD", "FETCH_HEAD", ...GIT_MARKERS];
-// The paths the last scan named for the poll to stat, none outside a repository; what the last scan read of them, the
+// The files a push, a fetch from any worktree, a new remote or pack-refs writes, in the repository's common git dir,
+// which every worktree shares. reftable/tables.list is the reftable backend's ref list, missing under the files backend.
+const COMMON_DIR_FILES = ["config", "packed-refs", "reftable/tables.list", "refs/remotes/origin/HEAD"];
+// What the last scan named for the poll to read, nothing outside a repository: the paths to stat, the folder of remotes
+// to list, and the branch whose copy under each listed remote is stat'd too. Then what the last scan read of them, the
 // root and the current folder; and when the scan ran, by the engine's clock.
-let watched: string[] = [];
+let watched: { paths: string[]; remotes: string; branch: string } = { paths: [], remotes: "", branch: "" };
 let gitSeen: string | undefined;
 let gitScanAt = -Infinity;
 
-// The root, the current folder and each watched path's kind, size and mtime, read with no process. Size beside mtime
-// tells two writes in one millisecond apart. A read that rejects, a missing path above all, is one state of its own.
+// The root, the current folder, each watched path's kind, size and mtime, and the remotes' names, sorted as a listing
+// need not be, read with no process. Size beside mtime tells two writes in one millisecond apart. A read that rejects,
+// a missing path above all, is one state of its own.
 async function gitSignature($: EngineInterface): Promise<string> {
   const missing = () => "missing";
-  const parts = await Promise.all([
-    $.session.root().catch(missing),
-    $.session.cwd().catch(missing),
-    ...watched.map((path) => $.fs.stat(path).then((s) => `${s.kind}:${s.size}:${s.mtimeMs}`, missing)),
-  ]);
-  return parts.join("\n");
+  const stat = (path: string) => $.fs.stat(path).then((s) => `${s.kind}:${s.size}:${s.mtimeMs}`, missing);
+  const { paths, remotes, branch } = watched;
+  // Every remote, not only the one the last scan counted against: a branch no remote has yet counts against whichever
+  // remote its first push creates a copy on. shortcut: a remote named with a `/` lists as its first part, so its copy
+  // waits for the GIT_SCAN_MS scan.
+  const copies = async () => {
+    if (!remotes) return [];
+    let names: string[];
+    try {
+      names = (await $.fs.list(remotes)).map((e) => e.name).sort();
+    } catch {
+      return [missing()];
+    }
+    return [names.join(" "), ...(await Promise.all(branch ? names.map((name) => stat(`${remotes}/${name}/${branch}`)) : []))];
+  };
+  const parts = await Promise.all([$.session.root().catch(missing), $.session.cwd().catch(missing), ...paths.map(stat), copies()]);
+  return parts.flat().join("\n");
 }
 
 // A poll scans only when the signature moved since the last scan, or GIT_SCAN_MS has passed since it; otherwise it asks
@@ -1996,14 +2012,14 @@ function refreshGit($: EngineInterface): void {
     gitScanAt = await $.clock.now();
     // Read before the scan, so a file written while it runs still differs at the next poll. The scan's own git calls run
     // with --no-optional-locks and write none of the watched files.
-    const named = watched.join("\n");
+    const named = JSON.stringify(watched);
     let seen = await gitSignature($);
     try {
       await $.state.set(GIT, await scanGit($));
     } finally {
       // Stored even when the scan fails, which then waits for the 30 s scan rather than running on every poll. Paths the
       // scan named anew, as in the session's first scan, are read now.
-      if (watched.join("\n") !== named) seen = await gitSignature($);
+      if (JSON.stringify(watched) !== named) seen = await gitSignature($);
       gitSeen = seen;
     }
     refreshPr($);
@@ -2187,8 +2203,8 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
   const [commonDir = "", gitDir = "", top = "", branch = "", upstream = ""] = (
     await git("rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel", "--abbrev-ref", "HEAD", "--abbrev-ref", "@{upstream}")
   ).split("\n");
-  watched = gitDir ? GIT_DIR_FILES.map((f) => `${gitDir}/${f}`) : [];
   if (!gitDir) {
+    watched = { paths: [], remotes: "", branch: "" };
     return { root, cwd, top: "", web: "", base: "", branch: "", defaultBranch: "", basedOff: "", worktree: "", ahead: 0, behind: 0, vsDefault: false, added: 0, deleted: 0, changed: 0, conflict: false };
   }
   const named = branch !== "" && branch !== "HEAD";
@@ -2205,9 +2221,13 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
   // whose main branch differs shows that branch as an ordinary one.
   const defaultBranch = symref.replace(/^refs\/remotes\/origin\//, "") || initDefault;
   let main: Promise<string> | undefined;
+  // Each default-branch ref tried, found or not, for the poll to watch: a fetch that creates or moves one changes
+  // what the branch counts against.
+  const tried = new Set<string>();
   const mainRef = () =>
     (main ??= (async () => {
       for (const b of [defaultBranch, "develop", "main", "master"]) {
+        if (b) tried.add(`${commonDir}/refs/remotes/origin/${b}`);
         if (b && (await ok("rev-parse", "--verify", `origin/${b}`))) return `origin/${b}`;
       }
       return "";
@@ -2240,6 +2260,17 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
     if (target) conflict = !(await ok("merge-tree", "--write-tree", "HEAD", target));
   }
 
+  // Named once the scan knows every ref it tried, so a poll during the scan reads what the last one named.
+  watched = {
+    paths: [
+      ...GIT_DIR_FILES.map((f) => `${gitDir}/${f}`),
+      ...COMMON_DIR_FILES.map((f) => `${commonDir}/${f}`),
+      ...(named ? [`${commonDir}/refs/heads/${branch}`] : []),
+      ...tried,
+    ],
+    remotes: `${commonDir}/refs/remotes`,
+    branch: named ? branch : "",
+  };
   return {
     root,
     cwd,

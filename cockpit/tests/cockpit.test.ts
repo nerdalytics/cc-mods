@@ -2854,7 +2854,9 @@ describe("cockpit", () => {
 
   // A session in /r, by default on feat, which origin has, its pull request's one check `status`; `head` is what rev-parse
   // prints in place of that. `out` is what each command prints, and `stats` what the git folder's files stat as, for the
-  // test to change; `asks` and `scans` count the gh and git calls. With `hold`, gh answers only once `release`d.
+  // test to change; `remotes` the remotes listed under the common folder's refs/remotes, which is missing while there is
+  // none; `asks` and `scans` count the gh and git calls, `runs` every process run. With `hold`, gh answers only once
+  // `release`d.
   async function prSession($: Engine, on: On, status: string, head = "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n", hold = false) {
     stubHint(on, START);
     const clock = clockOn(on);
@@ -2878,7 +2880,13 @@ describe("cockpit", () => {
     // A merge or rebase midway exists as it stats.
     on("fs.exists", (_$, e) => ({ value: e.path in stats }));
     statsOn(on, stats);
+    const remotes = ["origin"];
+    on("fs.list", (_$, e, next) =>
+      e.path === "/r/.git/refs/remotes" && remotes.length > 0 ? { value: remotes.map((name) => ({ name, kind: "dir" as const, size: 0, mtimeMs: 0, isLink: false })) } : next(e),
+    );
+    let runs = 0;
     on("process.run", (_$, e) => {
+      runs++;
       if (e.argv[0] === "gh") asks++;
       else if (e.argv[0] === "git") scans++;
       const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
@@ -2891,8 +2899,10 @@ describe("cockpit", () => {
       clock,
       out,
       stats,
+      remotes,
       asks: () => asks,
       scans: () => scans,
+      runs: () => runs,
       polls: async (n: number) => {
         for (let i = 0; i < n; i++) await clock.advance(2_000);
       },
@@ -2935,6 +2945,18 @@ describe("cockpit", () => {
     expect(scans()).toBeGreaterThan(started);
   });
 
+  // Listing the remotes and statting the branch's copy under each is no process.
+  test("starts no process in 20 s of polls with nothing changed in a repository with two remotes", async ($, on) => {
+    const { polls, remotes, runs, stats } = await prSession($, on, "COMPLETED");
+    remotes.push("fork");
+    stats["/r/.git/refs/remotes/origin/feat"] = gitFile(START);
+    stats["/r/.git/refs/remotes/fork/feat"] = gitFile(START);
+    await polls(1);
+    const started = runs();
+    await polls(10);
+    expect(runs()).toBe(started);
+  });
+
   // Each file of the checkout's git folder a commit, checkout, stage, fetch, merge or rebase writes: one already there
   // written again, or one missing at the last poll that appears.
   for (const [file, written] of [
@@ -2955,6 +2977,179 @@ describe("cockpit", () => {
       expect(scans()).toBeGreaterThan(before);
     });
   }
+
+  // Each file of the repository's common git folder a ref update writes, whatever the ref backend: one already there
+  // written again, or one missing at the last poll that appears.
+  for (const [file, written] of [
+    ["config", gitFile(START + 1_000, 380)],
+    ["packed-refs", gitFile(START + 1_000, 220)],
+    ["reftable/tables.list", gitFile(START + 1_000, 60)],
+    ["refs/remotes/origin/HEAD", gitFile(START + 1_000, 32)],
+    ["refs/heads/feat", gitFile(START + 1_000)],
+  ] as [string, FsStat][]) {
+    test(`scans on the next poll once ${file} in the common git folder changes`, async ($, on) => {
+      const { polls, scans, stats } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git/worktrees/wt\n/wt\nfeat\norigin/feat\n");
+      await polls(2);
+      const before = scans();
+      stats[`/r/.git/${file}`] = written;
+      await polls(1);
+      expect(scans()).toBeGreaterThan(before);
+    });
+  }
+
+  // A branch no remote has counts against the first of origin's main, develop, main and master that exists: each one the
+  // scan tried is watched, the one it found written again, or one it found missing that appears.
+  for (const { name, found, file, written } of [
+    { name: "the default branch it counts against is written", found: "main", file: "refs/remotes/origin/main", written: gitFile(START + 1_000) },
+    { name: "a default branch it found missing appears", found: "", file: "refs/remotes/origin/master", written: gitFile(START + 1_000) },
+  ]) {
+    test(`scans on the next poll once ${name}`, async ($, on) => {
+      on("turn.complete", (_$, e) => ({ text: e.answer }));
+      const { polls, out, scans, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\n");
+      if (found) {
+        out[`git rev-parse --verify origin/${found}`] = "abc\n";
+        stats[`/r/.git/refs/remotes/origin/${found}`] = gitFile(START);
+      }
+      await turnEnds($, clock);
+      await polls(2);
+      const before = scans();
+      stats[`/r/.git/${file}`] = written;
+      await polls(1);
+      expect(scans()).toBeGreaterThan(before);
+    });
+  }
+
+  const gitRow = ($: Engine) =>
+    $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+  // A turn's end scans whatever the git files say: a test that changes what git prints after the session's first scan
+  // ends one to start from that state.
+  const turnEnds = async ($: Engine, clock: MockClock) => {
+    await $.turn.complete({ answer: "", isAborted: false, turnId: "t1", reason: "answer", durationMs: 1_000 });
+    await clock.settle();
+  };
+
+  // A push -u writes the upstream to config and the branch's copy under refs/remotes, and nothing in the checkout's own
+  // git folder. Before it, the branch counts against origin/main; after `push -u origin HEAD~1:feat`, against its own
+  // copy, one commit behind it.
+  test("scans on the next poll once a push -u writes config and the branch's remote ref, and sync counts against it", async ($, on) => {
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const head = "/r/.git\n/r/.git\n/r\nfeat\n";
+    const { polls, out, stats, clock } = await prSession($, on, "COMPLETED", head);
+    out["git rev-parse --verify origin/main"] = "abc\n";
+    out["git rev-list --left-right --count HEAD...origin/main"] = "2\t0\n";
+    stats["/r/.git/config"] = gitFile(START, 300);
+    await turnEnds($, clock);
+    const ui = await gitRow($);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "↑2?" })).toBeDefined();
+    await polls(2);
+    out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] = `${head}origin/feat\n`;
+    out["git rev-list --left-right --count HEAD...origin/feat"] = "1\t0\n";
+    stats["/r/.git/config"] = gitFile(START + 4_000, 380);
+    stats["/r/.git/refs/remotes/origin/feat"] = gitFile(START + 4_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "↑1" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A first push of a branch no remote has, to a second remote and without -u, writes only the ref it creates under
+  // refs/remotes/fork. The branch then counts against that copy, which `push fork HEAD~1:feat` left one commit behind.
+  test("scans on the next poll once a first push to a second remote creates the branch's ref there, and sync counts against it without the ?", async ($, on) => {
+    on("turn.complete", (_$, e) => ({ text: e.answer }));
+    const { polls, out, remotes, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\n");
+    remotes.push("fork");
+    out["git rev-parse --verify origin/main"] = "abc\n";
+    out["git rev-list --left-right --count HEAD...origin/main"] = "2\t0\n";
+    await turnEnds($, clock);
+    const ui = await gitRow($);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "↑2?" })).toBeDefined();
+    await polls(2);
+    out["git for-each-ref --count=1 --format=%(refname:short) refs/remotes/*/feat"] = "fork/feat\n";
+    out["git rev-list --left-right --count HEAD...fork/feat"] = "1\t0\n";
+    out["git remote get-url fork"] = "git@github.com:me/r.git\n";
+    stats["/r/.git/refs/remotes/fork/feat"] = gitFile(START + 4_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "↑1" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A fetch in another worktree of the repository writes the common folder's remote ref, and FETCH_HEAD in that
+  // worktree's git folder, not this one's.
+  test("scans on the next poll in a linked worktree once a fetch made in another worktree writes the common folder's remote ref", async ($, on) => {
+    const { polls, out, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git/worktrees/wt\n/wt\nfeat\norigin/feat\n");
+    stats["/r/.git/refs/remotes/origin/feat"] = gitFile(START);
+    const ui = await gitRow($);
+    await polls(2);
+    await caughtUp(on, ui);
+    out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t2\n";
+    stats["/r/.git/refs/remotes/origin/feat"] = gitFile(START + 4_000);
+    stats["/r/.git/FETCH_HEAD"] = gitFile(START + 4_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(await ui.find({ type: "Box", text: "↓2" })).toBeDefined();
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A fetch from fork, where the branch's upstream is, writes only that remote's ref for it.
+  test("scans on the next poll once the ref of an upstream on a remote other than origin changes, and links that remote's history", async ($, on) => {
+    const { polls, out, remotes, stats, clock } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\nfork/feat\n");
+    remotes.push("fork");
+    out["git rev-list --left-right --count HEAD...fork/feat"] = "0\t0\n";
+    out["git remote get-url fork"] = "git@github.com:me/r.git\n";
+    stats["/r/.git/refs/remotes/fork/feat"] = gitFile(START);
+    const ui = await gitRow($);
+    await polls(2);
+    await caughtUp(on, ui);
+    out["git rev-list --left-right --count HEAD...fork/feat"] = "0\t3\n";
+    stats["/r/.git/refs/remotes/fork/feat"] = gitFile(START + 4_000);
+    await polls(1);
+    await caughtUp(on, ui);
+    const links = (await ui.findAll({ type: "Link" })).map((l) => [l.props.href, flat(l)]);
+    expect(links).toContainEqual(["https://github.com/me/r/commits/feat", "↓3"]);
+    await clock.settle();
+    await ui.unmount();
+  });
+
+  // A repository with no remote has no refs/remotes folder; `git remote add` writes only config.
+  test("scans on the next poll once a remote is added to a repository that had none", async ($, on) => {
+    const { polls, remotes, scans, stats } = await prSession($, on, "COMPLETED", "/r/.git\n/r/.git\n/r\nfeat\n");
+    remotes.splice(0);
+    stats["/r/.git/config"] = gitFile(START, 92);
+    await polls(2);
+    const before = scans();
+    stats["/r/.git/config"] = gitFile(START + 4_000, 180);
+    await polls(1);
+    expect(scans()).toBeGreaterThan(before);
+  });
+
+  // pack-refs moves the loose refs into packed-refs: the refs point where they did, so the row is the same.
+  test("scans on the next poll once pack-refs removes the loose refs and rewrites packed-refs, and draws the row as before", async ($, on) => {
+    const { polls, scans, stats, clock } = await prSession($, on, "COMPLETED");
+    stats["/r/.git/refs/heads/feat"] = gitFile(START);
+    stats["/r/.git/refs/remotes/origin/feat"] = gitFile(START);
+    stats["/r/.git/packed-refs"] = gitFile(START, 120);
+    const ui = await gitRow($);
+    await polls(2);
+    await caughtUp(on, ui);
+    const drawn = rowSpelled((await tagRows(ui))[0]);
+    expect(drawn).toContain("⎇ feat");
+    const before = scans();
+    delete stats["/r/.git/refs/heads/feat"];
+    delete stats["/r/.git/refs/remotes/origin/feat"];
+    stats["/r/.git/packed-refs"] = gitFile(START + 4_000, 220);
+    await polls(1);
+    await caughtUp(on, ui);
+    expect(scans()).toBeGreaterThan(before);
+    expect(rowSpelled((await tagRows(ui))[0])).toEqual(drawn);
+    await clock.settle();
+    await ui.unmount();
+  });
 
   // A merge that starts writes MERGE_HEAD: the next poll scans, and the row warns of it.
   test("draws the conflict warning on the next poll once MERGE_HEAD appears", async ($, on) => {
