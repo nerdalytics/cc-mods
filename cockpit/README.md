@@ -98,7 +98,7 @@ By default the git row sits above the prompt. Its parts, left to right by defaul
 
 The pull request parts need `gh`. The mod asks it only for a branch that a remote has and that is not the default branch, and only while a row shows `pr`, `review`, `comments`, `conflict` or `checks`. It asks again when the branch changes, about once a minute, and every 10 seconds while checks are running.
 
-The row reads the repository when the session starts and when any turn ends, a subagent's included, so Claude's edits show at the turn's end. A commit, checkout, stage, merge or rebase in this checkout shows within 2 seconds, and so does a `cd`: every 2 seconds the mod compares a few files in the git folder and the current folder with what it read last, and runs `git` only when something differs. Edits made outside Claude, in an editor for instance, change no file in the git folder, so the mod also reads the repository at least every 30 seconds, and they show within 30 seconds.
+The row reads the repository when the session starts and when any turn ends, a subagent's included, so Claude's edits show at the turn's end. A commit, checkout, stage, merge or rebase in this checkout shows within 2 seconds, and so does a `cd`. So does a push from this checkout, to any remote, and a fetch in any worktree of the repository. Every 2 seconds the mod compares a few files in the checkout's and the repository's git folders, the list of remotes and the current folder with what it read last, and runs `git` only when something differs. Edits made outside Claude, in an editor for instance, change no file in the git folder, so the mod also reads the repository at least every 30 seconds, and they show within 30 seconds.
 
 Outside a repository the row shows only the folders, and the mod runs no `git` on its 2-second polls. It checks whether the folder has become a repository every 30 seconds, and when the session starts, when a turn ends and when you `cd`. Within a row, the git parts take the palette's colours in the order they draw.
 
@@ -295,7 +295,10 @@ On disk, the mod reads:
 - The list of files at the project root, for `HANDOFF-*.md`.
 - Claude Code's merged settings, once when the session starts, for the `idleCompaction` key.
 - The repository, with `git` run in the current folder, and whether a merge or rebase is in progress in its git folder.
-- Every 2 seconds, the kind, size and modification time of `HEAD`, `index`, `logs/HEAD`, `FETCH_HEAD`, `MERGE_HEAD`, `rebase-merge` and `rebase-apply` in the git folder, without running `git`, to tell when the repository changed. See [Git row](#git-row).
+- Every 2 seconds, without running `git`, what tells when the repository changed. See [Git row](#git-row). That is the kind, size and modification time of:
+  - `HEAD`, `index`, `logs/HEAD`, `FETCH_HEAD`, `MERGE_HEAD`, `rebase-merge` and `rebase-apply` in the checkout's git folder.
+  - `config`, `packed-refs`, `reftable/tables.list`, `refs/remotes/origin/HEAD`, the branch's own ref, and each of origin's default-branch refs the last read tried, in the repository's common git folder, which every worktree of it shares.
+  - The branch's ref under each remote, from the list of remotes in `refs/remotes` in the common git folder, which it also reads.
 
 Over the network, it fetches `https://platform.claude.com/docs/en/about-claude/pricing.md` for the rates. It runs `gh pr view`, which asks GitHub for the branch's pull request, as described under [Git row](#git-row).
 
