@@ -544,9 +544,11 @@ const PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md
 // The tick also paces the animations: $.ui.invalidate caps the band at thirty redraws a second.
 const FRAME_MS = 100;
 // What no event announces is polled: limits (other sessions spend them too) and git (edits and branch switches from
-// anywhere). One poll is about 0.15 s of git work. The PR goes over the network, so on a branch change or once a minute,
-// and every 10 s while its checks are running or queued.
+// anywhere). A scan is about 0.15 s of git work, so a poll runs one only when the checkout's git files, the root or the
+// current folder changed, and at least every GIT_SCAN_MS, for edits that touch no git file. The PR goes over the network,
+// so on a branch change or once a minute, and every 10 s while its checks are running or queued.
 const POLL_MS = 2_000;
+const GIT_SCAN_MS = 30_000;
 const PR_POLL_MS = 60_000;
 const PR_BUSY_POLL_MS = 10_000;
 // Other sessions' transcripts, for a limit one of them was refused on: a few hours of them read, so less often.
@@ -1258,10 +1260,7 @@ function poll($: EngineInterface): void {
   void maybeCompact($);
   void $.session.usage().then((u) => setUsage($, u));
   serial("handoff", () => findHandoff($));
-  refreshGit($);
-  // A scan under way asks for the pull request once it stores; asking now would read the scan before it, and fetch the
-  // branch just switched away from.
-  if (!running.has("git")) refreshPr($);
+  void pollGit($);
   if (tokensStale) {
     tokensStale = false;
     refreshTokens($);
@@ -1961,9 +1960,41 @@ function refreshTokens($: EngineInterface): void {
   });
 }
 
+// The checkout's own git files a commit, checkout, stage, merge or rebase writes, under its git dir.
+const GIT_DIR_FILES = ["HEAD", "index", "logs/HEAD", "FETCH_HEAD", "MERGE_HEAD", "rebase-merge", "rebase-apply"];
+// The paths the last scan named for the poll to stat, none outside a repository; what the poll read of them, the root
+// and the current folder after that scan; and when the scan ran, by the engine's clock.
+let watched: string[] = [];
+let gitSeen: string | undefined;
+let gitScanAt = -Infinity;
+
+// The root, the current folder and each watched path's kind, size and mtime, read with no process. Size beside mtime
+// tells two writes in one millisecond apart. A read that rejects, a missing path above all, is one state of its own.
+async function gitSignature($: EngineInterface): Promise<string> {
+  const missing = () => "missing";
+  const parts = await Promise.all([
+    $.session.root().catch(missing),
+    $.session.cwd().catch(missing),
+    ...watched.map((path) => $.fs.stat(path).then((s) => `${s.kind}:${s.size}:${s.mtimeMs}`, missing)),
+  ]);
+  return parts.join("\n");
+}
+
+// A poll scans only when the signature moved since the last scan, or GIT_SCAN_MS has passed since it; otherwise it asks
+// for the pull request on its own schedule. A scan under way asks once it stores: asking now would read the scan before
+// it, and fetch the branch just switched away from.
+async function pollGit($: EngineInterface): Promise<void> {
+  const [now, seen] = await Promise.all([$.clock.now(), gitSignature($)]);
+  if (now - gitScanAt >= GIT_SCAN_MS || seen !== gitSeen) refreshGit($);
+  else if (!running.has("git")) refreshPr($);
+}
+
 function refreshGit($: EngineInterface): void {
   serial("git", async () => {
+    gitScanAt = await $.clock.now();
     await $.state.set(GIT, await scanGit($));
+    // Read after the scan, which names the paths, so its own reads never count as a change.
+    gitSeen = await gitSignature($);
     refreshPr($);
   }, () => trace($, "git job still running; poll folded into again"), (err) => trace($, `git job failed: ${err instanceof Error ? err.message : String(err)}`));
 }
@@ -2145,6 +2176,7 @@ async function scanGit($: EngineInterface): Promise<StatusGit> {
   const [commonDir = "", gitDir = "", top = "", branch = "", upstream = ""] = (
     await git("rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel", "--abbrev-ref", "HEAD", "--abbrev-ref", "@{upstream}")
   ).split("\n");
+  watched = gitDir ? GIT_DIR_FILES.map((f) => `${gitDir}/${f}`) : [];
   if (!gitDir) {
     return { root, cwd, top: "", web: "", base: "", branch: "", defaultBranch: "", basedOff: "", worktree: "", ahead: 0, behind: 0, vsDefault: false, added: 0, deleted: 0, changed: 0, conflict: false };
   }

@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, On, ProcessRunResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
+import type { AgentInfo, AgentStatus, CommandRunResult, ConfigRow, ConfigValue, FsStat, On, ProcessRunResult, SessionContextBreakdown, SessionContextUsage, SessionRateLimit, TurnUsage } from "claude-code";
 import { describe, type Engine, expect, type FoundElement, type Mounted, type MockClock, mock, test as kitTest, type TestRest } from "claude-code/testing";
 import type { StatusCredits } from "../types";
 import { timeoutMs } from "./machine.local.ts";
@@ -138,6 +138,15 @@ function clockOn(on: On, now?: number): MockClock {
     clocks.set(on, clock);
   }
   return clock;
+}
+// A git file as the mod's fs.stat reads it, written at `mtimeMs`.
+const gitFile = (mtimeMs: number, size = 41): FsStat => ({ kind: "file", size, mtimeMs, isLink: false });
+// The mod's fs.stat answers from `stats`, by path, for the test to change; a path not in it is missing.
+function statsOn(on: On, stats: Record<string, FsStat>): void {
+  on("fs.stat", (_$, e, next) => {
+    const hit = stats[e.path];
+    return hit ? { value: hit } : next(e);
+  });
 }
 // What the state answers for a key it already holds.
 const held = <T>(value: T) => () => ({ value: { value, version: 1 } });
@@ -2679,12 +2688,14 @@ describe("cockpit", () => {
       "git remote get-url origin": "git@github.com:o/r.git\n",
       "gh pr view --json number,url,isDraft,mergeable,reviewDecision,statusCheckRollup,comments,state": JSON.stringify(pr),
     };
+    const stats: Record<string, FsStat> = { "/r/.git/HEAD": gitFile(START), "/r/.git/logs/HEAD": gitFile(START) };
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.root", () => ({ value: "/r" }));
     on("session.cwd", () => ({ value: "/r" }));
     on("fs.exists", () => ({ value: false }));
+    statsOn(on, stats);
     on("process.run", (_$, e) => {
       const stdout = out[e.argv.filter((a) => a !== "--no-optional-locks").join(" ")];
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
@@ -2721,8 +2732,11 @@ describe("cockpit", () => {
     for (const text of ["\uf040", "\uf467", "\uf0e0 3", "\uf071"]) {
       expect(await ui.find({ type: "Box", text })).toBeDefined();
     }
-    // Pulled: nothing behind, so no link for it, rather than an empty one the terminal draws as its address.
+    // Pulled: nothing behind, so no link for it, rather than an empty one the terminal draws as its address. The pull
+    // fetched, and moved HEAD, which its reflog records.
     out["git rev-list --left-right --count HEAD...origin/feat"] = "2\t0\n";
+    stats["/r/.git/FETCH_HEAD"] = gitFile(START + 1_000);
+    stats["/r/.git/logs/HEAD"] = gitFile(START + 1_000, 82);
     await clock.advance(2_000);
     await caughtUp(on, ui);
     expect(await href("https://github.com/o/r/commits/feat")).toBe(false);
@@ -2839,8 +2853,8 @@ describe("cockpit", () => {
   }
 
   // A session in /r, by default on feat, which origin has, its pull request's one check `status`; `head` is what rev-parse
-  // prints in place of that. `out` is what each command prints, for the test to change; `asks` and `scans` count the gh
-  // and git calls. With `hold`, gh answers only once `release`d.
+  // prints in place of that. `out` is what each command prints, and `stats` what the git folder's files stat as, for the
+  // test to change; `asks` and `scans` count the gh and git calls. With `hold`, gh answers only once `release`d.
   async function prSession($: Engine, on: On, status: string, head = "/r/.git\n/r/.git\n/r\nfeat\norigin/feat\n", hold = false) {
     stubHint(on, START);
     const clock = clockOn(on);
@@ -2855,12 +2869,14 @@ describe("cockpit", () => {
     let asks = 0;
     let scans = 0;
     const held: (() => void)[] = [];
+    const stats: Record<string, FsStat> = { "/r/.git/HEAD": gitFile(START), "/r/.git/index": gitFile(START), "/r/.git/logs/HEAD": gitFile(START) };
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.root", () => ({ value: "/r" }));
     on("session.cwd", () => ({ value: "/r" }));
     on("fs.exists", () => ({ value: false }));
+    statsOn(on, stats);
     on("process.run", (_$, e) => {
       if (e.argv[0] === "gh") asks++;
       else scans++;
@@ -2873,6 +2889,7 @@ describe("cockpit", () => {
     return {
       clock,
       out,
+      stats,
       asks: () => asks,
       scans: () => scans,
       polls: async (n: number) => {
@@ -2896,24 +2913,37 @@ describe("cockpit", () => {
     });
   }
 
+  // Nothing in the checkout changes: polls start no git, until the scan at least every 30 s, which one poll may overrun.
+  test("starts no git in 20 s of polls with nothing changed, and scans again by 30 s after the last scan", async ($, on) => {
+    const { polls, scans } = await prSession($, on, "COMPLETED");
+    const started = scans();
+    expect(started).toBeGreaterThan(0);
+    await polls(14);
+    expect(scans()).toBe(started);
+    await polls(2);
+    expect(scans()).toBeGreaterThan(started);
+  });
+
   // A branch switched to is asked for its own pull request at once, not a minute after the last branch's.
   test("asks gh for a new branch's pull request on the next poll", async ($, on) => {
-    const { polls, asks, out } = await prSession($, on, "COMPLETED");
+    const { polls, asks, out, stats } = await prSession($, on, "COMPLETED");
     await polls(2);
     expect(asks()).toBe(1);
     out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] =
       "/r/.git\n/r/.git\n/r\nother\norigin/other\n";
+    stats["/r/.git/HEAD"] = gitFile(START + 5_000);
     await polls(1);
     expect(asks()).toBe(2);
   });
 
   // A switch on the poll where the minute runs out asks for the new branch alone, not for the old one first.
   test("asks gh once when a branch switch meets the end of the minute", async ($, on) => {
-    const { polls, asks, out } = await prSession($, on, "COMPLETED");
+    const { polls, asks, out, stats } = await prSession($, on, "COMPLETED");
     await polls(29);
     expect(asks()).toBe(1);
     out["git rev-parse --path-format=absolute --git-common-dir --absolute-git-dir --show-toplevel --abbrev-ref HEAD --abbrev-ref @{upstream}"] =
       "/r/.git\n/r/.git\n/r\nother\norigin/other\n";
+    stats["/r/.git/HEAD"] = gitFile(START + 59_000);
     await polls(1);
     expect(asks()).toBe(2);
   });
@@ -2934,7 +2964,7 @@ describe("cockpit", () => {
 
   // gh goes over the network and can take seconds to answer; the git row keeps its 2 s polls meanwhile.
   test("draws a pull from the remote while gh has not answered yet", async ($, on) => {
-    const { polls, out, clock, release, asks } = await prSession($, on, "COMPLETED", undefined, true);
+    const { polls, out, stats, clock, release, asks } = await prSession($, on, "COMPLETED", undefined, true);
     const ui = await $.ui.mount({
       plugin: "cockpit",
       surface: "terminal",
@@ -2947,7 +2977,9 @@ describe("cockpit", () => {
       expect(await behind()).toBe(false);
       // The one gh call, still held.
       expect(asks()).toBe(1);
+      // A fetch brought the remote's commit, and wrote FETCH_HEAD.
       out["git rev-list --left-right --count HEAD...origin/feat"] = "0\t1\n";
+      stats["/r/.git/FETCH_HEAD"] = gitFile(START + 1_000);
       await polls(1);
       await caughtUp(on, ui);
       expect(await behind()).toBe(true);
@@ -3008,6 +3040,7 @@ describe("cockpit", () => {
     const clock = clockOn(on);
     let branch = "feat-a";
     let used = 0;
+    const stats: Record<string, FsStat> = { "/r/.git/HEAD": gitFile(START) };
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: used }] },
@@ -3016,6 +3049,7 @@ describe("cockpit", () => {
     on("session.root", () => ({ value: "/r" }));
     on("session.cwd", () => ({ value: "/r" }));
     on("fs.exists", () => ({ value: false }));
+    statsOn(on, stats);
     on("process.run", (_$, e) => {
       const rev = e.argv.includes("--show-toplevel");
       return {
@@ -3050,7 +3084,9 @@ describe("cockpit", () => {
     expect(await ui.find({ type: "Box", text: "⎇ feat-a" })).toBeDefined();
     expect(await usageLeft()).toBe(10);
 
+    // The checkout writes HEAD.
     branch = "feat-b";
+    stats["/r/.git/HEAD"] = gitFile(START + 1_000, 30);
     used = 100;
     await clock.advance(1_900);
     await bothCaughtUp();
