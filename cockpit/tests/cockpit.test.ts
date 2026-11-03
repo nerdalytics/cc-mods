@@ -3004,9 +3004,9 @@ describe("cockpit", () => {
     on("fs.exists", () => ({ value: false }));
     statsOn(on, { "/r/.git/HEAD": gitFile(START) });
     // rev-parse finds the repository; every git call after it rejects, and so does the scan.
-    on("process.run", (_$, e, next) => {
+    on("process.run", (_$, e) => {
       if (e.argv[0] === "git") gits++;
-      if (!e.argv.includes("--show-toplevel")) return next(e);
+      if (!e.argv.includes("--show-toplevel")) throw new Error("git failed");
       return { value: { exitCode: 0, stdout: "/r/.git\n/r/.git\n/r\nfeat\n", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
 
