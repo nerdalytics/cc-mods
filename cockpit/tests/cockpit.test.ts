@@ -4736,7 +4736,7 @@ describe("cockpit", () => {
     holding(on, creditsOf(), billing.getDate());
     await startWithLimits($, on, sevenUsedUp());
     const ui = await mountHint($);
-    // 1011 of 1500 is 67%: 4 of the 7d's 7 cells on the top lane. The month that began on the 1st is about 84% gone, 5 cells below.
+    // 1011 of 1500 is 67%: 4 of 7 cells at credits_length 7 on the top lane. The month that began on the 1st is about 84% gone, 5 cells below.
     expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "BBBBU__" });
     expect(await explanationOf(ui, "credits")).toBe(`€ at 67%: €10.11 of €15.00 spent, it resets on ${dateAt(billing)}.`);
     await ui.unmount();
@@ -4829,7 +4829,7 @@ describe("cockpit", () => {
   // The credits tag as limitTagOf draws a limit's.
   const creditsDrawn = ($: Engine, on: On, now: number, credits: Partial<StatusCredits>, billing: number | undefined, limits = sevenAfter(now)) => creditsRead($, on, now, credits, billing, limits, (ui) => limitTagOf(ui, "credits"));
   // The colors option that gives the 7d the credits gradient's defaults, so the 7d's lit cells are what the credits
-  // spent cells draw at the same length.
+  // spent cells draw at the same length, credits_length 7 against the 7d's default 7.
   const AS_CREDITS = "limit.7d.from=#d946ef,limit.7d.to=#86198f";
   // The 5h used up, which draws the credits tag, and a 7d at 1% a seventh into its window, resetting 6 days after `now` at
   // `now`'s clock time, which keeps the billing month's. Paced and short of par, the 7d draws its gradient on its first 6
