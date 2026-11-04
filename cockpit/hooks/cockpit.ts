@@ -181,13 +181,12 @@ function creditsShown(s: Snapshot): StatusCredits | undefined {
   return s.sampled || (usageLookup && s.credits?.enabled && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000)) ? s.credits : undefined;
 }
 
-// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent in the credits
+// The credits tag, none unless creditsShown: the currency's badge on credits.to, then the cap's share spent in the credits
 // bar's length, drawn against the share of the billing month gone: that share counts while the month is known, and the
 // pace only while creditsPace says there is one.
 function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
   const credits = creditsShown(s);
   if (!credits) return [];
-  const spent = color("credits.spent");
   const now = s.now * 1000;
   const seven = limitsOf(s.usage.rateLimits, s.rejected, now).find((r) => r.kind === "seven_day");
   const { paced, monthMs, gone } = creditsPace(credits, s, seven);
@@ -202,14 +201,16 @@ function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
         ? creditsNotch(Text, credits, monthPct, paced)
         : creditsLanes(Text, credits, monthPct, paced);
   const label = limitStyle === "gauge" ? `${badgeOf(credits)} ${Math.round(share)}%` : badgeOf(credits);
-  const badge = Text({ color: hex(contrast(spent)), backgroundColor: hex(spent), children: ` ${label} ` });
+  const { to } = stops("credits");
+  const badge = Text({ color: hex(contrast(to)), backgroundColor: hex(to), children: ` ${label} ` });
   return [Box({ key: "credits", flexDirection: "row", hover: { scope: explainScope("credits") }, children: [badge, ...bar] })];
 }
 
-// Two lanes of ▀: the top one lit to the share of the cap spent, in credits.spent, the bottom one to the share of the
-// billing month gone, in pace.none, none of it with the month unknown. Both are rounded down to whole cells. With a pace,
-// the spent cells ahead of the month, counted from the unrounded shares and rounded up, at most all of them, are the top
-// lane's last, amber turning red toward its end.
+// Two lanes of ▀: the top one lit to the share of the cap spent, in the credits gradient by each cell's place in the
+// whole bar, the bottom one to the share of the billing month gone, in pace.none, none of it with the month unknown.
+// Both are rounded down to whole cells. Unlike a limit's lit cells the spent ones keep the gradient without a pace: grey
+// over the grey month lane would show nothing. With a pace, the spent cells ahead of the month, counted from the
+// unrounded shares and rounded up, at most all of them, are the top lane's last, amber turning red toward its end.
 function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
   const n = barCells.credits;
   const spentPct = creditsShare(credits);
@@ -218,24 +219,26 @@ function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number
   const ahead = paced && monthPct !== undefined ? ((spentPct - monthPct) * n) / 100 : 0;
   const impacted = Math.min(spentCells, ahead > 0 ? wholeCellsAhead(ahead) : 0);
   const empty = color("empty");
+  const { from, to } = stops("credits");
   return [...Array(n).keys()].map((i) => {
-    const top = i >= spentCells ? empty : i < spentCells - impacted ? color("credits.spent") : overPace(i - (spentCells - impacted), impacted);
+    const top = i >= spentCells ? empty : i < spentCells - impacted ? lerp(from, to, i, n) : overPace(i - (spentCells - impacted), impacted);
     return Text({ color: hex(top), backgroundColor: hex(i < monthCells ? color("pace.none") : empty), children: "▀" });
   });
 }
 
 // One lane of ▏-marked cells lit to the share of the cap spent, with a notch on the left edge of the cell after the cells
-// of the month gone, both rounded down. Without a pace there is no notch and every spent cell is in credits.spent; with
-// one the spent cells past the notch are amber turning red away from it.
+// of the month gone, both rounded down. Spent cells draw the credits gradient by their place in the whole bar: without a
+// pace there is no notch and every one does; with one only those before the notch, those past it amber turning red away from it.
 function creditsNotch(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
   const n = barCells.credits;
   const spentCells = creditsSpentCells(credits, n);
   const notch = paced && monthPct !== undefined ? cells(monthPct, n) : undefined;
   const empty = color("empty");
   const mark = (rgb: RGB) => Text({ color: hex(color("pace.par")), backgroundColor: hex(rgb), children: "▏" });
+  const { from, to } = stops("credits");
   // The notch stays inside the lane: a pace needs the lookup within its billing month, so less than all of it has gone.
   return [...Array(n).keys()].map((i) => {
-    const fill = i >= spentCells ? empty : notch === undefined || i < notch ? color("credits.spent") : overPace(i - notch, spentCells - notch);
+    const fill = i >= spentCells ? empty : notch === undefined || i < notch ? lerp(from, to, i, n) : overPace(i - notch, spentCells - notch);
     return i === notch ? mark(fill) : Text({ color: hex(fill), backgroundColor: hex(fill), children: " " });
   });
 }
@@ -625,8 +628,10 @@ const COLORS = {
   "pace.severe": { group: "", label: "lanes: the time lane, when more cells are over pace than the token lane holds", rgb: [153, 27, 27] },
   "pace.par": { group: "", label: "the gauge's pipe and the notch", rgb: [229, 231, 235] },
   "pace.none": { group: "", label: "a limit drawn without a pace: the gauge's pipe, the lanes and the notch's usage", rgb: [107, 114, 128] },
-  // The credits tag's spent cells, a muted rose apart from the amber-to-red over-pace ramp; its badge sits on it.
-  "credits.spent": { group: "Usage credits bar and badge", label: "the usage credits spent", rgb: [184, 122, 140] },
+  // The credits tag's spent cells, lighter to darker as the limits' are, and its badge on the darker. The costs chip's
+  // stops, copied so that either can be changed alone.
+  "credits.from": { group: "Usage credits bar and badge", label: "", rgb: [217, 70, 239] },
+  "credits.to": { group: "", label: "the badge", rgb: [134, 25, 143] },
   // statusline.zsh's _sl_gyr_ramp: green to yellow at 50%, then to red. Three meanings, so with gradients off each stays,
   // as a band of its own.
   "context.low": { group: "Context bar and badge", label: "plenty left", rgb: [34, 197, 94] },
@@ -694,13 +699,18 @@ function modelStyles(): Record<string, ModelStyle> {
 }
 
 // The colors option, a comma list of name=#rrggbb: an unknown name or a colour that does not read is left out.
+// credits.spent, the credits tag's one colour before its gradient, is read as credits.from unless the list names
+// credits.from itself, wherever it stands. saveColor rebuilds the option from this, so the next save drops the old name.
 function overridesOf(option: unknown): Map<ColorName, RGB> {
   const found = new Map<ColorName, RGB>();
+  let spent: RGB | undefined;
   for (const entry of typeof option === "string" ? option.split(",") : []) {
     const [name = "", value = ""] = entry.split("=").map((part) => part.trim());
     const rgb = rgbOf(value);
+    if (name === "credits.spent" && rgb) spent = rgb;
     if (isColor(name) && rgb) found.set(name, rgb);
   }
+  if (spent && !found.has("credits.from")) found.set("credits.from", spent);
   return found;
 }
 
