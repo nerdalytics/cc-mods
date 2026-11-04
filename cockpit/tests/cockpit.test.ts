@@ -4502,21 +4502,26 @@ describe("cockpit", () => {
     expect((await orderedTags($, on, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
   });
 
-  test("draws a sample credits tag while the order pane shows and no credits state exists", async ($, on) => {
-    stubHint(on, START);
-    clockOn(on);
-    on("session.start", ($, e) => ({ cwd: e.cwd }));
-    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
-    on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
-    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const ui = await mountHint($);
-    await caughtUp(on, ui);
-    // The sample's billing month is unknown, so the bottom lane is empty.
-    expect(await creditsTag(ui)).toEqual({ badge: " € ", bar: "TTTT___" });
-    expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
-    await ui.unmount();
-  });
+  // The sample spends 67% of its cap, 4 of 7 cells, or 4 of 6 at credits_length 6.
+  for (const [title, options, bar] of [
+    ["draws a sample credits tag while the order pane shows and no credits state exists", {}, "TTTT___"],
+    ["draws the sample credits tag at credits_length 6 while the order pane shows", { credits_length: 6 }, "TTTT__"],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      stubHint(on, START);
+      clockOn(on);
+      on("session.start", ($, e) => ({ cwd: e.cwd }));
+      on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+      on("session.model", () => ({ value: "claude-opus-5-5" }));
+      on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
+      await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+      const ui = await mountHint($);
+      await caughtUp(on, ui);
+      // The sample's billing month is unknown, so the bottom lane is empty.
+      expect(await creditsTag(ui)).toEqual({ badge: " € ", bar });
+      expect(await explanationOf(ui, "credits")).toBe("€ at 67%: €10.11 of €15.00 spent.");
+      await ui.unmount();
+    });
 
   // The badge and the spent cells as drawn, colour by colour.
   const creditsColors = async (ui: { find: Mounted["find"] }) => {
@@ -4710,6 +4715,47 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     // 67% of 10 cells, floored, with no billing day for a month below.
     expect((await creditsTag(ui))?.bar).toBe("TTTTTT____");
+    await ui.unmount();
+  });
+
+  // The cells a tag's bar draws: the gauge's on each side of its pipe, any other style's in all.
+  const cellsOf = async (ui: { find: Mounted["find"] }, key: string) => {
+    const { bar } = await limitTagOf(ui, key);
+    return bar.includes("│") ? bar.split("│").map((side) => side.length) : bar.length;
+  };
+  const creditsAndSeven = async ($: Engine, on: On) => {
+    stubHint(on, START);
+    holding(on, creditsOf());
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    const drawn = { credits: await cellsOf(ui, "credits"), "7d": await cellsOf(ui, "seven_day") };
+    await ui.unmount();
+    return drawn;
+  };
+  for (const [style, credits] of [["classic", 14], ["lanes", 14], ["notch", 14], ["gauge", [7, 7]]] as const)
+    test(`draws the credits bar in ${style} as long as the 7d bar while credits_length is unset`, { options: { usage_lookup: true, limit_style: style, limit_7d_length: 14 } }, async ($, on) => {
+      expect((await creditsAndSeven($, on)).credits).toEqual(credits);
+    });
+  for (const [style, credits, seven] of [["classic", 6, 14], ["lanes", 6, 14], ["notch", 6, 14], ["gauge", [3, 3], [7, 7]]] as const)
+    test(`draws the credits bar in ${style} at credits_length 6, the 7d bar still at its limit_7d_length 14`, { options: { usage_lookup: true, limit_style: style, limit_7d_length: 14, credits_length: 6 } }, async ($, on) => {
+      expect(await creditsAndSeven($, on)).toEqual({ credits, "7d": seven });
+    });
+  for (const [title, length, credits] of [
+    ["draws a 1-cell credits bar at credits_length 0, the shortest a bar gets", 0, 1],
+    ["draws a 6-cell credits bar at credits_length 6.7, a fraction rounded down", 6.7, 6],
+  ] as const)
+    test(title, { options: { usage_lookup: true, limit_style: "classic", credits_length: length } }, async ($, on) => {
+      expect((await creditsAndSeven($, on)).credits).toBe(credits);
+    });
+
+  test("lights the credits lanes' top lane to the share spent at credits_length 6, the 7d lanes still 14 cells", { options: { usage_lookup: true, limit_style: "lanes", limit_7d_length: 14, credits_length: 6 } }, async ($, on) => {
+    stubHint(on, START);
+    holding(on, creditsOf({ spent: 750 }));
+    await startWithLimits($, on, sevenUsedUp());
+    const ui = await mountHint($);
+    // €7.50 of €15.00 is 50%, 3 of 6 cells on top; with no billing day the month below is empty.
+    expect((await creditsTag(ui))?.bar).toBe("TTT___");
+    expect(await cellsOf(ui, "seven_day")).toBe(14);
     await ui.unmount();
   });
 

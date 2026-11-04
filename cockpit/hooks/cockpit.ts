@@ -181,7 +181,7 @@ function creditsShown(s: Snapshot): StatusCredits | undefined {
   return s.sampled || (usageLookup && s.credits?.enabled && windowUsedUp(s.usage.rateLimits, s.rejected, s.now * 1000)) ? s.credits : undefined;
 }
 
-// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent in the 7d
+// The credits tag, none unless creditsShown: the currency's badge on credits.spent, then the cap's share spent in the credits
 // bar's length, drawn against the share of the billing month gone: that share counts while the month is known, and the
 // pace only while creditsPace says there is one.
 function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
@@ -197,7 +197,7 @@ function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
   const share = creditsShare(credits);
   const bar =
     limitStyle === "gauge"
-      ? gaugeCells(Text, barCells["7d"], paced && monthPct !== undefined ? { r: share / monthPct } : undefined)
+      ? gaugeCells(Text, barCells.credits, paced && monthPct !== undefined ? { r: share / monthPct } : undefined)
       : limitStyle === "notch"
         ? creditsNotch(Text, credits, monthPct, paced)
         : creditsLanes(Text, credits, monthPct, paced);
@@ -211,7 +211,7 @@ function creditsSegment({ Box, Text }: Ui, s: Snapshot): Parts {
 // the spent cells ahead of the month, counted from the unrounded shares and rounded up, at most all of them, are the top
 // lane's last, amber turning red toward its end.
 function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
-  const n = barCells["7d"];
+  const n = barCells.credits;
   const spentPct = creditsShare(credits);
   const spentCells = creditsSpentCells(credits, n);
   const monthCells = monthPct === undefined ? 0 : cells(monthPct, n);
@@ -228,7 +228,7 @@ function creditsLanes(Text: Ui["Text"], credits: StatusCredits, monthPct: number
 // of the month gone, both rounded down. Without a pace there is no notch and every spent cell is in credits.spent; with
 // one the spent cells past the notch are amber turning red away from it.
 function creditsNotch(Text: Ui["Text"], credits: StatusCredits, monthPct: number | undefined, paced: boolean) {
-  const n = barCells["7d"];
+  const n = barCells.credits;
   const spentCells = creditsSpentCells(credits, n);
   const notch = paced && monthPct !== undefined ? cells(monthPct, n) : undefined;
   const empty = color("empty");
@@ -752,8 +752,8 @@ let keepWarm = 0;
 let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
-// The cells each bar draws, from the limit_7d_length, limit_5h_length and context_length options.
-let barCells = BAR_CELLS;
+// The cells each bar draws, from the limit_7d_length, limit_5h_length, context_length and credits_length options.
+let barCells = { ...BAR_CELLS, credits: BAR_CELLS["7d"] };
 // The limit_style option; a value it does not know reads as classic.
 let limitStyle: LimitStyle = "classic";
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -831,10 +831,13 @@ export const register: Register = (on, options) => {
   lists = listsOf(layout, shown, mergeCosts);
   rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
+  const seven = lengthOf(options.limit_7d_length, BAR_CELLS["7d"]);
   barCells = {
-    "7d": lengthOf(options.limit_7d_length, BAR_CELLS["7d"]),
+    "7d": seven,
     "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
     context: lengthOf(options.context_length, BAR_CELLS.context),
+    // Unset, the credits bar keeps the 7d bar's length, which is why its manifest entry has no default.
+    credits: lengthOf(options.credits_length, seven),
   };
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
