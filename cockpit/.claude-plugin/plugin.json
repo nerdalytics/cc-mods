@@ -113,7 +113,8 @@
     "credits_length": {
       "type": "number",
       "title": "Cockpit: Usage credits bar › length (cells)",
-      "description": "The number of cells the usage credits tag's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. While this is unset, the usage credits bar takes the 7d bar's length. (default: the 7d bar's length)",
+      "description": "The number of cells the usage credits tag's bar draws. A longer bar shows the same percentage in finer steps. The gauge style splits the length in half, one half to each side of the pipe, rounded down. (default: 5)",
+      "default": 5,
       "min": 0
     },
     "smart_zone": {

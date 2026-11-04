@@ -596,8 +596,8 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
 // How both limit tags draw, the limit_style option.
 const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
-// The cells each bar draws when its length option is unset, as cockpit 1.1.0 drew them.
-const BAR_CELLS = { "7d": 7, "5h": 10, context: 10 };
+// The cells each bar draws when its length option is unset: 7d, 5h and context as cockpit 1.1.0 drew them.
+const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5 };
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
 // its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
@@ -763,7 +763,7 @@ let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
 // The cells each bar draws, from the limit_7d_length, limit_5h_length, context_length and credits_length options.
-let barCells = { ...BAR_CELLS, credits: BAR_CELLS["7d"] };
+let barCells = { ...BAR_CELLS };
 // The limit_style option; a value it does not know reads as classic.
 let limitStyle: LimitStyle = "classic";
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -841,13 +841,11 @@ export const register: Register = (on, options) => {
   lists = listsOf(layout, shown, mergeCosts);
   rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
-  const seven = lengthOf(options.limit_7d_length, BAR_CELLS["7d"]);
   barCells = {
-    "7d": seven,
+    "7d": lengthOf(options.limit_7d_length, BAR_CELLS["7d"]),
     "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
     context: lengthOf(options.context_length, BAR_CELLS.context),
-    // Unset, the credits bar keeps the 7d bar's length, which is why its manifest entry has no default.
-    credits: lengthOf(options.credits_length, seven),
+    credits: lengthOf(options.credits_length, BAR_CELLS.credits),
   };
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);

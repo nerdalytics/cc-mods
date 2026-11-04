@@ -4509,9 +4509,9 @@ describe("cockpit", () => {
     expect((await orderedTags($, on, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
   });
 
-  // The sample spends 67% of its cap, 4 of 7 cells, or 4 of 6 at credits_length 6.
+  // The sample spends 67% of its cap, 3 of the default 5 cells, or 4 of 6 at credits_length 6.
   for (const [title, options, bar] of [
-    ["draws a sample credits tag while the order pane shows and no credits state exists", {}, "TTTT___"],
+    ["draws a sample credits tag while the order pane shows and no credits state exists", {}, "TTT__"],
     ["draws the sample credits tag at credits_length 6 while the order pane shows", { credits_length: 6 }, "TTTT__"],
   ] as const)
     test(title, { options }, async ($, on) => {
@@ -4553,7 +4553,7 @@ describe("cockpit", () => {
     [true, "#86198f", 1],
     [false, "#112233", 4],
   ] as const)
-    test(`draws the colors option's credits.spent as credits.from, with gradients ${gradients ? "on" : "off"}`, { options: { usage_lookup: true, gradients, colors: "credits.spent=#112233" } }, async ($, on) => {
+    test(`draws the colors option's credits.spent as credits.from, with gradients ${gradients ? "on" : "off"}`, { options: { usage_lookup: true, credits_length: 7, gradients, colors: "credits.spent=#112233" } }, async ($, on) => {
       stubHint(on, START);
       holding(on, creditsOf());
       await startWithLimits($, on, sevenUsedUp());
@@ -4721,6 +4721,7 @@ describe("cockpit", () => {
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   // The date a reset reads as: `Nov 17 4 PM` for 4 PM local on that day.
   const dateAt = (at: Date) => `${MONTHS[at.getMonth()]} ${at.getDate()} 4 PM`;
+  // The credits tests that work out cells for a 7-cell bar set credits_length 7, as the bar's default is 5.
   const creditsTag = async (ui: { find: Mounted["find"] }) => {
     const tag = await ui.find({ type: "Box", key: "credits" });
     if (!tag) return undefined;
@@ -4729,7 +4730,7 @@ describe("cockpit", () => {
   };
 
   // The tag's text and bar. The billing day is 5 days out, so the reset is the date 5 days from today at the 7d's 4 PM.
-  test("draws the credits tag: € on its badge, the share spent as cells, and its explanation with the reset", { options: { usage_lookup: true, limit_style: "classic" } }, async ($, on) => {
+  test("draws the credits tag: € on its badge, the share spent as cells, and its explanation with the reset", { options: { usage_lookup: true, credits_length: 7, limit_style: "classic" } }, async ($, on) => {
     stubHint(on, START);
     const billing = localAt(5, 16);
     holding(on, creditsOf(), billing.getDate());
@@ -4741,7 +4742,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("draws the credits bar in the 7d bar's length", { options: { usage_lookup: true, limit_7d_length: 10 } }, async ($, on) => {
+  test("draws the credits bar at credits_length 10", { options: { usage_lookup: true, credits_length: 10 } }, async ($, on) => {
     stubHint(on, START);
     holding(on, creditsOf());
     await startWithLimits($, on, sevenUsedUp());
@@ -4765,9 +4766,9 @@ describe("cockpit", () => {
     await ui.unmount();
     return drawn;
   };
-  for (const [style, credits] of [["classic", 14], ["lanes", 14], ["notch", 14], ["gauge", [7, 7]]] as const)
-    test(`draws the credits bar in ${style} as long as the 7d bar while credits_length is unset`, { options: { usage_lookup: true, limit_style: style, limit_7d_length: 14 } }, async ($, on) => {
-      expect((await creditsAndSeven($, on)).credits).toEqual(credits);
+  for (const [style, credits, seven] of [["classic", 5, 14], ["lanes", 5, 14], ["notch", 5, 14], ["gauge", [2, 2], [7, 7]]] as const)
+    test(`draws the credits bar in ${style} at its default of 5 cells while credits_length is unset, the 7d bar at its limit_7d_length 14`, { options: { usage_lookup: true, limit_style: style, limit_7d_length: 14 } }, async ($, on) => {
+      expect(await creditsAndSeven($, on)).toEqual({ credits, "7d": seven });
     });
   for (const [style, credits, seven] of [["classic", 6, 14], ["lanes", 6, 14], ["notch", 6, 14], ["gauge", [3, 3], [7, 7]]] as const)
     test(`draws the credits bar in ${style} at credits_length 6, the 7d bar still at its limit_7d_length 14`, { options: { usage_lookup: true, limit_style: style, limit_7d_length: 14, credits_length: 6 } }, async ($, on) => {
@@ -4792,7 +4793,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("explains the credits without a reset and draws no month below when the 7d has no reset time", { options: { usage_lookup: true } }, async ($, on) => {
+  test("explains the credits without a reset and draws no month below when the 7d has no reset time", { options: { usage_lookup: true, credits_length: 7 } }, async ($, on) => {
     stubHint(on, START);
     holding(on, creditsOf(), 17);
     await startWithLimits($, on, [{ kind: "seven_day", percentUsed: 100 }]);
@@ -4845,7 +4846,7 @@ describe("cockpit", () => {
       seven: { ...(await limitTagOf(ui, "seven_day")), badgeProps: await badgeProps(ui, "seven_day") },
     }));
 
-  test("draws a full credits bar in classic from credits.from to credits.to as the 7d draws its gradient, the badge on credits.to", { options: { usage_lookup: true, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws a full credits bar in classic from credits.from to credits.to as the 7d draws its gradient, the badge on credits.to", { options: { usage_lookup: true, credits_length: 7, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
     const { credits, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent: 1500, capReached: true }, 1);
     expect(credits.colors.slice(0, 6)).toEqual(seven.backgrounds.slice(0, 6));
     expect([credits.colors[0], credits.colors[6]]).toEqual(["#d946ef", "#86198f"]);
@@ -4858,7 +4859,7 @@ describe("cockpit", () => {
     ["classic", { spent: 1500, capReached: true }, Array(7).fill("#d946ef")],
     ["lanes", { spent: 1000 }, ["#d946ef", "#fbbf24", "#fbbf24", "#fbbf24", GREY, GREY, GREY]],
   ] as const)
-    test(`with gradients off draws the credits badge and every spent cell not over pace in credits.from, in ${style}`, { options: { usage_lookup: true, limit_style: style, gradients: false } }, async ($, on) => {
+    test(`with gradients off draws the credits badge and every spent cell not over pace in credits.from, in ${style}`, { options: { usage_lookup: true, credits_length: 7, limit_style: style, gradients: false } }, async ($, on) => {
       const { credits: drawn } = await besideSeven($, on, inNovember(11).getTime(), credits, 1);
       expect(drawn.badgeProps).toMatchObject({ backgroundColor: "#d946ef" });
       expect(drawn.colors).toEqual([...colors]);
@@ -4867,7 +4868,7 @@ describe("cockpit", () => {
   // A full credits bar's gradient: the 7d's 6 lit cells over sevenLit, then the dark end, which the 7d leaves unlit.
   const fullBar = (sevenCells: unknown[]) => [...sevenCells.slice(0, 6), "#86198f"];
 
-  test("draws the credits lanes under pace: the top lane lit to the spend in the credits gradient, the bottom to the month gone, dim", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws the credits lanes under pace: the top lane lit to the spend in the credits gradient, the bottom to the month gone, dim", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     // €5.00 of €15.00 is 33%, 2 of 7 cells; 18 of the 30 days of the month that began Nov 1 4 PM are 60%, 4 cells.
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(19).getTime(), { spent: 500 }, 1);
     expect(drawn.bar).toBe("▀▀▀▀▀▀▀");
@@ -4875,7 +4876,7 @@ describe("cockpit", () => {
     expect(drawn.backgrounds).toEqual([DIM, DIM, DIM, DIM, GREY, GREY, GREY]);
   });
 
-  test("draws the credits lanes over pace: the last cells of the top lane amber to red, one per cell ahead of the month, rounded up", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws the credits lanes over pace: the last cells of the top lane amber to red, one per cell ahead of the month, rounded up", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     // €10.00 of €15.00 is 67%, 4 of 7 cells; a third of the month is 2.33 cells, so the spend is 2.33 cells ahead: 3 impacted.
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent: 1000 }, 1);
     expect(drawn.colors).toEqual([seven.colors[0], "#fbbf24", "#f58234", RED, GREY, GREY, GREY]);
@@ -4887,13 +4888,13 @@ describe("cockpit", () => {
     ["draws the credits lanes without a pace once the cap is reached: every top cell in the credits gradient, the month below dim", { capReached: true }, 7],
     ["draws the credits lanes without a pace once the credits are out: the spent cells all in the credits gradient, the month below dim", { reason: "out_of_credits" }, 4],
   ] as const)
-    test(title, { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+    test(title, { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
       const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent: 1000, ...state }, 1);
       expect(drawn.colors).toEqual([...fullBar(seven.colors).slice(0, lit), ...Array(7 - lit).fill(GREY)]);
       expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
     });
 
-  test("draws the credits lanes in classic with the credits gradient on every lit cell and the month below, however far ahead the spend is", { options: { usage_lookup: true, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws the credits lanes in classic with the credits gradient on every lit cell and the month below, however far ahead the spend is", { options: { usage_lookup: true, credits_length: 7, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
     // 1400 of 1500 is 93%, 6 cells, 5 of them ahead of a third of the month, yet none amber or red.
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent: 1400 }, 1);
     expect(drawn.colors).toEqual([...seven.backgrounds.slice(0, 6), GREY]);
@@ -4906,7 +4907,7 @@ describe("cockpit", () => {
     ["fills the credits gauge right of the pipe amber to red over pace, and reads the share spent in the badge", 1011, " € 67% ", "   │█▌ ", [GREY, GREY, GREY, "#e5e7eb", "#fbbf24", "#f58234", GREY]],
     ["fills the credits gauge left of the pipe in slate under pace", 300, " € 20% ", "  █│   ", [GREY, GREY, "#94a3b8", "#e5e7eb", GREY, GREY, GREY]],
   ] as const)
-    test(title, { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+    test(title, { options: { usage_lookup: true, credits_length: 7, limit_style: "gauge" } }, async ($, on) => {
       const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { spent }, 1);
       expect(drawn.badge).toBe(badge);
       expect(drawn.bar).toBe(bar);
@@ -4919,14 +4920,14 @@ describe("cockpit", () => {
     ["draws the credits notch after the cells of the month gone, the spent cells past it amber to red", 1000, 2, ["#fbbf24", RED, GREY, GREY, GREY]],
     ["draws the credits notch with the spent cells short of it all in the credits gradient", 300, 1, [GREY, GREY, GREY, GREY, GREY, GREY]],
   ] as const)
-    test(title, { options: { usage_lookup: true, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
+    test(title, { options: { usage_lookup: true, credits_length: 7, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
       const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent }, 1);
       expect(drawn.bar).toBe("  ▏    ");
       expect(drawn.backgrounds).toEqual([...seven.backgrounds.slice(0, gradient), ...rest]);
       expect(drawn.colors[2]).toBe("#e5e7eb");
     });
 
-  test("leaves the credits bottom lane empty without a billing day, lighting the top lane to the spend alone in the credits gradient", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("leaves the credits bottom lane empty without a billing day, lighting the top lane to the spend alone in the credits gradient", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     // 500 of 1500 is 33%, 2 of 7 cells.
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { spent: 500 }, undefined);
     expect(drawn.colors).toEqual([...seven.colors.slice(0, 2), GREY, GREY, GREY, GREY, GREY]);
@@ -4936,25 +4937,25 @@ describe("cockpit", () => {
   // A lookup 11 minutes old has no pace, though a third of the month, 2 cells, is known to have gone.
   const STALE = { at: inNovember(11).getTime() - 11 * MINUTE };
 
-  test("keeps the credits bottom lane lit to the month gone, with no amber or red, when the lookup is too old for a pace", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("keeps the credits bottom lane lit to the month gone, with no amber or red, when the lookup is too old for a pace", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
     expect(drawn.colors).toEqual([...seven.colors.slice(0, 4), GREY, GREY, GREY]);
     expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
   });
 
-  test("leaves the credits gauge's cells blank round a dim pipe without a pace", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+  test("leaves the credits gauge's cells blank round a dim pipe without a pace", { options: { usage_lookup: true, credits_length: 7, limit_style: "gauge" } }, async ($, on) => {
     const drawn = await creditsDrawn($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
     expect(drawn.bar).toBe("   │   ");
     expect(drawn.colors).toEqual([GREY, GREY, GREY, DIM, GREY, GREY, GREY]);
   });
 
-  test("draws the credits notch lane with no notch without a pace, the spent cells in the credits gradient", { options: { usage_lookup: true, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws the credits notch lane with no notch without a pace, the spent cells in the credits gradient", { options: { usage_lookup: true, credits_length: 7, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), { ...STALE, spent: 1000 }, 1);
     expect(drawn.bar).toBe("       ");
     expect(drawn.backgrounds).toEqual([...seven.backgrounds.slice(0, 4), GREY, GREY, GREY]);
   });
 
-  test("lights every cell of the credits top lane once the cap is reached, though the spend rounds lower", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("lights every cell of the credits top lane once the cap is reached, though the spend rounds lower", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     // 1499 of 1500 is 99.9%, 6 of 7 cells; the lookup says the cap is reached. With no billing day there is no pace to colour any.
     const { credits: drawn, seven } = await besideSeven($, on, START, { spent: 1499, capReached: true }, undefined);
     expect(drawn.colors).toEqual(fullBar(seven.colors));
@@ -5004,25 +5005,25 @@ describe("cockpit", () => {
 
   // The spend above the cap lights every cell it can in each style: 4.8 cells ahead of the month, the last 5 of the 7 over pace
   // in lanes; in the notch lane every cell, the 5 past the notch after the 2nd over pace; the gauge's right side 4 halves.
-  test("draws a spend above the cap in lanes with every top-lane cell lit, the last 5 amber to red", { options: { usage_lookup: true, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws a spend above the cap in lanes with every top-lane cell lit, the last 5 amber to red", { options: { usage_lookup: true, credits_length: 7, limit_style: "lanes", colors: AS_CREDITS } }, async ($, on) => {
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
     expect(drawn.colors).toEqual([...seven.colors.slice(0, 2), "#fbbf24", "#f8a12c", "#f58234", "#f2633c", RED]);
     expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
   });
 
-  test("draws a spend above the cap in classic with every top-lane cell lit in the credits gradient", { options: { usage_lookup: true, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws a spend above the cap in classic with every top-lane cell lit in the credits gradient", { options: { usage_lookup: true, credits_length: 7, limit_style: "classic", colors: AS_CREDITS } }, async ($, on) => {
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
     expect(drawn.colors).toEqual(fullBar(seven.backgrounds));
     expect(drawn.backgrounds).toEqual([DIM, DIM, GREY, GREY, GREY, GREY, GREY]);
   });
 
-  test("draws a spend above the cap in the notch lane with every cell lit, the 5 past the notch amber to red", { options: { usage_lookup: true, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
+  test("draws a spend above the cap in the notch lane with every cell lit, the 5 past the notch amber to red", { options: { usage_lookup: true, credits_length: 7, limit_style: "notch", colors: AS_CREDITS } }, async ($, on) => {
     const { credits: drawn, seven } = await besideSeven($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
     expect(drawn.bar).toBe("  ▏    ");
     expect(drawn.backgrounds).toEqual([...seven.backgrounds.slice(0, 2), "#fbbf24", "#f8a12c", "#f58234", "#f2633c", RED]);
   });
 
-  test("draws a spend above the cap in the gauge reading $ 102%, its right side filled 4 halves", { options: { usage_lookup: true, limit_style: "gauge" } }, async ($, on) => {
+  test("draws a spend above the cap in the gauge reading $ 102%, its right side filled 4 halves", { options: { usage_lookup: true, credits_length: 7, limit_style: "gauge" } }, async ($, on) => {
     const drawn = await creditsDrawn($, on, inNovember(11).getTime(), ABOVE_CAP, 1);
     expect(drawn.badge).toBe(" $ 102% ");
     expect(drawn.bar).toBe("   │██ ");
@@ -5147,7 +5148,7 @@ describe("cockpit", () => {
     ["enabled and the 7d at 80% and the 5h at 40%", creditsOf(), [sevenResettingAt(80, localAt(2, 16)), { kind: "five_hour", percentUsed: 40, resetsAt: localAt(0, 23, 59).toISOString() }], undefined, false],
     ["not enabled and the 7d at 100%", creditsOf({ enabled: false }), sevenUsedUp(), undefined, false],
   ] as const)
-    test(`${drawn ? "draws" : "draws no"} credits tag with extra usage ${what}`, { options: { usage_lookup: true } }, async ($, on) => {
+    test(`${drawn ? "draws" : "draws no"} credits tag with extra usage ${what}`, { options: { usage_lookup: true, credits_length: 7 } }, async ($, on) => {
       stubHint(on, START);
       holding(on, credits, 17, rejected);
       await startWithLimits($, on, [...limits]);
