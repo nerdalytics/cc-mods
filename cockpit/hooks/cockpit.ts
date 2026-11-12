@@ -1594,7 +1594,9 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     const busts = count === 0 ? "No busts this session." : `${count} ${count === 1 ? "bust" : "busts"} this session, ${when}${paid}.`;
     // Rounded to one decimal, but never up to 100.0% short of a whole prompt read, which would hide its writes.
     const rate = newest.rate < 100 ? Math.min(newest.rate, 99.9) : 100;
-    out.cache_hits = `Cache hits: the last request read ${rate.toFixed(1)}% of its prompt from the cache. ${busts} Sparks run from ${hitsFloor}% to 100%, amber under ${hitsFloor}%, red under 50%.`;
+    // At a floor of 50 nothing lies between it and the bust line, so nothing draws amber.
+    const amber = hitsFloor > 50 ? ` amber under ${hitsFloor}%,` : "";
+    out.cache_hits = `Cache hits: the last request read ${rate.toFixed(1)}% of its prompt from the cache. ${busts} Sparks run from ${hitsFloor}% to 100%,${amber} red under 50%.`;
   }
   return out;
 }

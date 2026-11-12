@@ -42,6 +42,20 @@ const litCells = (cells: readonly unknown[]): string =>
     })
     .join("");
 const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
+// A drawn part's props; a Text drawn with no props comes back without them.
+const propsOf = (part: unknown): Record<string, unknown> => (typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null ? { ...part.props } : {});
+// The colours pane's lines in order: a heading by its text, a field by its Input's key and value, then with `labelled`
+// its label, the one Text drawn with no props.
+async function colourLines(ui: { drawn: () => Promise<unknown> }, labelled = true): Promise<string[]> {
+  const drawn = await ui.drawn();
+  return (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
+    const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
+    const input: unknown = props === undefined ? undefined : JSON.parse(props);
+    const label = /"type":"Text","children":\["([^"]*)"\]/.exec(JSON.stringify(node))?.[1];
+    if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [labelled ? `${input.key}=${input.value} ${label}` : `${input.key}=${input.value}`];
+    return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
+  });
+}
 // What the explanation line shows in its flow, the hidden explanations laid over it left out.
 const shownIn = (line: FoundElement) => elements(line.children).filter((child) => child.props.position !== "absolute").map(flat).join("");
 // The eight tags an explanation stands behind, by the scope each joins and the key its Box draws with.
@@ -2448,12 +2462,11 @@ describe("cockpit", () => {
     await caughtUp(on, ui);
     return ui;
   }
-  // The cache_hits tag's parts, each its text and its colour by name: spark, low, bust, dim or none. A Text drawn with
-  // no props comes back without them.
+  // The cache_hits tag's parts, each its text and its colour by name: spark, low, bust, dim or none.
   const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
   const hitsParts = async (ui: Mounted<"terminal", "PromptHint">) =>
     must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => {
-      const props: Record<string, unknown> = typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null ? { ...part.props } : {};
+      const props = propsOf(part);
       const text = typeof part === "object" && part !== null && "children" in part && Array.isArray(part.children) ? part.children.join("") : String(part);
       return [text, props.dimColor === true ? "dim" : (HIT_COLOURS[String(props.color)] ?? "none")];
     });
@@ -2564,6 +2577,7 @@ describe("cockpit", () => {
   for (const [title, options, text] of [
     ["explains cache_hits with no bust: the last request's hit rate, none counted, and the floor", {}, "Cache hits: the last request read 99.6% of its prompt from the cache. No busts this session. Sparks run from 95% to 100%, amber under 95%, red under 50%."],
     ["explains cache_hits at cache_hits_floor 97 with the sparks running from 97%", { cache_hits_floor: 97 }, "Cache hits: the last request read 99.6% of its prompt from the cache. No busts this session. Sparks run from 97% to 100%, amber under 97%, red under 50%."],
+    ["explains cache_hits at cache_hits_floor 50 with no amber, as nothing draws between the floor and the bust line", { cache_hits_floor: 50 }, "Cache hits: the last request read 99.6% of its prompt from the cache. No busts this session. Sparks run from 50% to 100%, red under 50%."],
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await hitsDrawn($, on, [firstHit(), hitAt("last", localAt(0, 15, 20), 99.6)]);
@@ -2596,9 +2610,7 @@ describe("cockpit", () => {
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await hitsDrawn($, on, [100, 2].map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
-      const backgrounds = must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) =>
-        typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null && "backgroundColor" in part.props ? part.props.backgroundColor : undefined,
-      );
+      const backgrounds = must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => propsOf(part).backgroundColor);
       expect(backgrounds).toEqual([undefined, ...Array.from({ length: 12 }, () => grey), grey]);
       await ui.unmount();
     });
@@ -4425,14 +4437,7 @@ describe("cockpit", () => {
     clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
-    const drawn = await ui.drawn();
-    // The pane's lines in order: a heading by its text, a field by its Input's key and value.
-    const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
-      const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
-      const input: unknown = props === undefined ? undefined : JSON.parse(props);
-      if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value}`];
-      return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
-    });
+    const lines = await colourLines(ui, false);
     const at = lines.indexOf("Limit pace");
     expect(lines.slice(at, at + 8)).toEqual(["Limit pace", "pace.under=#94a3b8", "pace.over.from=#fbbf24", "pace.over.to=#ef4444", "pace.spare=#60a5fa", "pace.severe=#991b1b", "pace.par=#e5e7eb", "pace.none=#6b7280"]);
     await ui.unmount();
@@ -4815,16 +4820,7 @@ describe("cockpit", () => {
     clockOn(on, START);
     on("config.list", () => ({ value: [] }));
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-colors", props: { title: "Cockpit colours", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
-    const drawn = await ui.drawn();
-    // The pane's lines in order: a heading by its text, a field by its Input's key and value.
-    const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
-      const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
-      const input: unknown = props === undefined ? undefined : JSON.parse(props);
-      // A field's label is the one Text drawn with no props.
-      const label = /"type":"Text","children":\["([^"]*)"\]/.exec(JSON.stringify(node))?.[1];
-      if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value} ${label}`];
-      return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
-    });
+    const lines = await colourLines(ui);
     const at = lines.indexOf("Usage credits bar and badge");
     expect(lines.slice(at, at + 4)).toEqual(["Usage credits bar and badge", "credits.from=#d946ef light end", "credits.to=#86198f dark end, the badge", expect.stringMatching(/^Context bar and badge$/)]);
     expect(lines.filter((line) => line.startsWith("credits.spent="))).toEqual([]);
@@ -4834,15 +4830,7 @@ describe("cockpit", () => {
   for (const gradients of [true, false])
     test(`lists hits.spark, hits.low and hits.bust in a Cache hits group of their own in the colours pane, with their defaults, with gradients ${gradients ? "on" : "off"}`, { options: { gradients } }, async ($, on) => {
       await colorsPane($, on, { gradients }, async (ui) => {
-        const drawn = await ui.drawn();
-        // A heading by its text, a field by its Input's key and value, then its label: the one Text drawn with no props.
-        const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
-          const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
-          const input: unknown = props === undefined ? undefined : JSON.parse(props);
-          const label = /"type":"Text","children":\["([^"]*)"\]/.exec(JSON.stringify(node))?.[1];
-          if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value} ${label}`];
-          return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
-        });
+        const lines = await colourLines(ui);
         const at = lines.indexOf("Cache hits");
         expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
       });
