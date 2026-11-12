@@ -1,6 +1,6 @@
 // Much of this ports statusline.zsh, the shell status line it replaces: https://github.com/nerdalytics/claude-statusline
 import type { Elements, EngineInterface, Register } from "claude-code";
-import type { StatusCache, StatusCredits, StatusGit, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
+import type { StatusCache, StatusCredits, StatusGit, StatusHits, StatusLimit, StatusPr, StatusSpend, StatusTokens, StatusUsage } from "../types";
 
 type Ui = Elements["terminal"];
 
@@ -78,6 +78,7 @@ const SEGMENTS = {
   tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(0, 1) : []),
   agents: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(1) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
+  cache_hits: ({ Box, Text }, s) => (s.tokens?.hits ? [hitsParts(Box, Text, s.tokens.hits)] : []),
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
@@ -335,7 +336,7 @@ type Gap = (typeof GAPS)[number];
 const isGap = (name: string): name is Gap => GAPS.some((gap) => gap === name);
 type Filler = Spacer | Gap;
 const isFiller = (name: string): name is Filler => isSpacer(name) || isGap(name);
-const STATUS_ROW = ["model", "limit_7d", "limit_5h", "credits", "context", "turns", "tokens", "agents", "cache"] as const;
+const STATUS_ROW = ["model", "limit_7d", "limit_5h", "credits", "context", "turns", "tokens", "agents", "cache", "cache_hits"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
@@ -415,6 +416,7 @@ const LABELS: Record<string, string> = {
   tokens: "main session costs",
   agents: "subagent costs",
   cache: "cache",
+  cache_hits: "cache hits",
   folders: "folders",
   branch: "branch",
   worktree: "worktree",
@@ -597,7 +599,9 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
 const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset: 7d, 5h and context as cockpit 1.1.0 drew them.
-const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5 };
+const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5, cache_hits: 12 };
+// The percent the cache_hits sparkline scales up from to 100%.
+const HITS_FLOOR = 95;
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
 // its .to; with the gradients option off a run is its .from colour alone, and .to is not asked for. The colour code, by
@@ -646,6 +650,10 @@ const COLORS = {
   "costs.to": { group: "", label: "the mark", rgb: [134, 25, 143] },
   "agents.from": { group: "Subagents' costs chip", label: "", rgb: [251, 191, 36] },
   "agents.to": { group: "", label: "the mark", rgb: [180, 83, 9] },
+  // The cache_hits sparkline: a request at or above the floor, one under it, and a bust with the bust count.
+  "hits.spark": { group: "Cache hits", label: "at or above the floor", rgb: [74, 222, 128] },
+  "hits.low": { group: "", label: "under the floor", rgb: [251, 191, 36] },
+  "hits.bust": { group: "", label: "a bust and the bust count", rgb: [239, 68, 68] },
   // The cache chip: green while the next prompt reads the cache, red once it writes it again.
   "cache.warm.from": { group: "Cache chip, warm", label: "", rgb: [74, 222, 128] },
   "cache.warm.to": { group: "", label: "the mark", rgb: [21, 128, 61] },
@@ -737,6 +745,8 @@ const AGENT_MARK = "\uf0e7";
 const PROMPT_MARK = "⏎";
 // The moon's phases, empty to full: the context icon's fill, and the cache chip's time left (empty once cold).
 const MOON = [..."○◔◑◕●"];
+// A sparkline's steps, lowest first.
+const SPARKS = [..."▁▂▃▄▅▆▇█"];
 
 let tick: { cancel: () => void } | undefined;
 // Advanced per frame rather than derived from the clock, so a speed change carries on from where the sweep is.
@@ -846,6 +856,7 @@ export const register: Register = (on, options) => {
     "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
     context: lengthOf(options.context_length, BAR_CELLS.context),
     credits: lengthOf(options.credits_length, BAR_CELLS.credits),
+    cache_hits: BAR_CELLS.cache_hits,
   };
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
@@ -1180,7 +1191,7 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
 }
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
-// turns up during work: the limits, context, turns, costs and cache; a branch, worktree, commits ahead and behind, conflict and
+// turns up during work: the limits, context, turns, costs, cache and cache hits; a branch, worktree, commits ahead and behind, conflict and
 // changes; a pull request with its review, comments and checks. The limits' resets are set from now, so they show a pace.
 function withSamples(s: Snapshot): Snapshot {
   const kinds = s.usage.rateLimits.map((r) => r.kind);
@@ -1201,7 +1212,7 @@ function withSamples(s: Snapshot): Snapshot {
     credits: s.credits?.enabled ? s.credits : { at: s.now * 1000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null },
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
-    tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 } },
+    tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 }, hits: tokens.hits ?? sampleHits(s.now * 1000) },
     git: g && {
       ...g,
       branch: g.branch || "feature",
@@ -1217,6 +1228,14 @@ function withSamples(s: Snapshot): Snapshot {
       ...(checked ? {} : { failedUrls: [""], checks: { pending: 1, failure: 1, success: 4 } }),
     },
   };
+}
+
+// The order pane's cache_hits: every cell a request, a minute apart, mostly near-perfect, with one under the floor and
+// one counted bust.
+function sampleHits(now: number): StatusHits {
+  const rates = [99.8, 99.5, 97.2, 100, 94, 99.9, 11.4, 99.1, 99.7, 98.6, 100, 99.4];
+  const n = barCells.cache_hits;
+  return { points: Array.from({ length: n }, (_, i) => ({ at: now - (n - i) * 60_000, rate: rates[i % rates.length] ?? 100 })), busts: { count: 1, at: now - 6 * 60_000, usd: 0.7 } };
 }
 
 // A row of tags, each a list of parts, with spacers and gaps; nothing when no tag has a part. A run of spacers is one
@@ -2126,14 +2145,19 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   // Every request's time, and the main ones' prompt and cache read: the label above is what a write was billed as, not
   // how long it lived, so a read after a long idle stretch settles the lifetime.
   const stamps: number[] = [];
-  const mains: { at: number; prompt: number; read: number }[] = [];
-  // A compaction swaps the conversation for its summary: the cached prefix before it is never read again.
+  const mains: { at: number; prompt: number; read: number; write?: number }[] = [];
+  // A compaction swaps the conversation for its summary: the cached prefix before it is never read again. Every one's
+  // time, for the cache_hits tag's busts.
   let compactedAt = -Infinity;
+  const boundaries: number[] = [];
   const add = (line: string) => {
     const parsed = parseJson(line);
     if (!isRecord(parsed)) return;
     const row: TranscriptRow = parsed;
-    if (row.subtype === "compact_boundary" && !row.agentId) compactedAt = Math.max(compactedAt, Date.parse(row.timestamp ?? ""));
+    if (row.subtype === "compact_boundary" && !row.agentId) {
+      compactedAt = Math.max(compactedAt, Date.parse(row.timestamp ?? ""));
+      boundaries.push(Date.parse(row.timestamp ?? ""));
+    }
     const u = row.message?.usage;
     if (row.type !== "assistant" || !isRecord(u)) return;
     const model = String(row.message?.model ?? "");
@@ -2156,7 +2180,7 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     if (Number.isFinite(at)) stamps.push(at);
     if (!row.agentId && Number.isFinite(at)) {
       const prompt = counts.inp + counts.read + counts.w5 + counts.w1;
-      mains.push({ at, prompt, read: counts.read });
+      mains.push({ at, prompt, read: counts.read, write: requestCost(model, u.speed, { ...counts, inp: 0, out: 0, read: 0 }, prompt) });
       if (!last || at >= last.at) last = { at, prompt, model, speed: u.speed };
       if (!first || at < first.at) first = { at, prompt };
       if ((counts.w5 > 0 || counts.w1 > 0) && at >= ttlAt) {
@@ -2192,7 +2216,21 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
       const before = mains[i - 1];
       return before !== undefined && m.at - before.at > 300_000 && m.read >= 0.8 * before.prompt && !stamps.some((t) => t > before.at && t < m.at);
     });
-  return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined };
+  return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined, hits: hitsOf(mains, boundaries) };
+}
+
+// The cache_hits tag's newest requests, as many as it draws, and the busts of the whole session, so one that scrolled out
+// still counts; none before a request with a prompt. A bust reads under half its prompt from the cache. The session's
+// first request and the first stamped after each compaction had no cache holding their prefix, so they draw and do not count.
+function hitsOf(mains: { at: number; prompt: number; read: number; write?: number }[], boundaries: number[]): StatusHits | undefined {
+  const drawn = mains.filter((m) => m.prompt > 0);
+  if (drawn.length === 0) return undefined;
+  const fresh = new Set([drawn[0], ...boundaries.map((b) => drawn.find((m) => m.at > b))]);
+  const busts = drawn.filter((m) => 2 * m.read < m.prompt && !fresh.has(m));
+  return {
+    points: drawn.slice(-barCells.cache_hits).map((m) => ({ at: m.at, rate: (m.read * 100) / m.prompt })),
+    busts: { count: busts.length, at: busts.at(-1)?.at, usd: busts.reduce<number | undefined>((sum, m) => (sum === undefined || m.write === undefined ? undefined : sum + m.write), 0) },
+  };
 }
 
 // What the next prompt's cached prefix costs: read while the cache is warm, written again at the label's rate once cold.
@@ -2376,17 +2414,18 @@ async function basedOff(git: (...args: string[]) => Promise<string>, branch: str
 }
 
 // The longest model-id prefix the table has; fast mode on Opus 5.5, 5 and 4.8 is published at twice the rate.
+// `prompt` picks the tier, the whole request's when only part of it is priced.
 function requestCost(
   model: string,
   speed: unknown,
   c: { inp: number; out: number; read: number; w5: number; w1: number },
+  prompt = c.inp + c.read + c.w5 + c.w1,
 ): number | undefined {
   const key = Object.keys(prices ?? {})
     .filter((k) => model.startsWith(k))
     .sort((a, b) => b.length - a.length)[0];
   const price = key === undefined ? undefined : prices?.[key];
   if (!price) return undefined;
-  const prompt = c.inp + c.read + c.w5 + c.w1;
   const rate = price.over && prompt > price.over.above ? price.over.rate : price;
   const fast = speed === "fast" && (model.startsWith("claude-opus-5") || model.startsWith("claude-opus-4-8")) ? 2 : 1;
   return (fast * (c.inp * rate.i + c.out * rate.o + c.w5 * rate.w5 + c.w1 * rate.w1 + c.read * rate.r)) / 1_000_000;
@@ -2642,6 +2681,25 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
   return left > 0
     ? chipParts(Box, Text, { key: "cache", mark, value: `${warmFor(c, left)} ${usd(c.read)}`, ...stops("cache.warm") })
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
+}
+
+// The floor, dim, then a cell per request, the newest right and blank cells left of the oldest, then the bust count
+// while there is one. At or above the floor a request rises through the eight glyphs to 100%; under it a low ▁, and under
+// 50% a bust's full cell in red.
+function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits) {
+  const n = barCells.cache_hits;
+  const cell = (rate: number) =>
+    rate >= HITS_FLOOR
+      ? Text({ color: hex(color("hits.spark")), children: SPARKS[Math.min(Math.floor(((rate - HITS_FLOOR) * 8) / (100 - HITS_FLOOR)), 7)] })
+      : Text({ color: hex(color(rate >= 50 ? "hits.low" : "hits.bust")), children: rate >= 50 ? "▁" : "█" });
+  const points = h.points.slice(-n);
+  const children = [
+    Text({ dimColor: true, children: `${HITS_FLOOR} ` }),
+    ...Array.from({ length: n - points.length }, () => Text({ children: " " })),
+    ...points.map((p) => cell(p.rate)),
+    ...(h.busts.count > 0 ? [Text({ color: hex(color("hits.bust")), children: ` ${h.busts.count}↯` })] : []),
+  ];
+  return Box({ key: "cache_hits", flexDirection: "row", children });
 }
 
 // The time a warm cache has left, `left` seconds. The first second after a request has the whole TTL left, which reads

@@ -80,7 +80,7 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // The layout option's rows as by default, and a layout with one row in place of its default. The git row draws above
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
-const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache";
+const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache,gap-1,cache_hits";
 const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
@@ -2425,6 +2425,103 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // A request of 100,000 prompt tokens that read `pct` percent of them from the cache and wrote the rest for an hour, made
+  // `minute` minutes into the hour before START.
+  const hitRow = (id: string, minute: number, pct: number, extra: object = {}) =>
+    JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(START - (60 - minute) * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: Math.round(pct * 1_000), cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 100_000 - Math.round(pct * 1_000) } } }, ...extra });
+  const boundaryRow = (minute: number) => JSON.stringify({ type: "system", subtype: "compact_boundary", timestamp: new Date(START - (60 - minute) * 60_000).toISOString() });
+  // The status row drawn once this session's token scan has read the transcript's lines.
+  async function hitsDrawn($: Engine, on: On, lines: string[]) {
+    stubHint(on, START);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("session.id", () => ({ value: "sid-1" }));
+    on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
+    on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
+    on("process.spawn", async function* () {
+      yield { stream: "stdout", text: lines.join("\n") };
+      return { value: { code: 0, signal: null } };
+    });
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    return ui;
+  }
+  // The cache_hits tag's parts, each its text and its colour by name: spark, low, bust, dim or none. A Text drawn with
+  // no props comes back without them.
+  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust" };
+  const hitsParts = async (ui: Mounted<"terminal", "PromptHint">) =>
+    must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => {
+      const props: Record<string, unknown> = typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null ? { ...part.props } : {};
+      const text = typeof part === "object" && part !== null && "children" in part && Array.isArray(part.children) ? part.children.join("") : String(part);
+      return [text, props.dimColor === true ? "dim" : (HIT_COLOURS[String(props.color)] ?? "none")];
+    });
+
+  test("draws each main request's hit rate once, its cache reads over its input, reads and writes of either lifetime, and no request without a prompt", async ($, on) => {
+    const usage = (inp: number, out: number, read: number, w5: number, w1: number) => ({ input_tokens: inp, output_tokens: out, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: w1 } });
+    const row = (id: string, minute: number, u: object) => JSON.stringify({ type: "assistant", requestId: id, timestamp: new Date(START - (60 - minute) * 60_000).toISOString(), message: { model: "claude-opus-5-5", usage: u } });
+    // B writes its whole prompt: 0%. A reads 97,000 of 100,000, its 2,000 written half for 5 minutes, half for an hour:
+    // 97%, in two lines. C only answered, with no prompt.
+    const a = row("A", 2, usage(1_000, 10, 97_000, 1_000, 1_000));
+    const ui = await hitsDrawn($, on, [row("B", 1, usage(3, 10, 0, 0, 50_000)), a, a, row("C", 3, usage(0, 5, 0, 0, 0))]);
+    // 97% is 2/5 of the way from 95 to 100: the fourth glyph. B is the session's first request, so no bust count.
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▄", "spark"]]);
+    await ui.unmount();
+  });
+
+  test("draws no cache_hits tag before the main conversation's first request, and folds the gaps around it", { options: { layout: withStatus("model,gap-1,cache_hits,gap-2,tokens", "limit_7d,limit_5h,credits,context,turns,agents,cache") } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [hitRow("s1", 1, 0, { agentId: "a1" }), hitRow("s2", 2, 99, { agentId: "a1" })]);
+    expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(0);
+    expect(rowSpelled((await tagRows(ui))[0]).slice(0, 2)).toEqual(["Opus 5.5", "_2"]);
+    await ui.unmount();
+  });
+
+  test("leaves a subagent's requests out of the cache_hits sparkline and its bust count", async ($, on) => {
+    // The subagent's 5% would be a counted bust of the main conversation's, after its first request.
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 0), hitRow("s1", 2, 0, { agentId: "a1" }), hitRow("m2", 3, 99), hitRow("s2", 4, 5, { agentId: "a1" })]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▇", "spark"]]);
+    await ui.unmount();
+  });
+
+  // At the floor of 95 each step is 0.625%: 95% the lowest glyph, 97.5% the fifth, 99.4% and 100% the highest. 94% is under
+  // the floor, and 11.4% a bust, counted, as the session's first request is the 100% one.
+  const blank = [" ", "none"];
+  for (const [rates, sparks] of [
+    [[100, 95, 97.5, 99.4, 94, 11.4], [blank, blank, blank, blank, blank, blank, ["█", "spark"], ["▁", "spark"], ["▅", "spark"], ["█", "spark"], ["▁", "low"], ["█", "bust"], [" 1↯", "bust"]]],
+    [[99.4, 100, 95], [...Array.from({ length: 9 }, () => blank), ["█", "spark"], ["█", "spark"], ["▁", "spark"]]],
+  ] as const) {
+    test(`draws cache_hits requests at ${rates.join("%, ")}% against the floor, after the dim floor label`, async ($, on) => {
+      const ui = await hitsDrawn($, on, rates.map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
+      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...sparks]);
+      await ui.unmount();
+    });
+  }
+
+  test("counts a cache_hits bust under 50% but for the session's first request and the first after each compaction, and keeps one that scrolled out", async ($, on) => {
+    const fillers = Array.from({ length: 13 }, (_, i) => hitRow(`f${i}`, 4 + i, 99.9));
+    const ui = await hitsDrawn($, on, [
+      // The first request writes it all, uncounted; then a cold cache at 2%, counted, which the fillers scroll out.
+      hitRow("m1", 1, 0),
+      hitRow("m2", 2, 99),
+      hitRow("m3", 3, 2),
+      ...fillers,
+      // After the first compaction a subagent's request comes first and changes nothing: the main conversation's 3%
+      // is uncounted, its 4% counted. Two compactions in a row, then 5%, uncounted.
+      boundaryRow(17),
+      hitRow("s1", 18, 0, { agentId: "a1" }),
+      hitRow("m19", 19, 3),
+      hitRow("m20", 20, 4),
+      boundaryRow(21),
+      boundaryRow(22),
+      hitRow("m23", 23, 5),
+      hitRow("m24", 24, 99),
+    ]);
+    const spark = ["█", "spark"];
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 8 }, () => spark), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 2↯", "bust"]]);
+    await ui.unmount();
+  });
+
   // The folders, branch and worktree are parts of their own, parted by the default order's gaps, or touching without.
   for (const [options, spelled] of [
     [{}, ["spike › cc-mods", "_1", "⎇ develop ⎇ feat/gitline", "_1", "⎇ spike", "_1"]],
@@ -2627,6 +2724,33 @@ describe("cockpit", () => {
     expect(await chips()).toEqual([]);
     expect(await ui.find({ type: "Text", text: /shows when it applies/ })).toBeUndefined();
     expect((await ui.find({ type: "Box", key: "explain" }))?.text).toBe("");
+    await ui.unmount();
+  });
+
+  test("draws a made-up cache_hits sparkline while the order pane shows and no main request was made", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    let isOpen = false;
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(0);
+
+    isOpen = true;
+    await clock.advance(100);
+    await caughtUp(on, ui);
+    const sample = await hitsParts(ui);
+    expect(sample[0]).toEqual(["95 ", "dim"]);
+    expect(sample.slice(1, 13).every(([glyph]) => glyph !== " ")).toBe(true);
+
+    isOpen = false;
+    await clock.advance(100);
+    await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(0);
     await ui.unmount();
   });
 
@@ -3813,9 +3937,9 @@ describe("cockpit", () => {
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
   // (status), fresh, compact, explain, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
-  // (1-10), ── row 2 ── (11), model .. cache (12-20), ── hidden ── (21), spacer, gap-1, gap-2, gap-3 (22-25).
+  // (1-10), ── row 2 ── (11), model .. cache_hits (12-21), ── hidden ── (22), spacer, gap-1, gap-2, gap-3 (23-26).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
-  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache";
+  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits";
   const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
@@ -3826,17 +3950,17 @@ describe("cockpit", () => {
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
     // The model tag dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 21)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 22)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits", "model")]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache", "model") } }, async ($, on) => {
-    // 7d .. cache 12-19, ── hidden ── 20, the spacer and gaps 21-24, model 25: dropped on the 7d limit's line.
-    expect(await dragIn(on, $, PINNED, "tags", 25, 12)).toEqual([["layout", pinned()]]);
+  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits", "model") } }, async ($, on) => {
+    // 7d .. cache_hits 12-20, ── hidden ── 21, the spacer and gaps 22-25, model 26: dropped on the 7d limit's line.
+    expect(await dragIn(on, $, PINNED, "tags", 26, 12)).toEqual([["layout", pinned()]]);
   });
 
   test("dragging a tag under another row's marker moves it into that row", { options: PINNED }, async ($, on) => {
     // The folders dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache`)]]);
+    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits`)]]);
   });
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
@@ -3846,7 +3970,7 @@ describe("cockpit", () => {
 
   test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache;fresh;compact;explain`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits;fresh;compact;explain`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
@@ -3860,23 +3984,23 @@ describe("cockpit", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone.
   test("dragging the spare spacer out of hidden adds a spacer to the row", { options: PINNED }, async ($, on) => {
-    // The spacer (22) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 22, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
+    // The spacer (23) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
   });
 
   test("dragging a gap out of hidden adds it to the row", { options: PINNED }, async ($, on) => {
-    // gap-2 (24) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
+    // gap-2 (25) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 25, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
   });
 
-  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache") };
+  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits") };
   test("a second spacer is there to drag out once one is", { options: SPACED }, async ($, on) => {
-    // model, spacer, 7d .. cache (14-21), ── hidden ── 22, the spare spacer 23: dropped beside the first.
-    expect(await dragIn(on, $, SPACED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache")]]);
+    // model, spacer, 7d .. cache_hits (14-22), ── hidden ── 23, the spare spacer 24: dropped beside the first.
+    expect(await dragIn(on, $, SPACED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
   });
 
   test("dragging a spacer into hidden takes it away", { options: SPACED }, async ($, on) => {
-    expect(await dragIn(on, $, SPACED, "tags", 13, 22)).toEqual([["layout", pinned()]]);
+    expect(await dragIn(on, $, SPACED, "tags", 13, 23)).toEqual([["layout", pinned()]]);
   });
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
@@ -3886,7 +4010,7 @@ describe("cockpit", () => {
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
     // The review dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 5, 21)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 5, 22)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
@@ -3916,8 +4040,8 @@ describe("cockpit", () => {
     for (let i = 0; i < 2; i++) {
       // The model dropped on the hidden marker's line.
       await ui.pointer({ type: "down", x: 2, y: 12, button: "left", in: "tags" });
-      await ui.pointer({ type: "move", x: 2, y: 21, button: "left", in: "tags" });
-      await ui.pointer({ type: "up", x: 2, y: 21, button: "left", in: "tags" });
+      await ui.pointer({ type: "move", x: 2, y: 22, button: "left", in: "tags" });
+      await ui.pointer({ type: "up", x: 2, y: 22, button: "left", in: "tags" });
       expect(await tags()).toEqual(saved);
     }
     await ui.unmount();
@@ -3950,9 +4074,9 @@ describe("cockpit", () => {
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, model, 5h limit and 5 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, cache hits, model and 6 more" } });
     expect(await clientProps("tags")).toMatchObject({
-      items: ["row-1", "cache", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
+      items: ["row-1", "cache", "cache_hits", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
       labels: { "row-2": "━━ row 2 ━━", credits: "usage credits" },
     });
@@ -3987,15 +4111,15 @@ describe("cockpit", () => {
 
   // Merged, the subagents' tag is not in the list, so a drop leaves it out of the layout, which puts it back after the costs.
   test("a drop with the costs merged writes the layout without the subagents' tag", { options: { ...PINNED, merge_costs: true } }, async ($, on) => {
-    // model .. cache without agents (12-18), ── hidden ── 19: the model dropped there.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 20)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache", "model")]]);
+    // model .. cache_hits without agents (12-20), ── hidden ── 21: the model dropped there.
+    expect(await dragIn(on, $, PINNED, "tags", 12, 21)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache,cache_hits", "model")]]);
   });
 
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
   // left out goes after the first row, an offer left out last.
   for (const [layout, lines, tags] of [
     ["branch,model;prompt;fresh", ["row-1", "prompt", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",")]],
-    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -1), "row-2", "cache"]],
+    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -2), "row-2", "cache", "cache_hits"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
       clockOn(on, START);
@@ -4095,11 +4219,11 @@ describe("cockpit", () => {
     expect(lines.slice(7, 9)).toEqual(["≡ commits ahead", "  and behind"]);
     expect((await ui.findAll({ type: "Text", in: "tags" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
     // Its second line pressed and dropped on the hidden marker's first line (row 1's marker 0, folders to comments a
-    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache 13-22 with the
-    // main session's costs on two lines, the hidden marker from 23): ahead and behind is switched off.
+    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache hits 13-23 with
+    // the main session's costs on two lines, the hidden marker from 24): ahead and behind is switched off.
     await ui.pointer({ type: "down", x: 3, y: 8, button: "left", in: "tags" });
-    await ui.pointer({ type: "move", x: 3, y: 23, button: "left", in: "tags" });
-    await ui.pointer({ type: "up", x: 3, y: 23, button: "left", in: "tags" });
+    await ui.pointer({ type: "move", x: 3, y: 24, button: "left", in: "tags" });
+    await ui.pointer({ type: "up", x: 3, y: 24, button: "left", in: "tags" });
     await ui.unmount();
     expect(written).toEqual([["layout", pinned("folders,branch,worktree,pr,review,comments,conflict,checks,changes", STATUS_TAGS, "sync")]]);
   });
@@ -4507,6 +4631,16 @@ describe("cockpit", () => {
 
   test("places the credits tag after limit_5h in a saved layout that does not name it", { options: { layout: "folders;prompt;model,limit_7d,limit_5h,context;fresh;compact;explain" } }, async ($, on) => {
     expect((await orderedTags($, on, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
+  });
+
+  test("places the cache_hits tag after cache in the default layout, a gap before it", async ($, on) => {
+    const tags = await orderedTags($, on, "row-2");
+    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 4)).toEqual(["cache", "gap-1", "cache_hits", "hidden"]);
+  });
+
+  test("places the cache_hits tag after cache in a saved layout that does not name it", { options: { layout: "folders;prompt;model,cache,context;fresh;compact;explain" } }, async ($, on) => {
+    const tags = await orderedTags($, on, "row-2");
+    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 3)).toEqual(["cache", "cache_hits", "context"]);
   });
 
   // The sample spends 67% of its cap, 3 of the default 5 cells, or 4 of 6 at credits_length 6.

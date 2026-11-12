@@ -14,7 +14,12 @@ export type StatusSpend = { tokens: number; usd: number; requests: number; unpri
 // `prompt` is that last request's prompt in tokens, `base` the session's first: what a fresh session starts near.
 export type StatusCache = { at: number; ttl: number; read?: number; write?: number; prompt: number; base: number };
 
-export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache };
+// The main conversation's newest requests by time, as many as the cache_hits tag draws, each when it was made (ms) and its
+// hit rate in percent; and the busts it counted over the whole session: their number, the latest's time (ms) and what
+// their cache writes cost (USD; undefined once one is unpriced).
+export type StatusHits = { points: { at: number; rate: number }[]; busts: { count: number; at?: number; usd?: number } };
+
+export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache; hits?: StatusHits };
 
 // `defaultBranch` is "" when origin names none; ahead/behind count against the default branch when `vsDefault`.
 // added/deleted are lines, changed is files, as `git diff --numstat HEAD` counts them.
