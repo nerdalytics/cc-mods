@@ -600,7 +600,7 @@ const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset: 7d, 5h and context as cockpit 1.1.0 drew them.
 const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5, cache_hits: 12 };
-// The percent the cache_hits sparkline scales up from to 100% while cache_hits_floor is unset.
+// The percent the cache_hits sparkline scales up from to 100% until register reads cache_hits_floor, its default too.
 const HITS_FLOOR = 95;
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
@@ -861,7 +861,8 @@ export const register: Register = (on, options) => {
     credits: lengthOf(options.credits_length, BAR_CELLS.credits),
     cache_hits: lengthOf(options.cache_hits_length, BAR_CELLS.cache_hits),
   };
-  hitsFloor = floorOf(options.cache_hits_floor);
+  // Claude Code refuses a cache_hits_floor that is not a number before the module loads, and fills in its default when unset.
+  hitsFloor = floorOf(options.cache_hits_floor as number);
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
@@ -2757,9 +2758,9 @@ function lengthOf(option: unknown, fallback: number): number {
 }
 
 // The cache_hits floor option as a whole percent from 50, the bust line, to 99, which leaves the sparks a step to rise
-// through; anything but a number is the default.
-function floorOf(option: unknown): number {
-  return typeof option === "number" ? Math.min(99, Math.max(50, Math.floor(option))) : HITS_FLOOR;
+// through.
+function floorOf(option: number): number {
+  return Math.min(99, Math.max(50, Math.floor(option)));
 }
 
 // The cells a spend ahead of its pace impacts: any positive `ahead`, in cells, rounded up. ε keeps an ahead that floating
