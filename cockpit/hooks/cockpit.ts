@@ -658,8 +658,9 @@ const COLORS = {
   "hits.spark": { group: "Cache hits", label: "at or above the floor", rgb: [74, 222, 128] },
   "hits.low": { group: "", label: "under the floor", rgb: [251, 191, 36] },
   "hits.bust": { group: "", label: "a bust and the bust count", rgb: [239, 68, 68] },
-  // The agent_cache_hits sparkline's, the same defaults, apart so either tag can be recoloured alone.
-  "agent_hits.spark": { group: "Subagents' cache hits", label: "at or above the floor", rgb: [74, 222, 128] },
+  // The agent_cache_hits sparkline's, apart so either tag can be recoloured alone: its sparks blue by default, its low and
+  // bust colours the cache_hits defaults.
+  "agent_hits.spark": { group: "Subagents' cache hits", label: "at or above the floor", rgb: [96, 165, 250] },
   "agent_hits.low": { group: "", label: "under the floor", rgb: [251, 191, 36] },
   "agent_hits.bust": { group: "", label: "a bust and the bust count", rgb: [239, 68, 68] },
   // The cache chip: green while the next prompt reads the cache, red once it writes it again.

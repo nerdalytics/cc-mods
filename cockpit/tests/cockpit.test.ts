@@ -2467,9 +2467,9 @@ describe("cockpit", () => {
     await caughtUp(on, ui);
     return ui;
   }
-  // The cache_hits tag's parts, or another sparkline tag's by its key, each its text and its colour by name: spark, low,
-  // bust, dim or none.
-  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
+  // The cache_hits tag's parts, or another sparkline tag's by its key, each its text and its colour by name: spark, the
+  // main tag's default, agent spark, the subagents' tag's, low, bust, blue, dim or none.
+  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#60a5fa": "agent spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
   const hitsParts = async (ui: Mounted<"terminal", "PromptHint">, key = "cache_hits") =>
     must(await ui.find({ type: "Box", key }), `the ${key} tag`).children.map((part) => {
       const props = propsOf(part);
@@ -2662,7 +2662,7 @@ describe("cockpit", () => {
       hitRow("s2", 6, 1, { agentId: "a1" }),
       hitRow("t2", 7, 99, { agentId: "a2" }),
     ]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(8), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 1↯", "bust"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(8), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "agent spark"], [" 1↯", "bust"]]);
     await ui.unmount();
   });
 
@@ -2687,10 +2687,10 @@ describe("cockpit", () => {
     agentsOn(on, () => agents);
     // A at minutes 1 and 3, B at minute 2: A's 99.4% a full spark, B's 95% the lowest, A's 97.5% the fifth.
     const ui = await hitsDrawn($, on, [hitRow("a1", 1, 99.4, { agentId: "a" }), hitRow("a2", 3, 97.5, { agentId: "a" }), hitRow("b1", 2, 95, { agentId: "b" })]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(9), ["█", "spark"], ["▁", "spark"], ["▅", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(9), ["█", "agent spark"], ["▁", "agent spark"], ["▅", "agent spark"]]);
     agents = [subagent("completed", "a"), subagent("running", "b")];
     await caughtUp(on, ui);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(11), ["▁", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(11), ["▁", "agent spark"]]);
     await ui.unmount();
   });
 
@@ -2710,11 +2710,11 @@ describe("cockpit", () => {
   // fifth at 90, and an amber ▁ at 97. The subagent's 100% beside it is a full spark at any floor.
   const BOTH = [hitRow("m1", 1, 95), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 95, { agentId: "a1" })];
   for (const [title, options, main, sub] of [
-    ["scales agent_cache_hits from agent_cache_hits_floor 90 while cache_hits keeps 95", { agent_cache_hits_floor: 90 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["90 ", "dim"], ...blanks(10), ["█", "spark"], ["▅", "spark"]]],
-    ["keeps agent_cache_hits at 95 and 12 cells while cache_hits_floor is 90 and cache_hits_length 3", { cache_hits_floor: 90, cache_hits_length: 3 }, [["90 ", "dim"], ...blanks(2), ["▅", "spark"]], [["95 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "spark"]]],
-    ["draws the agent_cache_hits floor 97 and 2 cells at agent_cache_hits_floor 97.8 and agent_cache_hits_length 2.7, fractions rounded down", { agent_cache_hits_floor: 97.8, agent_cache_hits_length: 2.7 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["97 ", "dim"], ["█", "spark"], ["▁", "low"]]],
-    ["draws the agent_cache_hits floor 50 and 1 cell at agent_cache_hits_floor 30 and agent_cache_hits_length 0", { agent_cache_hits_floor: 30, agent_cache_hits_length: 0 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["50 ", "dim"], ["█", "spark"]]],
-    ["draws the agent_cache_hits floor 99 at agent_cache_hits_floor 120", { agent_cache_hits_floor: 120 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["99 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "low"]]],
+    ["scales agent_cache_hits from agent_cache_hits_floor 90 while cache_hits keeps 95", { agent_cache_hits_floor: 90 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["90 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▅", "agent spark"]]],
+    ["keeps agent_cache_hits at 95 and 12 cells while cache_hits_floor is 90 and cache_hits_length 3", { cache_hits_floor: 90, cache_hits_length: 3 }, [["90 ", "dim"], ...blanks(2), ["▅", "spark"]], [["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]],
+    ["draws the agent_cache_hits floor 97 and 2 cells at agent_cache_hits_floor 97.8 and agent_cache_hits_length 2.7, fractions rounded down", { agent_cache_hits_floor: 97.8, agent_cache_hits_length: 2.7 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["97 ", "dim"], ["█", "agent spark"], ["▁", "low"]]],
+    ["draws the agent_cache_hits floor 50 and 1 cell at agent_cache_hits_floor 30 and agent_cache_hits_length 0", { agent_cache_hits_floor: 30, agent_cache_hits_length: 0 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["50 ", "dim"], ["█", "agent spark"]]],
+    ["draws the agent_cache_hits floor 99 at agent_cache_hits_floor 120", { agent_cache_hits_floor: 120 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["99 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "low"]]],
   ] as const)
     test(title, { options }, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
@@ -2723,6 +2723,24 @@ describe("cockpit", () => {
       expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ...sub]);
       await ui.unmount();
     });
+
+  // With no colour set, the subagents' sparks default to rgb(96, 165, 250) and the main tag's to rgb(74, 222, 128).
+  test("draws a subagent's request at or above the floor in #60a5fa with no colour set, a main one's in #4ade80", async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
+    await ui.unmount();
+  });
+
+  // A subagents' spark colour the person set stays as set over the new default.
+  test("draws the agent_cache_hits sparks in agent_hits.spark set blue, the cache_hits ones in their default", { options: { colors: "agent_hits.spark=#0000ff" } }, async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "blue"], ["█", "blue"]]);
+    await ui.unmount();
+  });
 
   // Each tag's colours are its own: one tag's bust colour set blue leaves the other's red.
   const BUSTS = [hitRow("m1", 1, 100), hitRow("m2", 2, 2), hitRow("s1", 3, 100, { agentId: "a1" }), hitRow("s2", 4, 2, { agentId: "a1" })];
@@ -2734,7 +2752,7 @@ describe("cockpit", () => {
       agentsOn(on, () => [subagent("running", "a1")]);
       const ui = await hitsDrawn($, on, BUSTS);
       expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(10), ["█", "spark"], ["█", main], [" 1↯", main]]);
-      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "spark"], ["█", sub], [" 1↯", sub]]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", sub], [" 1↯", sub]]);
       await ui.unmount();
     });
 
@@ -2788,7 +2806,7 @@ describe("cockpit", () => {
   test("draws a subagent's request in each of 20 agent_cache_hits cells at agent_cache_hits_length 20 once it made 20", { options: { agent_cache_hits_length: 20 } }, async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
     const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`s${i}`, i + 1, 99.9, { agentId: "a1" })));
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "spark"])]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "agent spark"])]);
     await ui.unmount();
   });
 
@@ -5024,7 +5042,7 @@ describe("cockpit", () => {
       await colorsPane($, on, { gradients }, async (ui) => {
         const lines = await colourLines(ui);
         const at = lines.indexOf("Subagents' cache hits");
-        expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#4ade80 at or above the floor", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
+        expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#60a5fa at or above the floor", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
       });
     });
 
