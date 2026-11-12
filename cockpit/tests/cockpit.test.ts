@@ -2643,8 +2643,8 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // The subagent mark, \uf0e7, the agent_cache_hits tag's first part.
-  const MARK = ["\uf0e7", "none"];
+  // The subagent mark, \uf0e7, and the space after it: the agent_cache_hits tag's first part.
+  const MARK = ["\uf0e7 ", "none"];
   test("keeps each subagent's agent_cache_hits requests apart, draws each one's first by its hit rate uncounted, and counts only the subagents pending or running", async ($, on) => {
     // a1 and a2 run, a3 finished. Each one's first request writes it all; as one list a2's 0% after a1's would count.
     agentsOn(on, () => [subagent("running", "a1"), subagent("pending", "a2"), subagent("completed", "a3")]);

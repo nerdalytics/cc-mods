@@ -1205,7 +1205,7 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: refusals } = await $.state.get(REFUSALS);
   // Read as the snapshot is built, so a finished subagent's requests leave the tag the frame it leaves the list.
   const working = (await agentsWorking($)).filter((a) => a.teammateId === undefined);
-  const agentHits = working.length > 0 ? { running: working.length, hits: mergedHits(working.map((a) => tokens?.agentHits?.[a.id])) } : undefined;
+  const agentHits = working.length > 0 ? { running: working.length, hits: mergedHits(working.map((a) => tokens?.bySubagent?.[a.id])) } : undefined;
   const live: Snapshot = { usage, model, tokens, agentHits, turns, compactAt, sent, git, pr, rejected, credits, billing, creditsBase, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
@@ -1265,7 +1265,7 @@ function mergedHits(each: (StatusHits | undefined)[]): StatusHits {
     busts: {
       count: some.reduce((sum, h) => sum + h.busts.count, 0),
       at: some.reduce<number | undefined>((latest, h) => (h.busts.at === undefined || (latest !== undefined && latest >= h.busts.at) ? latest : h.busts.at), undefined),
-      usd: some.reduce<number | undefined>((sum, h) => (sum === undefined || h.busts.usd === undefined ? undefined : sum + h.busts.usd), 0),
+      usd: pricedSum(some.map((h) => h.busts.usd)),
     },
   };
 }
@@ -2286,7 +2286,7 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     agents: { ...agents, count: agentIds.size },
     cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined,
     hits: hitsOf(mains, boundaries, barCells.cache_hits),
-    agentHits: Object.fromEntries(
+    bySubagent: Object.fromEntries(
       Object.entries(subs).flatMap(([id, requests]) => {
         const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], barCells.agent_cache_hits);
         return h ? [[id, h]] : [];
@@ -2309,8 +2309,13 @@ function hitsOf(requests: HitRequest[], boundaries: number[], cells: number): St
   const busts = drawn.filter((m) => 2 * m.read < m.prompt && !fresh.has(m));
   return {
     points: drawn.slice(-cells).map((m) => ({ at: m.at, rate: (m.read * 100) / m.prompt })),
-    busts: { count: busts.length, at: busts.at(-1)?.at, usd: busts.reduce<number | undefined>((sum, m) => (sum === undefined || m.write === undefined ? undefined : sum + m.write), 0) },
+    busts: { count: busts.length, at: busts.at(-1)?.at, usd: pricedSum(busts.map((m) => m.write)) },
   };
+}
+
+// The costs added up, or undefined once one is: an unpriced part makes the sum unknown.
+function pricedSum(costs: (number | undefined)[]): number | undefined {
+  return costs.reduce<number | undefined>((sum, cost) => (sum === undefined || cost === undefined ? undefined : sum + cost), 0);
 }
 
 // What the next prompt's cached prefix costs: read while the cache is warm, written again at the label's rate once cold.
@@ -2763,7 +2768,7 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
 }
 
-// A sparkline tag: its mark if it has one, the floor, dim, then a cell per request, the newest right and blank cells left
+// A sparkline tag: its mark and a space if it has one, the floor, dim, then a cell per request, the newest right and blank cells left
 // of the oldest, then the bust count while there is one. At or above the floor a request rises through the eight glyphs
 // to 100%; under it a low ▁, and under 50% a bust's full cell in red. The cells and the count are the value, on the grey
 // while the explanation line can show what hovering it explains.
@@ -2778,7 +2783,7 @@ function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits, tag: HitsTag
       : Text({ color: hex(color(rate >= 50 ? `${colors}.low` : `${colors}.bust`)), backgroundColor, children: rate >= 50 ? "▁" : "█" });
   const points = h.points.slice(-n);
   const children = [
-    ...(mark ? [Text({ children: mark })] : []),
+    ...(mark ? [Text({ children: `${mark} ` })] : []),
     Text({ dimColor: true, children: `${floor} ` }),
     ...Array.from({ length: n - points.length }, () => Text({ backgroundColor, children: " " })),
     ...points.map((p) => cell(p.rate)),

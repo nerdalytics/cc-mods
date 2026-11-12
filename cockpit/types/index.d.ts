@@ -19,8 +19,8 @@ export type StatusCache = { at: number; ttl: number; read?: number; write?: numb
 // their cache writes cost (USD; undefined once one is unpriced).
 export type StatusHits = { points: { at: number; rate: number }[]; busts: { count: number; at?: number; usd?: number } };
 
-// `agentHits` holds each subagent's, by its agentId, its newest requests as many as the agent_cache_hits tag draws.
-export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache; hits?: StatusHits; agentHits?: Record<string, StatusHits> };
+// `bySubagent` holds each subagent's, by its agentId, its newest requests as many as the agent_cache_hits tag draws.
+export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache; hits?: StatusHits; bySubagent?: Record<string, StatusHits> };
 
 // `defaultBranch` is "" when origin names none; ahead/behind count against the default branch when `vsDefault`.
 // added/deleted are lines, changed is files, as `git diff --numstat HEAD` counts them.
