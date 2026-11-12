@@ -600,7 +600,7 @@ const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset: 7d, 5h and context as cockpit 1.1.0 drew them.
 const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5, cache_hits: 12 };
-// The percent the cache_hits sparkline scales up from to 100%.
+// The percent the cache_hits sparkline scales up from to 100% while cache_hits_floor is unset.
 const HITS_FLOOR = 95;
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
 // first of them names, a gradient's ends as light and dark before their label. A gradient runs from its .from colour to
@@ -772,8 +772,11 @@ let keepWarm = 0;
 let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
-// The cells each bar draws, from the limit_7d_length, limit_5h_length, context_length and credits_length options.
+// The cells each bar draws, from the limit_7d_length, limit_5h_length, context_length and credits_length options, and
+// the cache_hits sparkline's from cache_hits_length.
 let barCells = { ...BAR_CELLS };
+// The cache_hits sparkline's floor, from the cache_hits_floor option.
+let hitsFloor = HITS_FLOOR;
 // The limit_style option; a value it does not know reads as classic.
 let limitStyle: LimitStyle = "classic";
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -856,8 +859,9 @@ export const register: Register = (on, options) => {
     "5h": lengthOf(options.limit_5h_length, BAR_CELLS["5h"]),
     context: lengthOf(options.context_length, BAR_CELLS.context),
     credits: lengthOf(options.credits_length, BAR_CELLS.credits),
-    cache_hits: BAR_CELLS.cache_hits,
+    cache_hits: lengthOf(options.cache_hits_length, BAR_CELLS.cache_hits),
   };
+  hitsFloor = floorOf(options.cache_hits_floor);
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
@@ -1578,6 +1582,19 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
       left > 0
         ? `Cache warm for ${warmFor(c, left)}: the next prompt reads it for ${usd(c.read)}. Once cold, writing it again costs ${usd(c.write)}.`
         : `Cache cold: the next prompt writes it again for ${usd(c.write)}.`;
+  }
+  const h = t?.hits;
+  const newest = h?.points.at(-1);
+  if (h && newest) {
+    const { count, at, usd: cost } = h.busts;
+    // The latest bust by the person's clock, its date too on an earlier day.
+    const when = at === undefined ? "" : `${count === 1 ? "at" : "the last at"} ${dateClock(at, s.now * 1000)}`;
+    // A cost only while every counted bust is priced: one unpriced makes the sum unknown.
+    const paid = cost === undefined ? "" : `, wrote the cache again for ${usd(cost)}`;
+    const busts = count === 0 ? "No busts this session." : `${count} ${count === 1 ? "bust" : "busts"} this session, ${when}${paid}.`;
+    // Rounded to one decimal, but never up to 100.0% short of a whole prompt read, which would hide its writes.
+    const rate = newest.rate < 100 ? Math.min(newest.rate, 99.9) : 100;
+    out.cache_hits = `Cache hits: the last request read ${rate.toFixed(1)}% of its prompt from the cache. ${busts} Sparks run from ${hitsFloor}% to 100%, amber under ${hitsFloor}%, red under 50%.`;
   }
   return out;
 }
@@ -2682,21 +2699,23 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
 
 // The floor, dim, then a cell per request, the newest right and blank cells left of the oldest, then the bust count
 // while there is one. At or above the floor a request rises through the eight glyphs to 100%; under it a low ▁, and under
-// 50% a bust's full cell in red.
+// 50% a bust's full cell in red. The cells and the count are the value, on the grey while the explanation line can show
+// what hovering it explains.
 function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits) {
   const n = barCells.cache_hits;
+  const backgroundColor = explainRow ? hex(color("empty")) : undefined;
   const cell = (rate: number) =>
-    rate >= HITS_FLOOR
-      ? Text({ color: hex(color("hits.spark")), children: SPARKS[Math.min(Math.floor(((rate - HITS_FLOOR) * 8) / (100 - HITS_FLOOR)), 7)] })
-      : Text({ color: hex(color(rate >= 50 ? "hits.low" : "hits.bust")), children: rate >= 50 ? "▁" : "█" });
+    rate >= hitsFloor
+      ? Text({ color: hex(color("hits.spark")), backgroundColor, children: SPARKS[Math.min(Math.floor(((rate - hitsFloor) * 8) / (100 - hitsFloor)), 7)] })
+      : Text({ color: hex(color(rate >= 50 ? "hits.low" : "hits.bust")), backgroundColor, children: rate >= 50 ? "▁" : "█" });
   const points = h.points.slice(-n);
   const children = [
-    Text({ dimColor: true, children: `${HITS_FLOOR} ` }),
-    ...Array.from({ length: n - points.length }, () => Text({ children: " " })),
+    Text({ dimColor: true, children: `${hitsFloor} ` }),
+    ...Array.from({ length: n - points.length }, () => Text({ backgroundColor, children: " " })),
     ...points.map((p) => cell(p.rate)),
-    ...(h.busts.count > 0 ? [Text({ color: hex(color("hits.bust")), children: ` ${h.busts.count}↯` })] : []),
+    ...(h.busts.count > 0 ? [Text({ color: hex(color("hits.bust")), backgroundColor, children: ` ${h.busts.count}↯` })] : []),
   ];
-  return Box({ key: "cache_hits", flexDirection: "row", children });
+  return Box({ key: "cache_hits", flexDirection: "row", hover: { scope: explainScope("cache_hits") }, children });
 }
 
 // The time a warm cache has left, `left` seconds. The first second after a request has the whole TTL left, which reads
@@ -2733,6 +2752,12 @@ function dollars(s: StatusSpend, amount = s.usd): string {
 // A bar's length option in whole cells, at least 1; anything but a number is the default.
 function lengthOf(option: unknown, fallback: number): number {
   return typeof option === "number" ? Math.max(1, Math.floor(option)) : fallback;
+}
+
+// The cache_hits floor option as a whole percent from 50, the bust line, to 99, which leaves the sparks a step to rise
+// through; anything but a number is the default.
+function floorOf(option: unknown): number {
+  return typeof option === "number" ? Math.min(99, Math.max(50, Math.floor(option))) : HITS_FLOOR;
 }
 
 // The cells a spend ahead of its pace impacts: any positive `ahead`, in cells, rounded up. ε keeps an ahead that floating

@@ -44,8 +44,8 @@ const litCells = (cells: readonly unknown[]): string =>
 const glyph = (text: FoundElement): unknown => text.children[0] ?? text.text;
 // What the explanation line shows in its flow, the hidden explanations laid over it left out.
 const shownIn = (line: FoundElement) => elements(line.children).filter((child) => child.props.position !== "absolute").map(flat).join("");
-// The seven tags an explanation stands behind, by the scope each joins and the key its Box draws with.
-const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"]] as const;
+// The eight tags an explanation stands behind, by the scope each joins and the key its Box draws with.
+const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"], ["cache_hits", "cache_hits"]] as const;
 // A tag's keyed Box as drawn, its hover included, which FoundElement.props leaves out.
 const drawnTag = async (ui: { findAll: Mounted["findAll"] }, key: string) => {
   for (const box of await ui.findAll({ type: "Box" })) {
@@ -1067,7 +1067,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // A session that draws all seven explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
+  // A session that draws all eight explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
   // so the run-out warning shows, the 7d at 20%, 120,000 of 200,000 tokens of context left, 7 prompts, and the main
   // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
   // subagent's one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00, reads it for $0.20.
@@ -1106,7 +1106,7 @@ describe("cockpit", () => {
   }
 
   for (const [style, said] of [["classic", ""], ["gauge", ", the gauge's too"]] as const)
-    test(`joins each of the seven tags to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
+    test(`joins each of the eight tags to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
       const ui = await explained($, on);
       for (const [tag, key] of EXPLAINED) expect(await drawnTag(ui, key)).toMatchObject({ hover: { scope: `explain-${tag}` } });
       // Each explanation hidden until its tag's scope is hovered, then laid over the line from its top left corner.
@@ -1114,7 +1114,7 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  test("draws no overlay of its own in any of the seven tags", async ($, on) => {
+  test("draws no overlay of its own in any of the eight tags", async ($, on) => {
     const ui = await explained($, on);
     for (const [, key] of EXPLAINED) expect(JSON.stringify(await drawnTag(ui, key))).not.toContain('"position":"absolute"');
     await ui.unmount();
@@ -2450,7 +2450,7 @@ describe("cockpit", () => {
   }
   // The cache_hits tag's parts, each its text and its colour by name: spark, low, bust, dim or none. A Text drawn with
   // no props comes back without them.
-  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust" };
+  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
   const hitsParts = async (ui: Mounted<"terminal", "PromptHint">) =>
     must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => {
       const props: Record<string, unknown> = typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null ? { ...part.props } : {};
@@ -2519,6 +2519,109 @@ describe("cockpit", () => {
     ]);
     const spark = ["█", "spark"];
     expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 8 }, () => spark), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 2↯", "bust"]]);
+    await ui.unmount();
+  });
+
+  // Five requests at the default floor: 100% and 99.4% a full spark, 95% the lowest, 97.5% the fifth, 94% an amber ▁.
+  const FIVE = [100, 95, 97.5, 99.4, 94].map((rate, i) => hitRow(`r${i}`, i + 1, rate));
+  for (const [title, length, cells] of [
+    ["draws the newest 3 cache_hits requests at cache_hits_length 3", 3, [["▅", "spark"], ["█", "spark"], ["▁", "low"]]],
+    ["draws 1 cache_hits cell at cache_hits_length 0, the shortest it gets", 0, [["▁", "low"]]],
+    ["draws 2 cache_hits cells at cache_hits_length 2.7, a fraction rounded down", 2.7, [["█", "spark"], ["▁", "low"]]],
+  ] as const)
+    test(title, { options: { cache_hits_length: length } }, async ($, on) => {
+      const ui = await hitsDrawn($, on, FIVE);
+      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...cells]);
+      await ui.unmount();
+    });
+
+  // The floor labels the tag and the sparks scale from it: at 97, 98.5% is the fifth glyph and 96% an amber ▁, where at 95
+  // they would be the sixth and the second; at 50, 94% is a full spark; at 99, 99.4% the fourth and 97.5% amber.
+  const blanks = (n: number) => Array.from({ length: n }, () => [" ", "none"]);
+  for (const [title, options, rows, parts] of [
+    ["draws the cache_hits floor 97 at cache_hits_floor 97.8, a fraction rounded down, and scales the sparks from it", { cache_hits_floor: 97.8 }, [100, 98.5, 96].map((rate, i) => hitRow(`r${i}`, i + 1, rate)), [["97 ", "dim"], ...blanks(9), ["█", "spark"], ["▅", "spark"], ["▁", "low"]]],
+    ["draws the cache_hits floor 50 and 1 cell at cache_hits_floor 30 and cache_hits_length 0", { cache_hits_floor: 30, cache_hits_length: 0 }, FIVE, [["50 ", "dim"], ["█", "spark"]]],
+    ["draws the cache_hits floor 99 at cache_hits_floor 120", { cache_hits_floor: 120 }, FIVE, [["99 ", "dim"], ...blanks(7), ["█", "spark"], ["▁", "low"], ["▁", "low"], ["▄", "spark"], ["▁", "low"]]],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [...rows]);
+      expect(await hitsParts(ui)).toEqual(parts);
+      await ui.unmount();
+    });
+
+  // The tag's colours are its own and no gradient's ends, so the gradients option leaves them as they are.
+  for (const gradients of [true, false])
+    test(`draws a cache_hits bust and the bust count in hits.bust set blue, the sparks and the low cell in their defaults, with gradients ${gradients ? "on" : "off"}`, { options: { gradients, colors: "hits.bust=#0000ff" } }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [100, 94, 2].map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
+      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(9), ["█", "spark"], ["▁", "low"], ["█", "blue"], [" 1↯", "blue"]]);
+      await ui.unmount();
+    });
+
+  // A hitRow made at a local time, so an explanation names it as the person's clock reads it.
+  const hitAt = (id: string, at: Date, pct: number, extra: object = {}) => hitRow(id, 0, pct, { timestamp: at.toISOString(), ...extra });
+  // The session's first request writes it all and counts as no bust.
+  const firstHit = () => hitAt("first", localAt(0, 15), 0);
+  for (const [title, options, text] of [
+    ["explains cache_hits with no bust: the last request's hit rate, none counted, and the floor", {}, "Cache hits: the last request read 99.6% of its prompt from the cache. No busts this session. Sparks run from 95% to 100%, amber under 95%, red under 50%."],
+    ["explains cache_hits at cache_hits_floor 97 with the sparks running from 97%", { cache_hits_floor: 97 }, "Cache hits: the last request read 99.6% of its prompt from the cache. No busts this session. Sparks run from 97% to 100%, amber under 97%, red under 50%."],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [firstHit(), hitAt("last", localAt(0, 15, 20), 99.6)]);
+      expect(await explanationOf(ui, "cache_hits")).toBe(text);
+      await ui.unmount();
+    });
+
+  // Busts priced by their cache writes alone, at an hour's rate: Opus 5.5's 2% wrote 98,000 tokens at $8/MTok, $0.784.
+  // The Haiku 5.5 bust read 40,000 and wrote 80,000: its prompt of 120,000 takes the over-100,000 tier, $1/MTok, $0.08,
+  // where its writes alone would take $0.20/MTok.
+  const haikuBust = (id: string, at: Date, model = "claude-haiku-5-5") =>
+    hitAt(id, at, 0, { message: { model, usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 40_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 80_000 } } } });
+  const yesterday = localAt(-1, 15, 14);
+  for (const [title, rows, busts] of [
+    ["explains 2 priced cache_hits busts: the count, the latest's local time and their writes' cost added up", () => [firstHit(), hitAt("b1", localAt(0, 15, 10), 2), haikuBust("b2", localAt(0, 15, 14))], () => "2 busts this session, the last at 3:14 PM, wrote the cache again for $0.86."],
+    ["explains 1 priced cache_hits bust in the singular", () => [firstHit(), hitAt("b1", localAt(0, 15, 14), 2)], () => "1 bust this session, at 3:14 PM, wrote the cache again for $0.78."],
+    ["explains a cache_hits bust on an earlier day by its date and local time", () => [hitAt("first", localAt(-1, 15), 0), hitAt("b1", yesterday, 2)], () => `1 bust this session, at ${MONTHS[yesterday.getMonth()]} ${yesterday.getDate()} 3:14 PM, wrote the cache again for $0.78.`],
+  ] as const)
+    test(title, async ($, on) => {
+      const ui = await hitsDrawn($, on, [...rows(), hitAt("last", localAt(0, 15, 20), 99.6)]);
+      expect(await explanationOf(ui, "cache_hits")).toBe(`Cache hits: the last request read 99.6% of its prompt from the cache. ${busts()} Sparks run from 95% to 100%, amber under 95%, red under 50%.`);
+      await ui.unmount();
+    });
+
+  // The sparkline and the bust count are the tag's value, which stands on the grey while the explanation line can show
+  // what hovering it explains; the floor is its label, as a chip's mark is, and stays off the grey.
+  for (const [title, options, grey] of [
+    ["draws the cache_hits sparkline and bust count on the grey while explain_row is on, the floor off it", {}, "#373a48"],
+    ["draws no part of the cache_hits tag on the grey with explain_row off", { explain_row: false }, undefined],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [100, 2].map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
+      const backgrounds = must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) =>
+        typeof part === "object" && part !== null && "props" in part && typeof part.props === "object" && part.props !== null && "backgroundColor" in part.props ? part.props.backgroundColor : undefined,
+      );
+      expect(backgrounds).toEqual([undefined, ...Array.from({ length: 12 }, () => grey), grey]);
+      await ui.unmount();
+    });
+
+  // One decimal, and 100.0% only for a request that read its whole prompt from the cache.
+  for (const [rate, shown] of [[99.96, "99.9"], [100, "100.0"]] as const)
+    test(`explains a cache_hits request that read ${rate}% as ${shown}%`, async ($, on) => {
+      const ui = await hitsDrawn($, on, [firstHit(), hitAt("last", localAt(0, 15, 20), rate)]);
+      expect(await explanationOf(ui, "cache_hits")).toMatch(new RegExp(`^Cache hits: the last request read ${shown.replace(".", "\\.")}% of its prompt from the cache\\. `));
+      await ui.unmount();
+    });
+
+  // One bust of two on a model the price table does not list leaves their cost unknown.
+  test("explains unpriced cache_hits busts by their count and the latest's local time, with no cost", async ($, on) => {
+    const ui = await hitsDrawn($, on, [firstHit(), hitAt("b1", localAt(0, 15, 10), 2), haikuBust("b2", localAt(0, 15, 14), "claude-nova-1"), hitAt("last", localAt(0, 15, 20), 99.6)]);
+    expect(await explanationOf(ui, "cache_hits")).toBe("Cache hits: the last request read 99.6% of its prompt from the cache. 2 busts this session, the last at 3:14 PM. Sparks run from 95% to 100%, amber under 95%, red under 50%.");
+    await ui.unmount();
+  });
+
+  // Past the default of 12 the scan keeps as many requests as the length sets, so every cell draws one.
+  test("draws a request in each of 20 cache_hits cells at cache_hits_length 20 once 20 were made", { options: { cache_hits_length: 20 } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`r${i}`, i + 1, 99.9)));
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "spark"])]);
     await ui.unmount();
   });
 
@@ -4727,6 +4830,23 @@ describe("cockpit", () => {
     expect(lines.filter((line) => line.startsWith("credits.spent="))).toEqual([]);
     await ui.unmount();
   });
+
+  for (const gradients of [true, false])
+    test(`lists hits.spark, hits.low and hits.bust in a Cache hits group of their own in the colours pane, with their defaults, with gradients ${gradients ? "on" : "off"}`, { options: { gradients } }, async ($, on) => {
+      await colorsPane($, on, { gradients }, async (ui) => {
+        const drawn = await ui.drawn();
+        // A heading by its text, a field by its Input's key and value, then its label: the one Text drawn with no props.
+        const lines = (isDrawn(drawn) ? drawn.children : []).flatMap((node): string[] => {
+          const props = /"type":"Input","props":(\{[^}]*\})/.exec(JSON.stringify(node))?.[1];
+          const input: unknown = props === undefined ? undefined : JSON.parse(props);
+          const label = /"type":"Text","children":\["([^"]*)"\]/.exec(JSON.stringify(node))?.[1];
+          if (typeof input === "object" && input !== null && "key" in input && "value" in input) return [`${input.key}=${input.value} ${label}`];
+          return isDrawn(node) && node.props.bold === true ? [flat(node)] : [];
+        });
+        const at = lines.indexOf("Cache hits");
+        expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
+      });
+    });
 
   test("with gradients off the colours pane lists credits.from alone for the usage credits", { options: { gradients: false } }, async ($, on) => {
     await colorsPane($, on, { gradients: false }, async (ui) => {
