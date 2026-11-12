@@ -1634,8 +1634,9 @@ function hitsWords(h: StatusHits, tag: HitsTag, where: string, nowMs: number) {
   const newest = h.points.at(-1);
   const floor = hitsFloors[tag];
   const { count, at, usd: cost } = h.busts;
-  // The latest bust by the person's clock, its date too on an earlier day.
-  const when = at === undefined ? "" : `${count === 1 ? "at" : "the last at"} ${dateClock(at, nowMs)}`;
+  // The latest bust by the person's clock, its date too on an earlier day. A bust is past, so it is cut to its minute
+  // before dateClock, whose rounding is for resets: 3:14:40 PM reads 3:14 PM, not a minute the clock has not reached.
+  const when = at === undefined ? "" : `${count === 1 ? "at" : "the last at"} ${dateClock(Math.floor(at / 60_000) * 60_000, nowMs)}`;
   // A cost only while every counted bust is priced: one unpriced makes the sum unknown.
   const paid = cost === undefined ? "" : `, wrote the cache again for ${usd(cost)}`;
   const busts = count === 0 ? `No busts ${where}.` : `${count} ${count === 1 ? "bust" : "busts"} ${where}, ${when}${paid}.`;

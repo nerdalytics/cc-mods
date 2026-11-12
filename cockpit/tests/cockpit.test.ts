@@ -2597,10 +2597,15 @@ describe("cockpit", () => {
   const haikuBust = (id: string, at: Date, model = "claude-haiku-5-5") =>
     hitAt(id, at, 0, { message: { model, usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 40_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 80_000 } } } });
   const yesterday = localAt(-1, 15, 14);
+  // Rounded to the minute, a bust this late the day before would read today's 12 AM.
+  const lastMinute = localAt(-1, 23, 59, 40);
   for (const [title, rows, busts] of [
     ["explains 2 priced cache_hits busts: the count, the latest's local time and their writes' cost added up", () => [firstHit(), hitAt("b1", localAt(0, 15, 10), 2), haikuBust("b2", localAt(0, 15, 14))], () => "2 busts this session, the last at 3:14 PM, wrote the cache again for $0.86."],
     ["explains 1 priced cache_hits bust in the singular", () => [firstHit(), hitAt("b1", localAt(0, 15, 14), 2)], () => "1 bust this session, at 3:14 PM, wrote the cache again for $0.78."],
     ["explains a cache_hits bust on an earlier day by its date and local time", () => [hitAt("first", localAt(-1, 15), 0), hitAt("b1", yesterday, 2)], () => `1 bust this session, at ${MONTHS[yesterday.getMonth()]} ${yesterday.getDate()} 3:14 PM, wrote the cache again for $0.78.`],
+    // A bust is past, so its time is cut to its minute, never rounded up past the clock.
+    ["explains a cache_hits bust at 3:14:40 PM, off a whole minute, as 3:14 PM", () => [firstHit(), hitAt("b1", localAt(0, 15, 14, 40), 2)], () => "1 bust this session, at 3:14 PM, wrote the cache again for $0.78."],
+    ["explains a cache_hits bust at 23:59:40 the day before, off a whole minute, by that day's date and 11:59 PM", () => [hitAt("first", localAt(-1, 15), 0), hitAt("b1", lastMinute, 2)], () => `1 bust this session, at ${MONTHS[lastMinute.getMonth()]} ${lastMinute.getDate()} 11:59 PM, wrote the cache again for $0.78.`],
   ] as const)
     test(title, async ($, on) => {
       const ui = await hitsDrawn($, on, [...rows(), hitAt("last", localAt(0, 15, 20), 99.6)]);
@@ -2743,6 +2748,8 @@ describe("cockpit", () => {
     ["explains 2 agent_cache_hits busts of two subagents by their count, the latest's local time and their writes' cost added up", {}, () => [hitAt("a2", localAt(0, 15, 10), 2, { agentId: "a" }), hitAt("b2", localAt(0, 15, 14), 2, { agentId: "b" })], () => agentHitsWords("2 busts among them, the last at 3:14 PM, wrote the cache again for $1.57.")],
     ["explains unpriced agent_cache_hits busts with no cost", {}, () => [hitAt("a2", localAt(0, 15, 10), 2, { agentId: "a" }), hitAt("b2", localAt(0, 15, 14), 2, { agentId: "b", message: { model: "claude-nova-1", usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 2_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 98_000 } } } })], () => agentHitsWords("2 busts among them, the last at 3:14 PM.")],
     ["explains an agent_cache_hits bust on an earlier day by its date and local time", {}, () => [hitAt("b0", localAt(-1, 15), 99, { agentId: "b" }), hitAt("b2", yesterday, 2, { agentId: "b" })], () => agentHitsWords(`1 bust among them, at ${MONTHS[yesterday.getMonth()]} ${yesterday.getDate()} 3:14 PM, wrote the cache again for $0.78.`)],
+    ["explains an agent_cache_hits bust at 3:14:40 PM, off a whole minute, as 3:14 PM", {}, () => [hitAt("a2", localAt(0, 15, 14, 40), 2, { agentId: "a" })], () => agentHitsWords("1 bust among them, at 3:14 PM, wrote the cache again for $0.78.")],
+    ["explains an agent_cache_hits bust at 23:59:40 the day before, off a whole minute, by that day's date and 11:59 PM", {}, () => [hitAt("b0", localAt(-1, 15), 99, { agentId: "b" }), hitAt("b2", lastMinute, 2, { agentId: "b" })], () => agentHitsWords(`1 bust among them, at ${MONTHS[lastMinute.getMonth()]} ${lastMinute.getDate()} 11:59 PM, wrote the cache again for $0.78.`)],
     ["explains agent_cache_hits from its own floor, agent_cache_hits_floor 50 naming no amber, while cache_hits_floor is 97", { agent_cache_hits_floor: 50, cache_hits_floor: 97 }, () => [], () => agentHitsWords("No busts among them.", "Sparks run from 50% to 100%, red under 50%.")],
   ] as const)
     test(title, { options }, async ($, on) => {
