@@ -373,7 +373,7 @@ describe("cockpit", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 1_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: "O" })).toBeDefined();
     await above.unmount();
     const below = await mountHint($);
@@ -935,7 +935,7 @@ describe("cockpit", () => {
     const drawn = await below.drawn();
     expect(leaves(isDrawn(drawn) ? drawn.children : []).at(-1)?.props.key).toBe("explain");
     await below.unmount();
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Box", key: "explain" })).toBeUndefined();
     await above.unmount();
     // The default layout as the order pane lists it: a stale default naming forecast would add an empty row-3.
@@ -952,7 +952,7 @@ describe("cockpit", () => {
     // Outside a repository the git row holds the folder alone.
     on("process.run", () => ({ value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } }));
     await startWithLimits($, on);
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     // A line spelled: a row as "row", anything else as its text.
     const lines = async () => {
       const drawn = await above.drawn();
@@ -983,7 +983,7 @@ describe("cockpit", () => {
     expect(explain?.text).toBe(line);
     expect(await below.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
     await below.unmount();
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: /at this pace/ })).toBeUndefined();
     await above.unmount();
   });
@@ -1006,7 +1006,7 @@ describe("cockpit", () => {
   test("draws the explanation line above the prompt when the layout puts it there", { options: { layout: `explain;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
     stubHint(on, START);
     await startWithLimits($, on);
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await above.find({ type: "Text", text: /at this pace/ })).toBeDefined();
     await above.unmount();
     const below = await mountHint($);
@@ -1958,7 +1958,7 @@ describe("cockpit", () => {
     expect(await below.find({ type: "Box", key: "context" })).toBeUndefined();
     expect((await explanationsIn(below)).map(scopeOf)).toContain("explain-context");
     await below.unmount();
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     expect(await drawnTag(above, "context")).toMatchObject({ hover: { scope: "explain-context" } });
     await above.unmount();
   });
@@ -2467,7 +2467,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
     await caughtUp(on, ui);
@@ -2511,7 +2511,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
     await caughtUp(on, ui);
@@ -2543,7 +2543,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
     await caughtUp(on, ui);
@@ -2576,7 +2576,7 @@ describe("cockpit", () => {
     let isOpen = false;
     on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r/cc-mods" });
-    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const glyphs = async () => (await ui.findAll({ type: "Text" })).map(glyph).join("");
     await caughtUp(on, ui);
     expect(await glyphs()).not.toContain("PR #");
@@ -2706,7 +2706,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
     // The number links to the PR's page; the branch, a link to its checkout, holds its own text.
@@ -2790,7 +2790,7 @@ describe("cockpit", () => {
         plugin: "cockpit",
         surface: "terminal",
         component: "AbovePrompt",
-        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+        props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
       });
 
       const link = async () => (await ui.findAll({ type: "Link" })).find((l) => l.props.href === "https://github.com/o/r/pull/7");
@@ -3095,7 +3095,7 @@ describe("cockpit", () => {
   }
 
   const gitRow = ($: Engine) =>
-    $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
   // A turn's end scans whatever the git files say: a test that changes what git prints after the session's first scan
   // ends one to start from that state.
   const turnEnds = async ($: Engine, clock: MockClock) => {
@@ -3254,7 +3254,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     await caughtUp(on, ui);
     await polls(2);
@@ -3378,7 +3378,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     await caughtUp(on, ui);
     await clock.advance(4_000);
@@ -3465,7 +3465,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     const behind = async () => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "https://github.com/o/r/commits/feat");
     try {
@@ -3564,7 +3564,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     // The bottom half of a 5h cell is lit while its usage is left: all ten at 0% used, none at 100%. The limits are
     // under the prompt, the branch above it.
@@ -3617,7 +3617,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
     const shown = async () => (await ui.findAll({ type: "Link" })).some((l) => l.props.href === "file:///r/cockpit");
     await caughtUp(on, ui);
@@ -3669,7 +3669,7 @@ describe("cockpit", () => {
       plugin: "cockpit",
       surface: "terminal",
       component: "AbovePrompt",
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE },
     });
 
     await caughtUp(on, ui);
@@ -4032,7 +4032,7 @@ describe("cockpit", () => {
     // Outside a repository the git row holds the folder alone.
     on("process.run", () => ({ value: { exitCode: 128, stdout: "", stderr: "fatal: not a git repository", isStdoutTruncated: false, isStderrTruncated: false } }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     const below = await mountHint($);
     // A line spelled: a blank one as "_", a row as "row", the explanation line as "explain".
     const lines = async (ui: { drawn: () => Promise<unknown> }) => {
@@ -4073,7 +4073,7 @@ describe("cockpit", () => {
       return { value: { exitCode: stdout === undefined ? 1 : 0, stdout: stdout ?? "", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } };
     });
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/r" });
-    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
+    const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...SITE } });
     await caughtUp(on, ui);
     // The commits ahead (↑2) are hidden.
     expect(rowSpelled((await tagRows(ui))[0])).toEqual(spelled);
