@@ -58,8 +58,8 @@ async function colourLines(ui: { drawn: () => Promise<unknown> }, labelled = tru
 }
 // What the explanation line shows in its flow, the hidden explanations laid over it left out.
 const shownIn = (line: FoundElement) => elements(line.children).filter((child) => child.props.position !== "absolute").map(flat).join("");
-// The eight tags an explanation stands behind, by the scope each joins and the key its Box draws with.
-const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"], ["cache_hits", "cache_hits"]] as const;
+// The nine tags an explanation stands behind, by the scope each joins and the key its Box draws with.
+const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"], ["cache_hits", "cache_hits"], ["agent_cache_hits", "agent_cache_hits"]] as const;
 // A tag's keyed Box as drawn, its hover included, which FoundElement.props leaves out.
 const drawnTag = async (ui: { findAll: Mounted["findAll"] }, key: string) => {
   for (const box of await ui.findAll({ type: "Box" })) {
@@ -94,7 +94,7 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // The layout option's rows as by default, and a layout with one row in place of its default. The git row draws above
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
-const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache,gap-1,cache_hits";
+const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache,gap-1,cache_hits,gap-1,agent_cache_hits";
 const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
@@ -120,7 +120,7 @@ const breakdownOf = (window: number, used: number, threshold?: number) =>
     ...(threshold === undefined ? { isAutoCompactEnabled: false } : { isAutoCompactEnabled: true, autoCompactThreshold: threshold }),
     apiUsage: null,
   }) satisfies SessionContextBreakdown;
-const subagent = (status: AgentStatus): AgentInfo => ({ id: "a1", description: "d", type: "Explore", status });
+const subagent = (status: AgentStatus, id = "a1"): AgentInfo => ({ id, description: "d", type: "Explore", status });
 
 // Numbers from the screenshot this mod replaces: 797.1K tokens in a 1M window,
 // 5h resetting in 2h56m, 7d resetting in 1d1h, $635.27, Opus 5.5.
@@ -171,11 +171,16 @@ async function caughtUp(on: On, ui: { redraw: () => Promise<void> }): Promise<vo
   await clockOn(on).settle();
   await ui.redraw();
 }
+// The agents $.agent.list() answers in a test, read at each call, so a test can change them as it runs.
+const agentLists = new WeakMap<On, () => AgentInfo[]>();
+const agentsOn = (on: On, agents: () => AgentInfo[]) => void agentLists.set(on, agents);
 // The status row draws under the prompt, below the engine's hint line, which a test stands in for: before its first
 // call of $, as the kit requires. It registers the test's clock, so a test's own start for it goes here.
 // The band above the prompt draws nothing of its own until the mod's git row has something to show.
 function stubHint(on: On, now?: number): void {
   clockOn(on, now);
+  // The rows ask which subagents work: none, unless the test lists them with agentsOn.
+  on("agent.list", () => ({ value: agentLists.get(on)?.() ?? [] }));
   on("ui.render", { component: "PromptHint" }, ($, e) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
   on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
@@ -224,7 +229,7 @@ async function handoffRuns($: Engine, on: On, { model = "claude-opus-5-5", rateL
   on("session.model", () => ({ value: model }));
   on("session.id", () => ({ value: "sid-1" }));
   on("settings.read", () => ({ value: settings }));
-  on("agent.list", () => ({ value: agents }));
+  agentsOn(on, () => agents);
   on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
   on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
   on("process.spawn", async function* () {
@@ -281,8 +286,6 @@ describe("cockpit", () => {
       },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    // 797,100 tokens is past the smart zone, so the line offering a compaction asks which subagents run.
-    on("agent.list", () => ({ value: [] }));
 
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
@@ -1081,10 +1084,11 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // A session that draws all eight explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
+  // A session that draws all nine explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
   // so the run-out warning shows, the 7d at 20%, 120,000 of 200,000 tokens of context left, 7 prompts, and the main
   // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
-  // subagent's one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00, reads it for $0.20.
+  // subagent still running whose one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00,
+  // reads it for $0.20.
   async function explained($: Engine, on: On, { cachedAgo = 10, agents = true } = {}): Promise<Mounted<"terminal", "PromptHint">> {
     stubHint(on, START);
     const now = clockOn(on).now();
@@ -1093,6 +1097,7 @@ describe("cockpit", () => {
     const main = { type: "assistant", requestId: "A", timestamp: at, message: { model: "claude-opus-5-5", usage: usage(10, 0, 1_000_000) } };
     const agent = { type: "assistant", requestId: "B", agentId: "a1", timestamp: at, message: { model: "claude-haiku-5-5", usage: usage(1_000, 150_000, 0) } };
     const transcript = [main, ...(agents ? [agent] : [])].map((r) => JSON.stringify(r)).join("\n");
+    if (agents) agentsOn(on, () => [subagent("running", "a1")]);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
     on("session.usage", () => ({
       value: {
@@ -1120,7 +1125,7 @@ describe("cockpit", () => {
   }
 
   for (const [style, said] of [["classic", ""], ["gauge", ", the gauge's too"]] as const)
-    test(`joins each of the eight tags to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
+    test(`joins each of the nine tags, agent_cache_hits too, to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
       const ui = await explained($, on);
       for (const [tag, key] of EXPLAINED) expect(await drawnTag(ui, key)).toMatchObject({ hover: { scope: `explain-${tag}` } });
       // Each explanation hidden until its tag's scope is hovered, then laid over the line from its top left corner.
@@ -1128,7 +1133,7 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  test("draws no overlay of its own in any of the eight tags", async ($, on) => {
+  test("draws no overlay of its own in any of the nine tags, agent_cache_hits too", async ($, on) => {
     const ui = await explained($, on);
     for (const [, key] of EXPLAINED) expect(JSON.stringify(await drawnTag(ui, key))).not.toContain('"position":"absolute"');
     await ui.unmount();
@@ -2015,7 +2020,7 @@ describe("cockpit", () => {
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
     on("session.root", () => ({ value: "/work" }));
-    on("agent.list", () => ({ value: agents }));
+    agentsOn(on, () => agents);
     on("fs.list", () => ({ value: [...files.map((name) => file(name, name.endsWith("0900.md") ? 1_000 : handoffAt)), file("README.md", 9_500)] }));
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
@@ -2086,7 +2091,7 @@ describe("cockpit", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
-    on("agent.list", () => ({ value: agents }));
+    agentsOn(on, () => agents);
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
     on("process.spawn", async function* () {
@@ -2133,7 +2138,7 @@ describe("cockpit", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
-    on("agent.list", () => ({ value: idle }));
+    agentsOn(on, () => idle);
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
     on("process.spawn", async function* () {
@@ -2217,7 +2222,7 @@ describe("cockpit", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens: 190_000, window: 1_000_000 }, rateLimits: [] } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
-    on("agent.list", () => ({ value: idle }));
+    agentsOn(on, () => idle);
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
     on("process.spawn", async function* () {
@@ -2250,7 +2255,7 @@ describe("cockpit", () => {
     on("session.usage", () => ({ value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits } }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
     on("session.id", () => ({ value: "sid-1" }));
-    on("agent.list", () => ({ value: agents }));
+    agentsOn(on, () => agents);
     on("env.get", ($, e) => ({ value: e.name === "HOME" ? "/home/u" : undefined }));
     on("http.fetch", () => ({ value: { status: 200, ok: true, headers: {}, text: md } }));
     on("process.spawn", async function* () {
@@ -2462,10 +2467,11 @@ describe("cockpit", () => {
     await caughtUp(on, ui);
     return ui;
   }
-  // The cache_hits tag's parts, each its text and its colour by name: spark, low, bust, dim or none.
+  // The cache_hits tag's parts, or another sparkline tag's by its key, each its text and its colour by name: spark, low,
+  // bust, dim or none.
   const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
-  const hitsParts = async (ui: Mounted<"terminal", "PromptHint">) =>
-    must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => {
+  const hitsParts = async (ui: Mounted<"terminal", "PromptHint">, key = "cache_hits") =>
+    must(await ui.find({ type: "Box", key }), `the ${key} tag`).children.map((part) => {
       const props = propsOf(part);
       const text = typeof part === "object" && part !== null && "children" in part && Array.isArray(part.children) ? part.children.join("") : String(part);
       return [text, props.dimColor === true ? "dim" : (HIT_COLOURS[String(props.color)] ?? "none")];
@@ -2634,6 +2640,135 @@ describe("cockpit", () => {
   test("draws a request in each of 20 cache_hits cells at cache_hits_length 20 once 20 were made", { options: { cache_hits_length: 20 } }, async ($, on) => {
     const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`r${i}`, i + 1, 99.9)));
     expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "spark"])]);
+    await ui.unmount();
+  });
+
+  // The subagent mark, \uf0e7, the agent_cache_hits tag's first part.
+  const MARK = ["\uf0e7", "none"];
+  test("keeps each subagent's agent_cache_hits requests apart, draws each one's first by its hit rate uncounted, and counts only the subagents pending or running", async ($, on) => {
+    // a1 and a2 run, a3 finished. Each one's first request writes it all; as one list a2's 0% after a1's would count.
+    agentsOn(on, () => [subagent("running", "a1"), subagent("pending", "a2"), subagent("completed", "a3")]);
+    const ui = await hitsDrawn($, on, [
+      hitRow("m1", 1, 99),
+      hitRow("x1", 2, 0, { agentId: "a3" }),
+      hitRow("x2", 3, 2, { agentId: "a3" }),
+      hitRow("s1", 4, 0, { agentId: "a1" }),
+      hitRow("t1", 5, 0, { agentId: "a2" }),
+      hitRow("s2", 6, 1, { agentId: "a1" }),
+      hitRow("t2", 7, 99, { agentId: "a2" }),
+    ]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(8), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 1↯", "bust"]]);
+    await ui.unmount();
+  });
+
+  // A subagent that made requests and finished, one only waiting, and a teammate at work are none pending or running.
+  const teammate: AgentInfo = { ...subagent("running", "tm"), teammateId: "scout@team", type: "teammate" };
+  for (const [what, agents] of [
+    ["no subagent ever ran", []],
+    ["the one that ran finished", [subagent("completed", "a1")]],
+    ["one only waits", [subagent("waiting", "a1")]],
+    ["only a teammate is running", [teammate]],
+  ] as const)
+    test(`draws no agent_cache_hits tag when ${what}, and folds the gaps around it`, { options: { layout: withStatus("model,gap-1,agent_cache_hits,gap-2,tokens", "limit_7d,limit_5h,credits,context,turns,agents,cache,cache_hits") } }, async ($, on) => {
+      agentsOn(on, () => [...agents]);
+      const ui = await hitsDrawn($, on, [hitRow("m1", 1, 99), hitRow("s1", 2, 0, { agentId: "a1" }), hitRow("s2", 3, 99, { agentId: "a1" }), hitRow("t1", 4, 99, { agentId: "tm" })]);
+      expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
+      expect(rowSpelled((await tagRows(ui))[0]).slice(0, 2)).toEqual(["Opus 5.5", "_2"]);
+      await ui.unmount();
+    });
+
+  test("draws the agent_cache_hits requests of the running subagents merged by the time each was made, and none of a finished one's once it finishes", async ($, on) => {
+    let agents = [subagent("running", "a"), subagent("running", "b")];
+    agentsOn(on, () => agents);
+    // A at minutes 1 and 3, B at minute 2: A's 99.4% a full spark, B's 95% the lowest, A's 97.5% the fifth.
+    const ui = await hitsDrawn($, on, [hitRow("a1", 1, 99.4, { agentId: "a" }), hitRow("a2", 3, 97.5, { agentId: "a" }), hitRow("b1", 2, 95, { agentId: "b" })]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(9), ["█", "spark"], ["▁", "spark"], ["▅", "spark"]]);
+    agents = [subagent("completed", "a"), subagent("running", "b")];
+    await caughtUp(on, ui);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(11), ["▁", "spark"]]);
+    await ui.unmount();
+  });
+
+  // A running subagent's first request, whatever it read, and one that made none yet draw no bust count.
+  for (const [what, rows, cells] of [
+    ["one whose only request wrote it all", [hitRow("s1", 1, 0, { agentId: "a1" })], [...blanks(11), ["█", "bust"]]],
+    ["one that made no request yet", [hitRow("m1", 1, 99)], blanks(12)],
+  ] as const)
+    test(`draws the subagent mark, the dim floor and the agent_cache_hits sparkline with no bust count while running ${what}`, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a1")]);
+      const ui = await hitsDrawn($, on, [...rows]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...cells]);
+      await ui.unmount();
+    });
+
+  // Each tag reads its own length and floor. A main request and a subagent's at 95%: the lowest spark at a floor of 95, the
+  // fifth at 90, and an amber ▁ at 97. The subagent's 100% beside it is a full spark at any floor.
+  const BOTH = [hitRow("m1", 1, 95), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 95, { agentId: "a1" })];
+  for (const [title, options, main, sub] of [
+    ["scales agent_cache_hits from agent_cache_hits_floor 90 while cache_hits keeps 95", { agent_cache_hits_floor: 90 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["90 ", "dim"], ...blanks(10), ["█", "spark"], ["▅", "spark"]]],
+    ["keeps agent_cache_hits at 95 and 12 cells while cache_hits_floor is 90 and cache_hits_length 3", { cache_hits_floor: 90, cache_hits_length: 3 }, [["90 ", "dim"], ...blanks(2), ["▅", "spark"]], [["95 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "spark"]]],
+    ["draws the agent_cache_hits floor 97 and 2 cells at agent_cache_hits_floor 97.8 and agent_cache_hits_length 2.7, fractions rounded down", { agent_cache_hits_floor: 97.8, agent_cache_hits_length: 2.7 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["97 ", "dim"], ["█", "spark"], ["▁", "low"]]],
+    ["draws the agent_cache_hits floor 50 and 1 cell at agent_cache_hits_floor 30 and agent_cache_hits_length 0", { agent_cache_hits_floor: 30, agent_cache_hits_length: 0 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["50 ", "dim"], ["█", "spark"]]],
+    ["draws the agent_cache_hits floor 99 at agent_cache_hits_floor 120", { agent_cache_hits_floor: 120 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["99 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "low"]]],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a1")]);
+      const ui = await hitsDrawn($, on, BOTH);
+      expect(await hitsParts(ui)).toEqual(main);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ...sub]);
+      await ui.unmount();
+    });
+
+  // Each tag's colours are its own: one tag's bust colour set blue leaves the other's red.
+  const BUSTS = [hitRow("m1", 1, 100), hitRow("m2", 2, 2), hitRow("s1", 3, 100, { agentId: "a1" }), hitRow("s2", 4, 2, { agentId: "a1" })];
+  for (const [title, colors, main, sub] of [
+    ["draws the agent_cache_hits bust and bust count red while hits.bust is blue", "hits.bust=#0000ff", "blue", "bust"],
+    ["draws the agent_cache_hits bust and bust count in agent_hits.bust set blue, the cache_hits ones red", "agent_hits.bust=#0000ff", "bust", "blue"],
+  ] as const)
+    test(title, { options: { colors } }, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a1")]);
+      const ui = await hitsDrawn($, on, BUSTS);
+      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(10), ["█", "spark"], ["█", main], [" 1↯", main]]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "spark"], ["█", sub], [" 1↯", sub]]);
+      await ui.unmount();
+    });
+
+  // Subagent a's first request at 3 PM writes it all, uncounted; b's first at 3:05 reads 99%. Then the busts each test
+  // names, and a's last request at 3:20. Opus 5.5's 2% bust wrote 98,000 tokens for an hour at $8/MTok, $0.784.
+  const agentHitsWords = (busts: string, floor = "Sparks run from 95% to 100%, amber under 95%, red under 50%.") =>
+    `Subagents' cache hits: 2 running, their last request read 98.1% of its prompt from the cache. ${busts} ${floor}`;
+  for (const [title, options, rows, text] of [
+    ["explains agent_cache_hits with no bust among the running subagents", {}, () => [], () => agentHitsWords("No busts among them.")],
+    ["explains 1 priced agent_cache_hits bust in the singular, with its local time and its write's cost", {}, () => [hitAt("a2", localAt(0, 15, 14), 2, { agentId: "a" })], () => agentHitsWords("1 bust among them, at 3:14 PM, wrote the cache again for $0.78.")],
+    ["explains 2 agent_cache_hits busts of two subagents by their count, the latest's local time and their writes' cost added up", {}, () => [hitAt("a2", localAt(0, 15, 10), 2, { agentId: "a" }), hitAt("b2", localAt(0, 15, 14), 2, { agentId: "b" })], () => agentHitsWords("2 busts among them, the last at 3:14 PM, wrote the cache again for $1.57.")],
+    ["explains unpriced agent_cache_hits busts with no cost", {}, () => [hitAt("a2", localAt(0, 15, 10), 2, { agentId: "a" }), hitAt("b2", localAt(0, 15, 14), 2, { agentId: "b", message: { model: "claude-nova-1", usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 2_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 98_000 } } } })], () => agentHitsWords("2 busts among them, the last at 3:14 PM.")],
+    ["explains an agent_cache_hits bust on an earlier day by its date and local time", {}, () => [hitAt("b0", localAt(-1, 15), 99, { agentId: "b" }), hitAt("b2", yesterday, 2, { agentId: "b" })], () => agentHitsWords(`1 bust among them, at ${MONTHS[yesterday.getMonth()]} ${yesterday.getDate()} 3:14 PM, wrote the cache again for $0.78.`)],
+    ["explains agent_cache_hits from its own floor, agent_cache_hits_floor 50 naming no amber, while cache_hits_floor is 97", { agent_cache_hits_floor: 50, cache_hits_floor: 97 }, () => [], () => agentHitsWords("No busts among them.", "Sparks run from 50% to 100%, red under 50%.")],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a"), subagent("running", "b")]);
+      const ui = await hitsDrawn($, on, [hitAt("a1", localAt(0, 15), 0, { agentId: "a" }), hitAt("b1", localAt(0, 15, 5), 99, { agentId: "b" }), ...rows(), hitAt("a3", localAt(0, 15, 20), 98.1, { agentId: "a" })]);
+      expect(await explanationOf(ui, "agent_cache_hits")).toBe(text());
+      await ui.unmount();
+    });
+
+  // Every subagent pending or running counts, whether or not it made a request.
+  for (const [title, agents, rows, text] of [
+    ["explains agent_cache_hits while 1 subagent runs and made no request yet", [subagent("running", "a")], [], "Subagents' cache hits: 1 running, no request yet. Sparks run from 95% to 100%, amber under 95%, red under 50%."],
+    ["counts a pending subagent with no request among the agent_cache_hits running", [subagent("running", "a"), subagent("pending", "b"), subagent("completed", "c")], [hitAt("a1", localAt(0, 15), 99.6, { agentId: "a" })], "Subagents' cache hits: 2 running, their last request read 99.6% of its prompt from the cache. No busts among them. Sparks run from 95% to 100%, amber under 95%, red under 50%."],
+  ] as const)
+    test(title, async ($, on) => {
+      agentsOn(on, () => [...agents]);
+      const ui = await hitsDrawn($, on, [hitAt("m1", localAt(0, 15), 99), ...rows]);
+      expect(await explanationOf(ui, "agent_cache_hits")).toBe(text);
+      await ui.unmount();
+    });
+
+  // Past the default of 12 the scan keeps as many of a subagent's requests as the length sets.
+  test("draws a subagent's request in each of 20 agent_cache_hits cells at agent_cache_hits_length 20 once it made 20", { options: { agent_cache_hits_length: 20 } }, async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`s${i}`, i + 1, 99.9, { agentId: "a1" })));
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "spark"])]);
     await ui.unmount();
   });
 
@@ -2866,6 +3001,34 @@ describe("cockpit", () => {
     await clock.advance(100);
     await caughtUp(on, ui);
     expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(0);
+    await ui.unmount();
+  });
+
+  test("draws a made-up agent_cache_hits sparkline while the order pane shows and no subagent is running", async ($, on) => {
+    stubHint(on, START);
+    const clock = clockOn(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    let isOpen = false;
+    on("ui.panes", () => ({ value: isOpen ? [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] : [] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
+
+    isOpen = true;
+    await clock.advance(100);
+    await caughtUp(on, ui);
+    const sample = await hitsParts(ui, "agent_cache_hits");
+    expect(sample.slice(0, 2)).toEqual([MARK, ["95 ", "dim"]]);
+    expect(sample.slice(2, 14).every(([glyph]) => glyph !== " ")).toBe(true);
+    expect(await explanationOf(ui, "agent_cache_hits")).toMatch(/^Subagents' cache hits: \d+ running, their last request read /);
+
+    isOpen = false;
+    await clock.advance(100);
+    await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
     await ui.unmount();
   });
 
@@ -4052,9 +4215,9 @@ describe("cockpit", () => {
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
   // (status), fresh, compact, explain, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
-  // (1-10), ── row 2 ── (11), model .. cache_hits (12-21), ── hidden ── (22), spacer, gap-1, gap-2, gap-3 (23-26).
+  // (1-10), ── row 2 ── (11), model .. agent_cache_hits (12-22), ── hidden ── (23), spacer, gap-1, gap-2, gap-3 (24-27).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
-  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits";
+  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits";
   const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
@@ -4065,17 +4228,17 @@ describe("cockpit", () => {
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
     // The model tag dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 22)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 23)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model")]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits", "model") } }, async ($, on) => {
-    // 7d .. cache_hits 12-20, ── hidden ── 21, the spacer and gaps 22-25, model 26: dropped on the 7d limit's line.
-    expect(await dragIn(on, $, PINNED, "tags", 26, 12)).toEqual([["layout", pinned()]]);
+  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model") } }, async ($, on) => {
+    // 7d .. agent_cache_hits 12-21, ── hidden ── 22, the spacer and gaps 23-26, model 27: dropped on the 7d limit's line.
+    expect(await dragIn(on, $, PINNED, "tags", 27, 12)).toEqual([["layout", pinned()]]);
   });
 
   test("dragging a tag under another row's marker moves it into that row", { options: PINNED }, async ($, on) => {
     // The folders dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits`)]]);
+    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits`)]]);
   });
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
@@ -4085,7 +4248,7 @@ describe("cockpit", () => {
 
   test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits;fresh;compact;explain`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits;fresh;compact;explain`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
@@ -4099,23 +4262,23 @@ describe("cockpit", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone.
   test("dragging the spare spacer out of hidden adds a spacer to the row", { options: PINNED }, async ($, on) => {
-    // The spacer (23) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 23, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
+    // The spacer (24) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
   test("dragging a gap out of hidden adds it to the row", { options: PINNED }, async ($, on) => {
-    // gap-2 (25) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 25, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
+    // gap-2 (26) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 26, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
-  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits") };
+  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits") };
   test("a second spacer is there to drag out once one is", { options: SPACED }, async ($, on) => {
-    // model, spacer, 7d .. cache_hits (14-22), ── hidden ── 23, the spare spacer 24: dropped beside the first.
-    expect(await dragIn(on, $, SPACED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits")]]);
+    // model, spacer, 7d .. agent_cache_hits (14-23), ── hidden ── 24, the spare spacer 25: dropped beside the first.
+    expect(await dragIn(on, $, SPACED, "tags", 25, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
   test("dragging a spacer into hidden takes it away", { options: SPACED }, async ($, on) => {
-    expect(await dragIn(on, $, SPACED, "tags", 13, 23)).toEqual([["layout", pinned()]]);
+    expect(await dragIn(on, $, SPACED, "tags", 13, 24)).toEqual([["layout", pinned()]]);
   });
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
@@ -4125,7 +4288,7 @@ describe("cockpit", () => {
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
     // The review dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 5, 22)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 5, 23)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
@@ -4155,8 +4318,8 @@ describe("cockpit", () => {
     for (let i = 0; i < 2; i++) {
       // The model dropped on the hidden marker's line.
       await ui.pointer({ type: "down", x: 2, y: 12, button: "left", in: "tags" });
-      await ui.pointer({ type: "move", x: 2, y: 22, button: "left", in: "tags" });
-      await ui.pointer({ type: "up", x: 2, y: 22, button: "left", in: "tags" });
+      await ui.pointer({ type: "move", x: 2, y: 23, button: "left", in: "tags" });
+      await ui.pointer({ type: "up", x: 2, y: 23, button: "left", in: "tags" });
       expect(await tags()).toEqual(saved);
     }
     await ui.unmount();
@@ -4189,9 +4352,9 @@ describe("cockpit", () => {
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, cache hits, model and 6 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, cache hits, subagents' cache hits and 7 more" } });
     expect(await clientProps("tags")).toMatchObject({
-      items: ["row-1", "cache", "cache_hits", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
+      items: ["row-1", "cache", "cache_hits", "agent_cache_hits", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
       labels: { "row-2": "━━ row 2 ━━", credits: "usage credits" },
     });
@@ -4226,15 +4389,15 @@ describe("cockpit", () => {
 
   // Merged, the subagents' tag is not in the list, so a drop leaves it out of the layout, which puts it back after the costs.
   test("a drop with the costs merged writes the layout without the subagents' tag", { options: { ...PINNED, merge_costs: true } }, async ($, on) => {
-    // model .. cache_hits without agents (12-20), ── hidden ── 21: the model dropped there.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 21)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache,cache_hits", "model")]]);
+    // model .. agent_cache_hits without agents (12-21), ── hidden ── 22: the model dropped there.
+    expect(await dragIn(on, $, PINNED, "tags", 12, 22)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache,cache_hits,agent_cache_hits", "model")]]);
   });
 
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
   // left out goes after the first row, an offer left out last.
   for (const [layout, lines, tags] of [
     ["branch,model;prompt;fresh", ["row-1", "prompt", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",")]],
-    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -2), "row-2", "cache", "cache_hits"]],
+    ["model;cache", ["row-1", "prompt", "row-2", "fresh", "compact", "explain"], ["row-1", ...GIT_TAGS.split(","), ...STATUS_TAGS.split(",").slice(0, -3), "row-2", "cache", "cache_hits", "agent_cache_hits"]],
   ] as const) {
     test(`the order pane fills in what the layout ${layout} leaves out`, { options: { layout } }, async ($, on) => {
       clockOn(on, START);
@@ -4334,11 +4497,12 @@ describe("cockpit", () => {
     expect(lines.slice(7, 9)).toEqual(["≡ commits ahead", "  and behind"]);
     expect((await ui.findAll({ type: "Text", in: "tags" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
     // Its second line pressed and dropped on the hidden marker's first line (row 1's marker 0, folders to comments a
-    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to cache hits 13-23 with
-    // the main session's costs on two lines, the hidden marker from 24): ahead and behind is switched off.
+    // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to the subagents' cache
+    // hits 13-25 with the main session's costs and the subagents' cache hits on two lines each, the hidden marker from 26):
+    // ahead and behind is switched off.
     await ui.pointer({ type: "down", x: 3, y: 8, button: "left", in: "tags" });
-    await ui.pointer({ type: "move", x: 3, y: 24, button: "left", in: "tags" });
-    await ui.pointer({ type: "up", x: 3, y: 24, button: "left", in: "tags" });
+    await ui.pointer({ type: "move", x: 3, y: 26, button: "left", in: "tags" });
+    await ui.pointer({ type: "up", x: 3, y: 26, button: "left", in: "tags" });
     await ui.unmount();
     expect(written).toEqual([["layout", pinned("folders,branch,worktree,pr,review,comments,conflict,checks,changes", STATUS_TAGS, "sync")]]);
   });
@@ -4352,7 +4516,6 @@ describe("cockpit", () => {
       value: { startedAt: 0, context: { tokens, window: 1_000_000 }, rateLimits: [{ kind: "five_hour", percentUsed: 40, resetsAt: new Date(now + 10_560_000).toISOString() }] },
     }));
     on("session.model", () => ({ value: "claude-opus-5-5" }));
-    on("agent.list", () => ({ value: [] }));
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
     const ui = await mountHint($);
     const limit = must(await ui.find({ type: "Box", key: "five_hour" }), "the 5h bar");
@@ -4741,14 +4904,14 @@ describe("cockpit", () => {
     expect((await orderedTags($, on, "row-2")).slice(0, 5)).toEqual(["model", "limit_7d", "limit_5h", "credits", "context"]);
   });
 
-  test("places the cache_hits tag after cache in the default layout, a gap before it", async ($, on) => {
+  test("places the cache_hits tag after cache and the agent_cache_hits tag after it in the default layout, a gap before each", async ($, on) => {
     const tags = await orderedTags($, on, "row-2");
-    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 4)).toEqual(["cache", "gap-1", "cache_hits", "hidden"]);
+    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 6)).toEqual(["cache", "gap-1", "cache_hits", "gap-1", "agent_cache_hits", "hidden"]);
   });
 
-  test("places the cache_hits tag after cache in a saved layout that does not name it", { options: { layout: "folders;prompt;model,cache,context;fresh;compact;explain" } }, async ($, on) => {
+  test("places the cache_hits tag after cache and the agent_cache_hits tag after it in a saved layout that names neither", { options: { layout: "folders;prompt;model,cache,context;fresh;compact;explain" } }, async ($, on) => {
     const tags = await orderedTags($, on, "row-2");
-    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 3)).toEqual(["cache", "cache_hits", "context"]);
+    expect(tags.slice(tags.indexOf("cache"), tags.indexOf("cache") + 4)).toEqual(["cache", "cache_hits", "agent_cache_hits", "context"]);
   });
 
   // The sample spends 67% of its cap, 3 of the default 5 cells, or 4 of 6 at credits_length 6.
@@ -4832,7 +4995,16 @@ describe("cockpit", () => {
       await colorsPane($, on, { gradients }, async (ui) => {
         const lines = await colourLines(ui);
         const at = lines.indexOf("Cache hits");
-        expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
+        expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Subagents' cache hits$/)]);
+      });
+    });
+
+  for (const gradients of [true, false])
+    test(`lists the agent_cache_hits colours agent_hits.spark, agent_hits.low and agent_hits.bust in a Subagents' cache hits group of their own in the colours pane, with their defaults, with gradients ${gradients ? "on" : "off"}`, { options: { gradients } }, async ($, on) => {
+      await colorsPane($, on, { gradients }, async (ui) => {
+        const lines = await colourLines(ui);
+        const at = lines.indexOf("Subagents' cache hits");
+        expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#4ade80 at or above the floor", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
       });
     });
 
