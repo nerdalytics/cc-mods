@@ -2146,18 +2146,14 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   // how long it lived, so a read after a long idle stretch settles the lifetime.
   const stamps: number[] = [];
   const mains: { at: number; prompt: number; read: number; write?: number }[] = [];
-  // A compaction swaps the conversation for its summary: the cached prefix before it is never read again. Every one's
-  // time, for the cache_hits tag's busts.
-  let compactedAt = -Infinity;
+  // Each compaction's time. A compaction swaps the conversation for its summary: the cached prefix before it is never
+  // read again, and the first request after it finds no cache.
   const boundaries: number[] = [];
   const add = (line: string) => {
     const parsed = parseJson(line);
     if (!isRecord(parsed)) return;
     const row: TranscriptRow = parsed;
-    if (row.subtype === "compact_boundary" && !row.agentId) {
-      compactedAt = Math.max(compactedAt, Date.parse(row.timestamp ?? ""));
-      boundaries.push(Date.parse(row.timestamp ?? ""));
-    }
+    if (row.subtype === "compact_boundary" && !row.agentId) boundaries.push(Date.parse(row.timestamp ?? ""));
     const u = row.message?.usage;
     if (row.type !== "assistant" || !isRecord(u)) return;
     const model = String(row.message?.model ?? "");
@@ -2216,6 +2212,7 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
       const before = mains[i - 1];
       return before !== undefined && m.at - before.at > 300_000 && m.read >= 0.8 * before.prompt && !stamps.some((t) => t > before.at && t < m.at);
     });
+  const compactedAt = Math.max(-Infinity, ...boundaries);
   return { main, agents: { ...agents, count: agentIds.size }, cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined, hits: hitsOf(mains, boundaries) };
 }
 
