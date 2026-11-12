@@ -2764,6 +2764,19 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // As the main tag's: the sparkline and the bust count on the grey while explain_row is on, the mark and floor off it.
+  for (const [title, options, grey] of [
+    ["draws the agent_cache_hits sparkline and bust count on the grey while explain_row is on, the mark and floor off it", {}, "#373a48"],
+    ["draws no part of the agent_cache_hits tag on the grey with explain_row off", { explain_row: false }, undefined],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a1")]);
+      const ui = await hitsDrawn($, on, [100, 99, 2].map((rate, i) => hitRow(`s${i}`, i + 1, rate, { agentId: "a1" })));
+      const backgrounds = must(await ui.find({ type: "Box", key: "agent_cache_hits" }), "the agent_cache_hits tag").children.map((part) => propsOf(part).backgroundColor);
+      expect(backgrounds).toEqual([undefined, undefined, ...Array.from({ length: 12 }, () => grey), grey]);
+      await ui.unmount();
+    });
+
   // Past the default of 12 the scan keeps as many of a subagent's requests as the length sets.
   test("draws a subagent's request in each of 20 agent_cache_hits cells at agent_cache_hits_length 20 once it made 20", { options: { agent_cache_hits_length: 20 } }, async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
