@@ -1188,6 +1188,16 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // Above the prompt the band pads its rows a column each side, so a band of 42 columns wraps the line at 40: the same 7
+  // rows as under the prompt at 40.
+  test("gives the explanation line above the prompt the rows of the longest made-up explanations at the band's width less its padding", { options: { layout: `explain;${GIT};prompt;${STATUS};fresh;compact` } }, async ($, on) => {
+    const below = await explained($, on, { columns: 40 });
+    await below.unmount();
+    const above = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "AbovePrompt", props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 42, ...SITE } });
+    expect(new Set((await growersIn(above)).map((g) => g.props.height))).toEqual(new Set([7]));
+    await above.unmount();
+  });
+
   // At 1000 columns every line of every explanation fits in one row, so the rows are the most lines any one has: two
   // with usage_lookup on, where a split cost explanation adds the credits charged on the account as a second line.
   for (const [lookup, rows] of [[false, 1], [true, 2]] as const)
