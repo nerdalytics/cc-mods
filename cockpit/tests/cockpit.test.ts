@@ -1133,6 +1133,19 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
+  // A Box placed absolute is clipped by the area its site draws in, so the line itself must grow: an in-flow Box under
+  // each tag's scope, hidden until hovered, takes rows in the line while that tag's explanation shows.
+  test("grows the explanation line while a tag's explanation shows, with a hidden Box in its flow under each tag's scope", async ($, on) => {
+    const ui = await explained($, on);
+    const inFlow = leaves(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position !== "absolute" && child.props.display === "none");
+    expect(inFlow.map(scopeOf)).toEqual(EXPLAINED.map(([tag]) => `explain-${tag}`));
+    for (const grower of inFlow) {
+      expect(grower).toMatchObject({ hover: { display: "flex" } });
+      expect(grower.props.height).toBeGreaterThan(1);
+    }
+    await ui.unmount();
+  });
+
   test("draws no overlay of its own in any of the nine tags, agent_cache_hits too", async ($, on) => {
     const ui = await explained($, on);
     for (const [, key] of EXPLAINED) expect(JSON.stringify(await drawnTag(ui, key))).not.toContain('"position":"absolute"');

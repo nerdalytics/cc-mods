@@ -1575,9 +1575,13 @@ function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, now: number,
   return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
 }
 
+// The rows a revealed explanation adds to the explanation line.
+const EXPLAIN_ROWS = 3;
+
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
 // that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it. Over it, hidden
-// until its tag's hover scope is hovered, each shown tag's explanation.
+// until its tag's hover scope is hovered, each shown tag's explanation, and in its flow a Box revealed with it that grows
+// the line, since an explanation laid over the line is cut off at the edge of the area the line draws in.
 async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
   // One live reading for the warning and the explanations, so they agree to the second; the order pane's samples reach
   // the explanations only.
@@ -1586,13 +1590,16 @@ async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
   const shown = runOutWarning(ui, live) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
   const texts = s ? explanations(s) : {};
   // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it: at
-  // least as tall as the line, so every row of a wrapped warning, while a longer explanation runs on over what lies below.
+  // least as tall as the line, so every row of a wrapped warning and every row its grower adds.
   const grey = hex(color("empty"));
   const overlays = STATUS_ROW.flatMap((tag) => {
     const text = texts[tag];
     if (text === undefined || !isShown(tag)) return [];
+    // shortcut: a fixed EXPLAIN_ROWS whatever the width and the text, so a longer explanation is still cut; replace it
+    // with the rows the longest explanation needs at the line's width, measured once at load.
+    const grower = ui.Box({ height: EXPLAIN_ROWS, display: "none", hover: { scope: explainScope(tag), display: "flex" } });
     // One Text per line of the explanation, in a column.
-    return [ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", flexDirection: "column", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: text.split("\n").map((line) => ui.Text({ backgroundColor: grey, children: line })) })];
+    return [grower, ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", flexDirection: "column", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: text.split("\n").map((line) => ui.Text({ backgroundColor: grey, children: line })) })];
   });
   return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: [...(shown ? [shown] : []), ...overlays] });
 }
