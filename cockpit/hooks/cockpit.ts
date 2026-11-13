@@ -457,10 +457,10 @@ const listProps = (key: ListKey) => ({ ...lists[key], rev });
 // spacers, then the hidden marker, the spacer and the new row to drag out, and the offers switched off. The tags: each
 // row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags. Merged, the
 // costs are one tag, the total, and the subagents' tag is left out of the lists; a drop then leaves it out of the
-// layout, which puts it back after the costs.
-function listsOf(l: Layout, on: (line: Line) => boolean, merged = false): Record<ListKey, List> {
-  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents"));
-  const labels: Record<string, string> = { ...LABELS, tokens: merged ? "total costs" : "main session costs" };
+// layout, which puts it back after the costs. With `mergedHits` the cache hits are one tag the same way.
+function listsOf(l: Layout, on: (line: Line) => boolean, merged = false, mergedHits = false): Record<ListKey, List> {
+  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents") && !(mergedHits && name === "agent_cache_hits"));
+  const labels: Record<string, string> = { ...LABELS, tokens: merged ? "total costs" : "main session costs", cache_hits: mergedHits ? "total cache hits" : "cache hits" };
   const rows = l.lines.filter(isRow).map(listed);
   const id = (i: number) => `row-${i + 1}`;
   const named = (row: Row) => row.filter(isTag).map((tag) => labels[tag] ?? tag);
@@ -605,7 +605,7 @@ const LIMITS: { kind: string; badge: "7d" | "5h"; seconds: number }[] = [
 const LIMIT_STYLES = ["classic", "lanes", "gauge", "notch"] as const;
 type LimitStyle = (typeof LIMIT_STYLES)[number];
 // The cells each bar draws when its length option is unset: 7d, 5h and context as cockpit 1.1.0 drew them.
-const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5, cache_hits: 12, agent_cache_hits: 12 };
+const BAR_CELLS = { "7d": 7, "5h": 10, context: 10, credits: 5, cache_hits: 12, agent_cache_hits: 12, merged_cache_hits: 12 };
 // The percent the sparklines scale up from to 100% until register reads their floor options, their default too.
 const HITS_FLOOR = 95;
 // Every colour the mod draws, by its name in the colors option: the /cockpit:colors pane's rows, under the group the
@@ -761,6 +761,8 @@ const SPARKS = [..."▁▂▃▄▅▆▇█"];
 // The two sparkline tags: each one's colours, and the mark the subagents' draws before its floor.
 type HitsTag = "cache_hits" | "agent_cache_hits";
 const HITS_TAGS: Record<HitsTag, { colors: "hits" | "agent_hits"; mark?: string }> = { cache_hits: { colors: "hits" }, agent_cache_hits: { colors: "agent_hits", mark: AGENT_MARK } };
+// Merged, the cache_hits tag draws at the merged tag's length and floor, its own and the subagents' left as they are.
+const sizedAs = (tag: HitsTag) => (mergeCacheHits && tag === "cache_hits" ? "merged_cache_hits" : tag);
 
 let tick: { cancel: () => void } | undefined;
 // Advanced per frame rather than derived from the clock, so a speed change carries on from where the sweep is.
@@ -787,10 +789,10 @@ let pings = 0;
 let pingFor = 0;
 let pingAt = -Infinity;
 // The cells each bar draws, from the limit_7d_length, limit_5h_length, context_length and credits_length options, and
-// the sparklines' from cache_hits_length and agent_cache_hits_length.
+// the sparklines' from cache_hits_length, agent_cache_hits_length and merged_cache_hits_length.
 let barCells = { ...BAR_CELLS };
-// Each sparkline's floor, from the cache_hits_floor and agent_cache_hits_floor options.
-let hitsFloors: Record<HitsTag, number> = { cache_hits: HITS_FLOOR, agent_cache_hits: HITS_FLOOR };
+// Each sparkline's floor, from the cache_hits_floor, agent_cache_hits_floor and merged_cache_hits_floor options.
+let hitsFloors: Record<HitsTag | "merged_cache_hits", number> = { cache_hits: HITS_FLOOR, agent_cache_hits: HITS_FLOOR, merged_cache_hits: HITS_FLOOR };
 // The limit_style option; a value it does not know reads as classic.
 let limitStyle: LimitStyle = "classic";
 // The smart zone's size in tokens, statusline.zsh's SMART_CONTEXT_LIMIT, from the smart_zone_tokens option; 0 with the
@@ -868,7 +870,7 @@ export const register: Register = (on, options) => {
     if (line === "prompt") side = belowLines;
     else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
-  lists = listsOf(layout, shown, mergeCosts);
+  lists = listsOf(layout, shown, mergeCosts, mergeCacheHits);
   rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   barCells = {
@@ -878,9 +880,14 @@ export const register: Register = (on, options) => {
     credits: lengthOf(options.credits_length, BAR_CELLS.credits),
     cache_hits: lengthOf(options.cache_hits_length, BAR_CELLS.cache_hits),
     agent_cache_hits: lengthOf(options.agent_cache_hits_length, BAR_CELLS.agent_cache_hits),
+    merged_cache_hits: lengthOf(options.merged_cache_hits_length, BAR_CELLS.merged_cache_hits),
   };
   // Claude Code refuses a floor that is not a number before the module loads, and fills in its default when unset.
-  hitsFloors = { cache_hits: floorOf(options.cache_hits_floor as number), agent_cache_hits: floorOf(options.agent_cache_hits_floor as number) };
+  hitsFloors = {
+    cache_hits: floorOf(options.cache_hits_floor as number),
+    agent_cache_hits: floorOf(options.agent_cache_hits_floor as number),
+    merged_cache_hits: floorOf(options.merged_cache_hits_floor as number),
+  };
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
@@ -949,7 +956,7 @@ export const register: Register = (on, options) => {
     // A drop in one list can change the other (a new row's marker), so the pane draws both again.
     const now = { ...options, ...saved };
     layout = drop.layout;
-    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts);
+    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts, mergeCacheHits);
     rev = Math.random();
     $.ui.invalidate("ui.render");
     return { props: listProps(key) };
@@ -1195,7 +1202,7 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   // Spends a copy of the module before the cost split kept have no `after`, until the next scan rewrites them: all plan use.
   // Merged, cache_hits draws every subagent's requests of the session beside the main conversation's, a finished one's
   // too, so its cells stay; still nothing before the main conversation's first request.
-  const hits = mergeCacheHits && kept?.hits ? mergedHits([kept.hits, ...Object.values(kept.bySubagent ?? {})], barCells.cache_hits) : kept?.hits;
+  const hits = mergeCacheHits && kept?.hits ? mergedHits([kept.hits, ...Object.values(kept.bySubagent ?? {})], barCells.merged_cache_hits) : kept?.hits;
   const tokens = kept && { ...kept, main: { ...kept.main, after: kept.main.after ?? 0 }, agents: { ...kept.agents, after: kept.agents.after ?? 0 }, hits };
   const { value: turns } = await $.state.get(TURNS);
   const { value: compactAt } = await $.state.get(COMPACT_AT);
@@ -1242,7 +1249,7 @@ function withSamples(s: Snapshot): Snapshot {
     credits: s.credits?.enabled ? s.credits : { at: s.now * 1000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null },
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
-    tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 }, hits: tokens.hits ?? sampleHits(s.now * 1000, barCells.cache_hits) },
+    tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 }, hits: tokens.hits ?? sampleHits(s.now * 1000, barCells[sizedAs("cache_hits")], mergeCacheHits) },
     // Two made-up subagents while none runs, so the tag can be placed before one does.
     agentHits: s.agentHits ?? { running: 2, hits: sampleHits(s.now * 1000, barCells.agent_cache_hits) },
     git: g && {
@@ -1280,10 +1287,11 @@ function mergedHits(each: (StatusHits | undefined)[], cells: number): StatusHits
 }
 
 // The order pane's sparklines: every one of `n` cells a request, a minute apart, mostly near-perfect, with one under the
-// floor and one counted bust.
-function sampleHits(now: number, n: number): StatusHits {
+// floor and one counted bust. With `mixed`, every other request is a subagent's, for the merged tag: each of those
+// draws a spark, so both tags' spark colours show.
+function sampleHits(now: number, n: number, mixed = false): StatusHits {
   const rates = [99.8, 99.5, 97.2, 100, 94, 99.9, 11.4, 99.1, 99.7, 98.6, 100, 99.4];
-  return { points: Array.from({ length: n }, (_, i) => ({ at: now - (n - i) * 60_000, rate: rates[i % rates.length] ?? 100 })), busts: { count: 1, at: now - 6 * 60_000, usd: 0.7 } };
+  return { points: Array.from({ length: n }, (_, i) => ({ at: now - (n - i) * 60_000, rate: rates[i % rates.length] ?? 100, ...(mixed && i % 2 === 1 ? { agent: true as const } : {}) })), busts: { count: 1, at: now - 6 * 60_000, usd: 0.7 } };
 }
 
 // A row of tags, each a list of parts, with spacers and gaps; nothing when no tag has a part. A run of spacers is one
@@ -1628,7 +1636,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
         : `Cache cold: the next prompt writes it again for ${usd(c.write)}.`;
   }
   const main = t?.hits && hitsWords(t.hits, "cache_hits", "this session", s.now * 1000);
-  if (main?.read) out.cache_hits = `Cache hits: the last request ${main.read} ${main.busts} ${main.sparks}`;
+  if (main?.read) out.cache_hits = `${mergeCacheHits ? "Cache hits with subagents" : "Cache hits"}: the last request ${main.read} ${main.busts} ${main.sparks}`;
   if (s.agentHits) {
     const agents = hitsWords(s.agentHits.hits, "agent_cache_hits", "among them", s.now * 1000);
     const running = `Subagents' cache hits: ${s.agentHits.running} running`;
@@ -1641,7 +1649,7 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
 // and its floor's.
 function hitsWords(h: StatusHits, tag: HitsTag, where: string, nowMs: number) {
   const newest = h.points.at(-1);
-  const floor = hitsFloors[tag];
+  const floor = hitsFloors[sizedAs(tag)];
   const { count, at, usd: cost } = h.busts;
   // The latest bust by the person's clock, its date too on an earlier day. A bust is past, so it is cut to its minute
   // before dateClock, whose rounding is for resets: 3:14:40 PM reads 3:14 PM, not a minute the clock has not reached.
@@ -2291,15 +2299,17 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
       return before !== undefined && m.at - before.at > 300_000 && m.read >= 0.8 * before.prompt && !stamps.some((t) => t > before.at && t < m.at);
     });
   const compactedAt = Math.max(-Infinity, ...boundaries);
+  // Each source keeps as many requests as any tag drawing it shows; merged, the merged tag cuts to its own length after
+  // merging.
+  const merged = mergeCacheHits ? barCells.merged_cache_hits : 0;
   return {
     main,
     agents: { ...agents, count: agentIds.size },
     cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined,
-    hits: hitsOf(mains, boundaries, barCells.cache_hits),
+    hits: hitsOf(mains, boundaries, Math.max(barCells.cache_hits, merged)),
     bySubagent: Object.fromEntries(
       Object.entries(subs).flatMap(([id, requests]) => {
-        // As many as either tag draws: the merged cache_hits tag cuts to its own length after merging.
-        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], Math.max(barCells.cache_hits, barCells.agent_cache_hits));
+        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], Math.max(barCells.agent_cache_hits, merged));
         // Marked as a subagent's, so the merged cache_hits tag draws them in the subagents' colours.
         return h ? [[id, { ...h, points: h.points.map((p) => ({ ...p, agent: true as const })) }]] : [];
       }),
@@ -2785,8 +2795,8 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
 // to 100%; under it a low ▁, and under 50% a bust's full cell in red. The cells and the count are the value, on the grey
 // while the explanation line can show what hovering it explains.
 function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits, tag: HitsTag) {
-  const n = barCells[tag];
-  const floor = hitsFloors[tag];
+  const n = barCells[sizedAs(tag)];
+  const floor = hitsFloors[sizedAs(tag)];
   const { colors, mark } = HITS_TAGS[tag];
   const backgroundColor = explainRow ? hex(color("empty")) : undefined;
   // A subagent's request draws in the subagents' colours whichever tag draws it; the bust count in the tag's own.

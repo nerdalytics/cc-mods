@@ -19,8 +19,9 @@ export type StatusCache = { at: number; ttl: number; read?: number; write?: numb
 // (USD; undefined once one is unpriced).
 export type StatusHits = { points: { at: number; rate: number; agent?: true }[]; busts: { count: number; at?: number; usd?: number } };
 
-// `hits` holds the main conversation's newest requests, as many as the cache_hits tag draws. `bySubagent` holds each
-// subagent's, by its agentId, its newest requests as many as the cache_hits or agent_cache_hits tag draws, whichever more.
+// `hits` holds the main conversation's newest requests, as many as the cache_hits tag draws, or merged, as many as
+// merged_cache_hits_length sets, whichever more. `bySubagent` holds each subagent's, by its agentId, its newest requests
+// as many as the agent_cache_hits tag draws, or merged, as many as merged_cache_hits_length sets, whichever more.
 export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache; hits?: StatusHits; bySubagent?: Record<string, StatusHits> };
 
 // `defaultBranch` is "" when origin names none; ahead/behind count against the default branch when `vsDefault`.

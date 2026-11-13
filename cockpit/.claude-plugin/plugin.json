@@ -149,6 +149,19 @@
       "description": "One cache_hits sparkline for the main conversation and every subagent of the session, finished ones included, their requests merged by time, instead of a tag each: a subagent's request draws in the subagents' colours, and the bust count adds up all their busts. The agent_cache_hits tag then draws nothing. true / false (default)",
       "default": false
     },
+    "merged_cache_hits_length": {
+      "type": "number",
+      "title": "Cockpit: Total cache hits › length (cells)",
+      "description": "With merge_cache_hits on, the number of newest requests, the main conversation's and the subagents' together, the merged cache_hits sparkline draws, one a cell, the newest on the right; cache_hits_length and agent_cache_hits_length then leave it as it is. Off, it changes nothing. A fraction is rounded down, and anything under 1 draws 1 cell. (default: 12)",
+      "default": 12,
+      "min": 0
+    },
+    "merged_cache_hits_floor": {
+      "type": "number",
+      "title": "Cockpit: Total cache hits › floor (%)",
+      "description": "With merge_cache_hits on, the hit rate the merged cache_hits sparkline scales up from to 100%, drawn as the tag's label: a request at or above it draws a spark, green for the main conversation's and blue for a subagent's, one from 50% up to it an amber ▁, and one under 50%, a bust, a red █; cache_hits_floor and agent_cache_hits_floor then leave it as it is. Off, it changes nothing. A whole number from 50 to 99: a fraction is rounded down, and a value outside counts as the nearer end. (default: 95)",
+      "default": 95
+    },
     "smart_zone": {
       "type": "boolean",
       "title": "Cockpit: Smart zone on the context bar",

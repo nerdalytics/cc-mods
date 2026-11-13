@@ -2899,6 +2899,54 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // Merged, the merged tag reads its own length and floor, whatever the two tags' own options say. BOTH at a floor of 95:
+  // the main 95% the lowest spark, the subagent's 100% full and its 95% the lowest.
+  const OTHERS = { cache_hits_length: 3, cache_hits_floor: 90, agent_cache_hits_length: 2, agent_cache_hits_floor: 97 };
+  for (const [title, options, parts] of [
+    ["draws the merged cache_hits tag at the merged_cache_hits defaults, 12 cells and the floor 95, while the four other cache hits lengths and floors are set", { ...MERGED, ...OTHERS }, [["95 ", "dim"], ...blanks(9), ["▁", "spark"], ["█", "agent spark"], ["▁", "agent spark"]]],
+    ["draws the merged cache_hits tag at merged_cache_hits_length 30 and merged_cache_hits_floor 90 while cache_hits_length is 12", { ...MERGED, merged_cache_hits_length: 30, merged_cache_hits_floor: 90, cache_hits_length: 12 }, [["90 ", "dim"], ...blanks(27), ["▅", "spark"], ["█", "agent spark"], ["▅", "agent spark"]]],
+    ["draws the merged cache_hits floor 97 and 2 cells at merged_cache_hits_floor 97.8 and merged_cache_hits_length 2.7, fractions rounded down", { ...MERGED, merged_cache_hits_floor: 97.8, merged_cache_hits_length: 2.7 }, [["97 ", "dim"], ["█", "agent spark"], ["▁", "low"]]],
+    ["draws the merged cache_hits floor 50 and 1 cell at merged_cache_hits_floor 30 and merged_cache_hits_length 0", { ...MERGED, merged_cache_hits_floor: 30, merged_cache_hits_length: 0 }, [["50 ", "dim"], ["█", "agent spark"]]],
+    ["draws the merged cache_hits floor 99 at merged_cache_hits_floor 120", { ...MERGED, merged_cache_hits_floor: 120 }, [["99 ", "dim"], ...blanks(9), ["▁", "low"], ["█", "agent spark"], ["▁", "low"]]],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, BOTH);
+      expect(await hitsParts(ui)).toEqual(parts);
+      await ui.unmount();
+    });
+
+  // Past both tags' own lengths of 12 the scan keeps as many of each source's requests as the merged length sets.
+  test("draws a request in each of 30 merged cache_hits cells at merged_cache_hits_length 30 once the main conversation and a subagent made 15 each", { options: { ...MERGED, merged_cache_hits_length: 30 } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [...Array.from({ length: 15 }, (_, i) => hitRow(`m${i}`, i + 1, 100)), ...Array.from({ length: 15 }, (_, i) => hitRow(`s${i}`, 16 + i, 100, { agentId: "a1" }))]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 15 }, () => ["█", "spark"]), ...Array.from({ length: 15 }, () => ["█", "agent spark"])]);
+    await ui.unmount();
+  });
+
+  // The main conversation's first request at 3 PM and subagent a's at 3:05 write it all, uncounted; then the busts each
+  // test names, and the main conversation's last request at 3:20. Opus 5.5's 2% bust wrote 98,000 tokens for an hour at
+  // $8/MTok, $0.784.
+  const mergedWords = (busts: string, floor = 95) => `Cache hits with subagents: the last request read 99.6% of its prompt from the cache. ${busts} Sparks run from ${floor}% to 100%, amber under ${floor}%, red under 50%.`;
+  const unpricedBust = (id: string, at: Date) => hitAt(id, at, 2, { agentId: "a", message: { model: "claude-nova-1", usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 2_000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 98_000 } } } });
+  for (const [title, options, rows, text] of [
+    ["explains the merged cache_hits tag as Cache hits with subagents with no bust", MERGED, () => [], mergedWords("No busts this session.")],
+    ["explains the merged cache_hits tag as Cache hits with subagents from merged_cache_hits_floor 97 while cache_hits_floor is 90", { ...MERGED, merged_cache_hits_floor: 97, cache_hits_floor: 90 }, () => [], mergedWords("No busts this session.", 97)],
+    ["explains the merged cache_hits tag as Cache hits with subagents with a main and a subagent's priced bust added up", MERGED, () => [hitAt("m2", localAt(0, 15, 10), 2), hitAt("a2", localAt(0, 15, 14), 2, { agentId: "a" })], mergedWords("2 busts this session, the last at 3:14 PM, wrote the cache again for $1.57.")],
+    ["explains the merged cache_hits tag as Cache hits with subagents with a subagent's unpriced bust, with no cost", MERGED, () => [hitAt("m2", localAt(0, 15, 10), 2), unpricedBust("a2", localAt(0, 15, 14))], mergedWords("2 busts this session, the last at 3:14 PM.")],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [firstHit(), hitAt("a1", localAt(0, 15, 5), 0, { agentId: "a" }), ...rows(), hitAt("last", localAt(0, 15, 20), 99.6)]);
+      expect(await explanationOf(ui, "cache_hits")).toBe(text);
+      await ui.unmount();
+    });
+
+  test("keeps cache_hits and agent_cache_hits at their own lengths and floors at merged_cache_hits_length 3 and merged_cache_hits_floor 90 while merge_cache_hits is off", { options: { merged_cache_hits_length: 3, merged_cache_hits_floor: 90 } }, async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, BOTH);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["▁", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]);
+    await ui.unmount();
+  });
+
   // The folders, branch and worktree are parts of their own, parted by the default order's gaps, or touching without.
   for (const [options, spelled] of [
     [{}, ["spike › cc-mods", "_1", "⎇ develop ⎇ feat/gitline", "_1", "⎇ spike", "_1"]],
@@ -3159,7 +3207,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  test("draws no made-up agent_cache_hits sparkline while the order pane shows and merge_cache_hits is on, and a made-up cache_hits one", { options: { merge_cache_hits: true } }, async ($, on) => {
+  test("draws no made-up agent_cache_hits sparkline while the order pane shows and merge_cache_hits is on, and a made-up merged cache_hits one in both tags' spark colours", { options: { merge_cache_hits: true } }, async ($, on) => {
     stubHint(on, START);
     clockOn(on);
     on("session.start", ($, e) => ({ cwd: e.cwd }));
@@ -3170,6 +3218,8 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     await caughtUp(on, ui);
     expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(1);
+    const colours = new Set((await hitsParts(ui)).map(([, colour]) => colour));
+    expect([colours.has("spark"), colours.has("agent spark")]).toEqual([true, true]);
     expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
     await ui.unmount();
   });
@@ -4525,6 +4575,23 @@ describe("cockpit", () => {
       expect(tags).toMatchObject({ labels });
       const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
       expect(listed.filter((name) => name === "tokens" || name === "agents")).toEqual(items);
+      await ui.unmount();
+    });
+  }
+
+  // The cache hits as the row draws them: unmerged, the main conversation's and the subagents' tag; merged, one tag for
+  // them all.
+  for (const [merged, items, labels] of [
+    [false, ["cache_hits", "agent_cache_hits"], { cache_hits: "cache hits", agent_cache_hits: "subagents' cache hits" }],
+    [true, ["cache_hits"], { cache_hits: "total cache hits" }],
+  ] as const) {
+    test(`the order pane lists ${items.length} cache hits tags with merge_cache_hits ${merged}`, { options: { ...PINNED, merge_cache_hits: merged } }, async ($, on) => {
+      clockOn(on, START);
+      const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
+      const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
+      expect(tags).toMatchObject({ labels });
+      const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
+      expect(listed.filter((name) => name === "cache_hits" || name === "agent_cache_hits")).toEqual(items);
       await ui.unmount();
     });
   }
