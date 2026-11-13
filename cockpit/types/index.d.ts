@@ -14,12 +14,13 @@ export type StatusSpend = { tokens: number; usd: number; requests: number; unpri
 // `prompt` is that last request's prompt in tokens, `base` the session's first: what a fresh session starts near.
 export type StatusCache = { at: number; ttl: number; read?: number; write?: number; prompt: number; base: number };
 
-// The main conversation's newest requests by time, as many as the cache_hits tag draws, each when it was made (ms) and its
-// hit rate in percent; and the busts it counted over the whole session: their number, the latest's time (ms) and what
-// their cache writes cost (USD; undefined once one is unpriced).
-export type StatusHits = { points: { at: number; rate: number }[]; busts: { count: number; at?: number; usd?: number } };
+// A conversation's newest requests by time, each when it was made (ms), its hit rate in percent and `agent` on a subagent's;
+// and the busts it counted over the whole session: their number, the latest's time (ms) and what their cache writes cost
+// (USD; undefined once one is unpriced).
+export type StatusHits = { points: { at: number; rate: number; agent?: true }[]; busts: { count: number; at?: number; usd?: number } };
 
-// `bySubagent` holds each subagent's, by its agentId, its newest requests as many as the agent_cache_hits tag draws.
+// `hits` holds the main conversation's newest requests, as many as the cache_hits tag draws. `bySubagent` holds each
+// subagent's, by its agentId, its newest requests as many as the cache_hits or agent_cache_hits tag draws, whichever more.
 export type StatusTokens = { main: StatusSpend; agents: StatusSpend & { count: number }; cache?: StatusCache; hits?: StatusHits; bySubagent?: Record<string, StatusHits> };
 
 // `defaultBranch` is "" when origin names none; ahead/behind count against the default branch when `vsDefault`.

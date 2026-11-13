@@ -80,8 +80,10 @@ const SEGMENTS = {
   tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(0, 1) : []),
   agents: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(1) : []),
   cache: ({ Box, Text }, s) => (s.tokens?.cache ? [cacheParts(Box, Text, s.tokens.cache, s.now, s.sent)] : []),
+  // The main conversation's cache hits, and the running subagents' as a tag of their own; merged, every subagent's in the
+  // first, the order pane's sample of the second left out too.
   cache_hits: ({ Box, Text }, s) => (s.tokens?.hits ? [hitsParts(Box, Text, s.tokens.hits, "cache_hits")] : []),
-  agent_cache_hits: ({ Box, Text }, s) => (s.agentHits ? [hitsParts(Box, Text, s.agentHits.hits, "agent_cache_hits")] : []),
+  agent_cache_hits: ({ Box, Text }, s) => (!mergeCacheHits && s.agentHits ? [hitsParts(Box, Text, s.agentHits.hits, "agent_cache_hits")] : []),
 } satisfies Record<string, Segment>;
 
 // What limitOf finds for one limit tag. `resetsAtMs` is its own reset; a paused tag holds the 7d's in `paused.until`.
@@ -826,6 +828,8 @@ let prBusy = false;
 let turnRate = false;
 // The merge_costs option: one cost chip for the main conversation and its subagents together.
 let mergeCosts = false;
+// The merge_cache_hits option: one cache_hits sparkline for the main conversation and every subagent of the session.
+let mergeCacheHits = false;
 // The limit_forecast option: the run-out warning in the explanation line, when a limit runs out before its reset at the
 // pace so far.
 let limitForecast = false;
@@ -850,6 +854,7 @@ export const register: Register = (on, options) => {
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   turnRate = options.turn_rate === true;
   mergeCosts = options.merge_costs === true;
+  mergeCacheHits = options.merge_cache_hits === true;
   limitForecast = options.limit_forecast === true;
   explainRow = options.explain_row === true;
   usageLookup = options.usage_lookup === true;
@@ -1188,7 +1193,10 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: model = "" } = await $.state.get(MODEL);
   const { value: kept } = await $.state.get(TOKENS);
   // Spends a copy of the module before the cost split kept have no `after`, until the next scan rewrites them: all plan use.
-  const tokens = kept && { ...kept, main: { ...kept.main, after: kept.main.after ?? 0 }, agents: { ...kept.agents, after: kept.agents.after ?? 0 } };
+  // Merged, cache_hits draws every subagent's requests of the session beside the main conversation's, a finished one's
+  // too, so its cells stay; still nothing before the main conversation's first request.
+  const hits = mergeCacheHits && kept?.hits ? mergedHits([kept.hits, ...Object.values(kept.bySubagent ?? {})], barCells.cache_hits) : kept?.hits;
+  const tokens = kept && { ...kept, main: { ...kept.main, after: kept.main.after ?? 0 }, agents: { ...kept.agents, after: kept.agents.after ?? 0 }, hits };
   const { value: turns } = await $.state.get(TURNS);
   const { value: compactAt } = await $.state.get(COMPACT_AT);
   const { value: sent } = await $.state.get(SENT);
@@ -1206,7 +1214,7 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   const { value: refusals } = await $.state.get(REFUSALS);
   // Read as the snapshot is built, so a finished subagent's requests leave the tag the frame it leaves the list.
   const working = (await agentsWorking($)).filter((a) => a.teammateId === undefined);
-  const agentHits = working.length > 0 ? { running: working.length, hits: mergedHits(working.map((a) => tokens?.bySubagent?.[a.id])) } : undefined;
+  const agentHits = working.length > 0 ? { running: working.length, hits: mergedHits(working.map((a) => tokens?.bySubagent?.[a.id]), barCells.agent_cache_hits) } : undefined;
   const live: Snapshot = { usage, model, tokens, agentHits, turns, compactAt, sent, git, pr, rejected, credits, billing, creditsBase, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
@@ -1254,15 +1262,15 @@ function withSamples(s: Snapshot): Snapshot {
   };
 }
 
-// The requests of the subagents given, by time, as many as agent_cache_hits draws, and the busts of them all; a cost only
-// while every subagent's busts are priced.
-function mergedHits(each: (StatusHits | undefined)[]): StatusHits {
+// The requests given, by time, the newest `cells`, and the busts of them all; a cost only while every one's busts are
+// priced.
+function mergedHits(each: (StatusHits | undefined)[], cells: number): StatusHits {
   const some = each.filter((h) => h !== undefined);
   return {
     points: some
       .flatMap((h) => h.points)
       .sort((a, b) => a.at - b.at)
-      .slice(-barCells.agent_cache_hits),
+      .slice(-cells),
     busts: {
       count: some.reduce((sum, h) => sum + h.busts.count, 0),
       at: some.reduce<number | undefined>((latest, h) => (h.busts.at === undefined || (latest !== undefined && latest >= h.busts.at) ? latest : h.busts.at), undefined),
@@ -2290,8 +2298,10 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
     hits: hitsOf(mains, boundaries, barCells.cache_hits),
     bySubagent: Object.fromEntries(
       Object.entries(subs).flatMap(([id, requests]) => {
-        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], barCells.agent_cache_hits);
-        return h ? [[id, h]] : [];
+        // As many as either tag draws: the merged cache_hits tag cuts to its own length after merging.
+        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], Math.max(barCells.cache_hits, barCells.agent_cache_hits));
+        // Marked as a subagent's, so the merged cache_hits tag draws them in the subagents' colours.
+        return h ? [[id, { ...h, points: h.points.map((p) => ({ ...p, agent: true as const })) }]] : [];
       }),
     ),
   };
@@ -2779,16 +2789,19 @@ function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits, tag: HitsTag
   const floor = hitsFloors[tag];
   const { colors, mark } = HITS_TAGS[tag];
   const backgroundColor = explainRow ? hex(color("empty")) : undefined;
-  const cell = (rate: number) =>
-    rate >= floor
-      ? Text({ color: hex(color(`${colors}.spark`)), backgroundColor, children: SPARKS[Math.min(Math.floor(((rate - floor) * 8) / (100 - floor)), 7)] })
-      : Text({ color: hex(color(rate >= 50 ? `${colors}.low` : `${colors}.bust`)), backgroundColor, children: rate >= 50 ? "▁" : "█" });
+  // A subagent's request draws in the subagents' colours whichever tag draws it; the bust count in the tag's own.
+  const cell = ({ rate, agent }: StatusHits["points"][number]) => {
+    const set = agent ? "agent_hits" : colors;
+    return rate >= floor
+      ? Text({ color: hex(color(`${set}.spark`)), backgroundColor, children: SPARKS[Math.min(Math.floor(((rate - floor) * 8) / (100 - floor)), 7)] })
+      : Text({ color: hex(color(rate >= 50 ? `${set}.low` : `${set}.bust`)), backgroundColor, children: rate >= 50 ? "▁" : "█" });
+  };
   const points = h.points.slice(-n);
   const children = [
     ...(mark ? [Text({ children: `${mark} ` })] : []),
     Text({ dimColor: true, children: `${floor} ` }),
     ...Array.from({ length: n - points.length }, () => Text({ backgroundColor, children: " " })),
-    ...points.map((p) => cell(p.rate)),
+    ...points.map(cell),
     ...(h.busts.count > 0 ? [Text({ color: hex(color(`${colors}.bust`)), backgroundColor, children: ` ${h.busts.count}↯` })] : []),
   ];
   return Box({ key: tag, flexDirection: "row", hover: { scope: explainScope(tag) }, children });

@@ -2810,6 +2810,95 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // Merged, main requests at minutes 1 and 3 and a subagent's at minute 2: 99.4% a full spark, 95% the lowest, 97.5% the fifth.
+  const MERGED = { merge_cache_hits: true };
+  const glyphs = async (ui: Mounted<"terminal", "PromptHint">) => (await hitsParts(ui)).map(([glyph]) => glyph);
+  test("draws the main conversation's and a subagent's requests in the merged cache_hits tag by the time each was made, and keeps a finished subagent's where they were", { options: MERGED }, async ($, on) => {
+    let agents = [subagent("running", "a")];
+    agentsOn(on, () => agents);
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 99.4), hitRow("m2", 3, 97.5), hitRow("a1", 2, 95, { agentId: "a" })]);
+    const drawn = ["95 ", ...Array.from({ length: 9 }, () => " "), "█", "▁", "▅"];
+    expect(await glyphs(ui)).toEqual(drawn);
+    agents = [subagent("completed", "a")];
+    await caughtUp(on, ui);
+    expect(await glyphs(ui)).toEqual(drawn);
+    await ui.unmount();
+  });
+
+  // The subagents' low and bust colours set blue, apart from the main tag's defaults: a subagent's 99% draws its spark in
+  // its own default blue, #60a5fa, its 94% and 2% in blue; the main conversation's in the main tag's colours.
+  test("draws each merged cache_hits cell in the colours of the tag its request came from", { options: { ...MERGED, colors: "agent_hits.low=#0000ff,agent_hits.bust=#0000ff" } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [
+      hitRow("m1", 1, 100),
+      hitRow("a1", 2, 99, { agentId: "a" }),
+      hitRow("a2", 3, 94, { agentId: "a" }),
+      hitRow("a3", 4, 2, { agentId: "a" }),
+      hitRow("m2", 5, 94),
+      hitRow("m3", 6, 2),
+    ]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(6), ["█", "spark"], ["▇", "agent spark"], ["▁", "blue"], ["█", "blue"], ["▁", "low"], ["█", "bust"], [" 2↯", "bust"]]);
+    await ui.unmount();
+  });
+
+  test("draws no agent_cache_hits tag while merge_cache_hits is on and a subagent runs, and folds the gaps around it", { options: { ...MERGED, layout: withStatus("model,gap-1,agent_cache_hits,gap-2,tokens", "limit_7d,limit_5h,credits,context,turns,agents,cache,cache_hits") } }, async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 99), hitRow("s1", 2, 0, { agentId: "a1" }), hitRow("s2", 3, 99, { agentId: "a1" })]);
+    expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
+    expect(rowSpelled((await tagRows(ui))[0]).slice(0, 2)).toEqual(["Opus 5.5", "_2"]);
+    await ui.unmount();
+  });
+
+  // Main requests at minutes 1 to 3 and a subagent's 9 at minutes 4 to 12: the subagents' length of 3 cuts none of them.
+  test("draws the newest 12 requests of all sources in the merged cache_hits tag at agent_cache_hits_length 3 and cache_hits_length 12", { options: { ...MERGED, agent_cache_hits_length: 3, cache_hits_length: 12 } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [...[1, 2, 3].map((minute) => hitRow(`m${minute}`, minute, 100)), ...Array.from({ length: 9 }, (_, i) => hitRow(`s${i}`, 4 + i, 100, { agentId: "a1" }))]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 3 }, () => ["█", "spark"]), ...Array.from({ length: 9 }, () => ["█", "agent spark"])]);
+    await ui.unmount();
+  });
+
+  for (const [what, options] of [
+    ["unset", {}],
+    ["false", { merge_cache_hits: false }],
+  ] as const)
+    test(`draws cache_hits and agent_cache_hits as two tags while merge_cache_hits is ${what}`, { options }, async ($, on) => {
+      agentsOn(on, () => [subagent("running", "a1")]);
+      const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
+      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
+      await ui.unmount();
+    });
+
+  // Counted: the main conversation's 2% and finished subagent b's 1%. Uncounted: the session's first main request, the
+  // first after the compaction, and each subagent's first. The main tag's bust colour set blue, the subagents' red.
+  test("counts the main conversation's and every subagent's busts in the merged cache_hits tag, a finished one's too, in the main tag's bust colour", { options: { ...MERGED, colors: "hits.bust=#0000ff" } }, async ($, on) => {
+    agentsOn(on, () => [subagent("completed", "b"), subagent("running", "a")]);
+    const ui = await hitsDrawn($, on, [
+      hitRow("m1", 1, 0),
+      hitRow("m2", 2, 2),
+      hitRow("b1", 3, 0, { agentId: "b" }),
+      hitRow("b2", 4, 1, { agentId: "b" }),
+      boundaryRow(5),
+      hitRow("m6", 6, 3),
+      hitRow("a1", 7, 0, { agentId: "a" }),
+      hitRow("a2", 8, 99, { agentId: "a" }),
+      hitRow("m9", 9, 99),
+    ]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(4), ["█", "blue"], ["█", "blue"], ["█", "bust"], ["█", "bust"], ["█", "blue"], ["█", "bust"], ["▇", "agent spark"], ["▇", "spark"], [" 2↯", "blue"]]);
+    await ui.unmount();
+  });
+
+  test("draws the main conversation's requests alone in the merged cache_hits tag before any subagent made a request", { options: MERGED }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("m2", 2, 94)]);
+    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "low"]]);
+    await ui.unmount();
+  });
+
+  test("draws no merged cache_hits tag before the main conversation's first request, though a subagent made some", { options: MERGED }, async ($, on) => {
+    agentsOn(on, () => [subagent("running", "a1")]);
+    const ui = await hitsDrawn($, on, [hitRow("s1", 1, 0, { agentId: "a1" }), hitRow("s2", 2, 99, { agentId: "a1" })]);
+    expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(0);
+    await ui.unmount();
+  });
+
   // The folders, branch and worktree are parts of their own, parted by the default order's gaps, or touching without.
   for (const [options, spelled] of [
     [{}, ["spike › cc-mods", "_1", "⎇ develop ⎇ feat/gitline", "_1", "⎇ spike", "_1"]],
@@ -3066,6 +3155,21 @@ describe("cockpit", () => {
     isOpen = false;
     await clock.advance(100);
     await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
+    await ui.unmount();
+  });
+
+  test("draws no made-up agent_cache_hits sparkline while the order pane shows and merge_cache_hits is on, and a made-up cache_hits one", { options: { merge_cache_hits: true } }, async ($, on) => {
+    stubHint(on, START);
+    clockOn(on);
+    on("session.start", ($, e) => ({ cwd: e.cwd }));
+    on("session.usage", () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }));
+    on("session.model", () => ({ value: "claude-opus-5-5" }));
+    on("ui.panes", () => ({ value: [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }] }));
+    await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+    const ui = await mountHint($);
+    await caughtUp(on, ui);
+    expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(1);
     expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
     await ui.unmount();
   });

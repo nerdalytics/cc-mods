@@ -137,6 +137,12 @@
       "default": 12,
       "min": 0
     },
+    "merge_cache_hits": {
+      "type": "boolean",
+      "title": "Cockpit: Cache hits › merge",
+      "description": "One cache_hits sparkline for the main conversation and every subagent of the session, finished ones included, their requests merged by time, instead of a tag each: a subagent's request draws in the subagents' colours, and the bust count adds up all their busts. The agent_cache_hits tag then draws nothing. true / false (default)",
+      "default": false
+    },
     "agent_cache_hits_floor": {
       "type": "number",
       "title": "Cockpit: Subagents' cache hits › floor (%)",
