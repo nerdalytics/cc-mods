@@ -2301,15 +2301,15 @@ async function scanTokens($: EngineInterface): Promise<StatusTokens> {
   const compactedAt = Math.max(-Infinity, ...boundaries);
   // Each source keeps as many requests as any tag drawing it shows; merged, the merged tag cuts to its own length after
   // merging.
-  const merged = mergeCacheHits ? barCells.merged_cache_hits : 0;
+  const mergedCells = mergeCacheHits ? barCells.merged_cache_hits : 0;
   return {
     main,
     agents: { ...agents, count: agentIds.size },
     cache: last && last.at > compactedAt ? cacheOf(last, ttl, outlived ? 3_600 : ttl, first?.prompt ?? 0) : undefined,
-    hits: hitsOf(mains, boundaries, Math.max(barCells.cache_hits, merged)),
+    hits: hitsOf(mains, boundaries, Math.max(barCells.cache_hits, mergedCells)),
     bySubagent: Object.fromEntries(
       Object.entries(subs).flatMap(([id, requests]) => {
-        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], Math.max(barCells.agent_cache_hits, merged));
+        const h = hitsOf(requests.sort((a, b) => a.at - b.at), [], Math.max(barCells.agent_cache_hits, mergedCells));
         // Marked as a subagent's, so the merged cache_hits tag draws them in the subagents' colours.
         return h ? [[id, { ...h, points: h.points.map((p) => ({ ...p, agent: true as const })) }]] : [];
       }),

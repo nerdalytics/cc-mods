@@ -4563,35 +4563,21 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // The costs as the row draws them: unmerged, the main session's and the subagents' tag; merged, one tag for the total.
-  for (const [merged, items, labels] of [
-    [false, ["tokens", "agents"], { tokens: "main session costs", agents: "subagent costs" }],
-    [true, ["tokens"], { tokens: "total costs" }],
+  // The costs and the cache hits as the row draws them: unmerged, the main session's and the subagents' tag; merged, one
+  // tag for them all.
+  for (const [option, merged, names, items, labels] of [
+    ["merge_costs", false, ["tokens", "agents"], ["tokens", "agents"], { tokens: "main session costs", agents: "subagent costs" }],
+    ["merge_costs", true, ["tokens", "agents"], ["tokens"], { tokens: "total costs" }],
+    ["merge_cache_hits", false, ["cache_hits", "agent_cache_hits"], ["cache_hits", "agent_cache_hits"], { cache_hits: "cache hits", agent_cache_hits: "subagents' cache hits" }],
+    ["merge_cache_hits", true, ["cache_hits", "agent_cache_hits"], ["cache_hits"], { cache_hits: "total cache hits" }],
   ] as const) {
-    test(`the order pane lists ${items.length} cost tags with merge_costs ${merged}`, { options: { ...PINNED, merge_costs: merged } }, async ($, on) => {
+    test(`the order pane lists ${items.join(" and ")} of ${names.join(" and ")} with ${option} ${merged}`, { options: { ...PINNED, [option]: merged } }, async ($, on) => {
       clockOn(on, START);
       const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
       const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
       expect(tags).toMatchObject({ labels });
       const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
-      expect(listed.filter((name) => name === "tokens" || name === "agents")).toEqual(items);
-      await ui.unmount();
-    });
-  }
-
-  // The cache hits as the row draws them: unmerged, the main conversation's and the subagents' tag; merged, one tag for
-  // them all.
-  for (const [merged, items, labels] of [
-    [false, ["cache_hits", "agent_cache_hits"], { cache_hits: "cache hits", agent_cache_hits: "subagents' cache hits" }],
-    [true, ["cache_hits"], { cache_hits: "total cache hits" }],
-  ] as const) {
-    test(`the order pane lists ${items.length} cache hits tags with merge_cache_hits ${merged}`, { options: { ...PINNED, merge_cache_hits: merged } }, async ($, on) => {
-      clockOn(on, START);
-      const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
-      const tags = (await ui.find({ type: "Client", key: "tags" }))?.props.props;
-      expect(tags).toMatchObject({ labels });
-      const listed: unknown[] = typeof tags === "object" && tags !== null && "items" in tags && Array.isArray(tags.items) ? tags.items : [];
-      expect(listed.filter((name) => name === "cache_hits" || name === "agent_cache_hits")).toEqual(items);
+      expect(listed.filter((name) => names.some((n) => n === name))).toEqual(items);
       await ui.unmount();
     });
   }
