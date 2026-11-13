@@ -137,17 +137,17 @@
       "default": 12,
       "min": 0
     },
-    "merge_cache_hits": {
-      "type": "boolean",
-      "title": "Cockpit: Cache hits › merge",
-      "description": "One cache_hits sparkline for the main conversation and every subagent of the session, finished ones included, their requests merged by time, instead of a tag each: a subagent's request draws in the subagents' colours, and the bust count adds up all their busts. The agent_cache_hits tag then draws nothing. true / false (default)",
-      "default": false
-    },
     "agent_cache_hits_floor": {
       "type": "number",
       "title": "Cockpit: Subagents' cache hits › floor (%)",
       "description": "The hit rate the agent_cache_hits sparkline scales up from to 100%, drawn as the tag's label: a request at or above it draws a blue spark, one from 50% up to it an amber ▁, and one under 50%, a bust, a red █. A whole number from 50 to 99: a fraction is rounded down, and a value outside counts as the nearer end. (default: 95)",
       "default": 95
+    },
+    "merge_cache_hits": {
+      "type": "boolean",
+      "title": "Cockpit: Cache hits › merge",
+      "description": "One cache_hits sparkline for the main conversation and every subagent of the session, finished ones included, their requests merged by time, instead of a tag each: a subagent's request draws in the subagents' colours, and the bust count adds up all their busts. The agent_cache_hits tag then draws nothing. true / false (default)",
+      "default": false
     },
     "smart_zone": {
       "type": "boolean",
