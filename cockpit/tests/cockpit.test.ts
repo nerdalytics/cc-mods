@@ -5217,7 +5217,7 @@ describe("cockpit", () => {
       await colorsPane($, on, { gradients }, async (ui) => {
         const lines = await colourLines(ui);
         const at = lines.indexOf("Cache hits");
-        expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Subagents' cache hits$/)]);
+        expect(lines.slice(at, at + 5)).toEqual(["Cache hits", "hits.spark=#4ade80 at or above the floor and the floor's badge", "hits.low=#fbbf24 under the floor", "hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Subagents' cache hits$/)]);
       });
     });
 
@@ -5226,7 +5226,7 @@ describe("cockpit", () => {
       await colorsPane($, on, { gradients }, async (ui) => {
         const lines = await colourLines(ui);
         const at = lines.indexOf("Subagents' cache hits");
-        expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#60a5fa at or above the floor", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
+        expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#60a5fa at or above the floor and the floor's badge", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
       });
     });
 

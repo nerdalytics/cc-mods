@@ -656,13 +656,14 @@ const COLORS = {
   "costs.to": { group: "", label: "the mark", rgb: [134, 25, 143] },
   "agents.from": { group: "Subagents' costs chip", label: "", rgb: [251, 191, 36] },
   "agents.to": { group: "", label: "the mark", rgb: [180, 83, 9] },
-  // The cache_hits sparkline: a request at or above the floor, one under it, and a bust with the bust count.
-  "hits.spark": { group: "Cache hits", label: "at or above the floor", rgb: [74, 222, 128] },
+  // The cache_hits sparkline: a request at or above the floor with the floor's badge, one under it, and a bust with the
+  // bust count.
+  "hits.spark": { group: "Cache hits", label: "at or above the floor and the floor's badge", rgb: [74, 222, 128] },
   "hits.low": { group: "", label: "under the floor", rgb: [251, 191, 36] },
   "hits.bust": { group: "", label: "a bust and the bust count", rgb: [239, 68, 68] },
   // The agent_cache_hits sparkline's, apart so either tag can be recoloured alone: its sparks blue by default, its low and
   // bust colours the cache_hits defaults.
-  "agent_hits.spark": { group: "Subagents' cache hits", label: "at or above the floor", rgb: [96, 165, 250] },
+  "agent_hits.spark": { group: "Subagents' cache hits", label: "at or above the floor and the floor's badge", rgb: [96, 165, 250] },
   "agent_hits.low": { group: "", label: "under the floor", rgb: [251, 191, 36] },
   "agent_hits.bust": { group: "", label: "a bust and the bust count", rgb: [239, 68, 68] },
   // The cache chip: green while the next prompt reads the cache, red once it writes it again.
