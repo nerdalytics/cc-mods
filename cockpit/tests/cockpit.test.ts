@@ -2468,14 +2468,19 @@ describe("cockpit", () => {
     return ui;
   }
   // The cache_hits tag's parts, or another sparkline tag's by its key, each its text and its colour by name: spark, the
-  // main tag's default, agent spark, the subagents' tag's, low, bust, blue, dim or none.
-  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#60a5fa": "agent spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue" };
+  // main tag's default, agent spark, the subagents' tag's, low, bust, blue, black, white, dim or none. A part on one of
+  // those colours reads as its colour on that one, such as "black on spark".
+  const HIT_COLOURS: Record<string, string> = { "#4ade80": "spark", "#60a5fa": "agent spark", "#fbbf24": "low", "#ef4444": "bust", "#0000ff": "blue", "#000000": "black", "#ffffff": "white" };
   const hitsParts = async (ui: Mounted<"terminal", "PromptHint">, key = "cache_hits") =>
     must(await ui.find({ type: "Box", key }), `the ${key} tag`).children.map((part) => {
       const props = propsOf(part);
       const text = typeof part === "object" && part !== null && "children" in part && Array.isArray(part.children) ? part.children.join("") : String(part);
-      return [text, props.dimColor === true ? "dim" : (HIT_COLOURS[String(props.color)] ?? "none")];
+      const colour = props.dimColor === true ? "dim" : (HIT_COLOURS[String(props.color)] ?? "none");
+      const on = HIT_COLOURS[String(props.backgroundColor)];
+      return [text, on ? `${colour} on ${on}` : colour];
     });
+  // The floor's badge: the floor with a space each side, black on the main tag's default spark colour unless one is given.
+  const floorBadge = (floor: number, colours = "black on spark") => [` ${floor} `, colours];
 
   test("draws each main request's hit rate once, its cache reads over its input, reads and writes of either lifetime, and no request without a prompt", async ($, on) => {
     const usage = (inp: number, out: number, read: number, w5: number, w1: number) => ({ input_tokens: inp, output_tokens: out, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: w1 } });
@@ -2485,7 +2490,7 @@ describe("cockpit", () => {
     const a = row("A", 2, usage(1_000, 10, 97_000, 1_000, 1_000));
     const ui = await hitsDrawn($, on, [row("B", 1, usage(3, 10, 0, 0, 50_000)), a, a, row("C", 3, usage(0, 5, 0, 0, 0))]);
     // 97% is 2/5 of the way from 95 to 100: the fourth glyph. B is the session's first request, so no bust count.
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▄", "spark"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▄", "spark"]]);
     await ui.unmount();
   });
 
@@ -2499,7 +2504,7 @@ describe("cockpit", () => {
   test("leaves a subagent's requests out of the cache_hits sparkline and its bust count", async ($, on) => {
     // The subagent's 5% would be a counted bust of the main conversation's, after its first request.
     const ui = await hitsDrawn($, on, [hitRow("m1", 1, 0), hitRow("s1", 2, 0, { agentId: "a1" }), hitRow("m2", 3, 99), hitRow("s2", 4, 5, { agentId: "a1" })]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▇", "spark"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 10 }, () => [" ", "none"]), ["█", "bust"], ["▇", "spark"]]);
     await ui.unmount();
   });
 
@@ -2510,9 +2515,9 @@ describe("cockpit", () => {
     [[100, 95, 97.5, 99.4, 94, 11.4], [blank, blank, blank, blank, blank, blank, ["█", "spark"], ["▁", "spark"], ["▅", "spark"], ["█", "spark"], ["▁", "low"], ["█", "bust"], [" 1↯", "bust"]]],
     [[99.4, 100, 95], [...Array.from({ length: 9 }, () => blank), ["█", "spark"], ["█", "spark"], ["▁", "spark"]]],
   ] as const) {
-    test(`draws cache_hits requests at ${rates.join("%, ")}% against the floor, after the dim floor label`, async ($, on) => {
+    test(`draws cache_hits requests at ${rates.join("%, ")}% against the floor, after the floor's badge, black on the spark colour`, async ($, on) => {
       const ui = await hitsDrawn($, on, rates.map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
-      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...sparks]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95), ...sparks]);
       await ui.unmount();
     });
   }
@@ -2537,7 +2542,7 @@ describe("cockpit", () => {
       hitRow("m24", 24, 99),
     ]);
     const spark = ["█", "spark"];
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 8 }, () => spark), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 2↯", "bust"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 8 }, () => spark), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "spark"], [" 2↯", "bust"]]);
     await ui.unmount();
   });
 
@@ -2550,7 +2555,7 @@ describe("cockpit", () => {
   ] as const)
     test(title, { options: { cache_hits_length: length } }, async ($, on) => {
       const ui = await hitsDrawn($, on, FIVE);
-      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...cells]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95), ...cells]);
       await ui.unmount();
     });
 
@@ -2558,9 +2563,9 @@ describe("cockpit", () => {
   // they would be the sixth and the second; at 50, 94% is a full spark; at 99, 99.4% the fourth and 97.5% amber.
   const blanks = (n: number) => Array.from({ length: n }, () => [" ", "none"]);
   for (const [title, options, rows, parts] of [
-    ["draws the cache_hits floor 97 at cache_hits_floor 97.8, a fraction rounded down, and scales the sparks from it", { cache_hits_floor: 97.8 }, [100, 98.5, 96].map((rate, i) => hitRow(`r${i}`, i + 1, rate)), [["97 ", "dim"], ...blanks(9), ["█", "spark"], ["▅", "spark"], ["▁", "low"]]],
-    ["draws the cache_hits floor 50 and 1 cell at cache_hits_floor 30 and cache_hits_length 0", { cache_hits_floor: 30, cache_hits_length: 0 }, FIVE, [["50 ", "dim"], ["█", "spark"]]],
-    ["draws the cache_hits floor 99 at cache_hits_floor 120", { cache_hits_floor: 120 }, FIVE, [["99 ", "dim"], ...blanks(7), ["█", "spark"], ["▁", "low"], ["▁", "low"], ["▄", "spark"], ["▁", "low"]]],
+    ["draws the cache_hits floor 97 at cache_hits_floor 97.8, a fraction rounded down, and scales the sparks from it", { cache_hits_floor: 97.8 }, [100, 98.5, 96].map((rate, i) => hitRow(`r${i}`, i + 1, rate)), [floorBadge(97), ...blanks(9), ["█", "spark"], ["▅", "spark"], ["▁", "low"]]],
+    ["draws the cache_hits floor 50 and 1 cell at cache_hits_floor 30 and cache_hits_length 0", { cache_hits_floor: 30, cache_hits_length: 0 }, FIVE, [floorBadge(50), ["█", "spark"]]],
+    ["draws the cache_hits floor 99 at cache_hits_floor 120", { cache_hits_floor: 120 }, FIVE, [floorBadge(99), ...blanks(7), ["█", "spark"], ["▁", "low"], ["▁", "low"], ["▄", "spark"], ["▁", "low"]]],
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await hitsDrawn($, on, [...rows]);
@@ -2572,7 +2577,19 @@ describe("cockpit", () => {
   for (const gradients of [true, false])
     test(`draws a cache_hits bust and the bust count in hits.bust set blue, the sparks and the low cell in their defaults, with gradients ${gradients ? "on" : "off"}`, { options: { gradients, colors: "hits.bust=#0000ff" } }, async ($, on) => {
       const ui = await hitsDrawn($, on, [100, 94, 2].map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
-      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(9), ["█", "spark"], ["▁", "low"], ["█", "blue"], [" 1↯", "blue"]]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(9), ["█", "spark"], ["▁", "low"], ["█", "blue"], [" 1↯", "blue"]]);
+      await ui.unmount();
+    });
+
+  // A spark colour the person set recolours the floor's badge with the sparks, white on blue as black would not read on it,
+  // and the merged tag's too, as its badge takes the main tag's spark colour.
+  for (const [title, options] of [
+    ["draws the cache_hits floor's badge white on hits.spark set blue", { colors: "hits.spark=#0000ff" }],
+    ["draws the merged cache_hits floor's badge white on hits.spark set blue", { colors: "hits.spark=#0000ff", merge_cache_hits: true }],
+  ] as const)
+    test(title, { options }, async ($, on) => {
+      const ui = await hitsDrawn($, on, [hitRow("r0", 1, 100)]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95, "white on blue"), ...blanks(11), ["█", "blue"]]);
       await ui.unmount();
     });
 
@@ -2614,15 +2631,15 @@ describe("cockpit", () => {
     });
 
   // The sparkline and the bust count are the tag's value, which stands on the grey while the explanation line can show
-  // what hovering it explains; the floor is its label, as a chip's mark is, and stays off the grey.
+  // what hovering it explains; the floor is its label, as a limit's badge is, and stands on the spark colour.
   for (const [title, options, grey] of [
-    ["draws the cache_hits sparkline and bust count on the grey while explain_row is on, the floor off it", {}, "#373a48"],
-    ["draws no part of the cache_hits tag on the grey with explain_row off", { explain_row: false }, undefined],
+    ["draws the cache_hits sparkline and bust count on the grey while explain_row is on, the floor's badge on the spark colour", {}, "#373a48"],
+    ["draws no part of the cache_hits tag on the grey with explain_row off, the floor's badge still on the spark colour", { explain_row: false }, undefined],
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await hitsDrawn($, on, [100, 2].map((rate, i) => hitRow(`r${i}`, i + 1, rate)));
       const backgrounds = must(await ui.find({ type: "Box", key: "cache_hits" }), "the cache_hits tag").children.map((part) => propsOf(part).backgroundColor);
-      expect(backgrounds).toEqual([undefined, ...Array.from({ length: 12 }, () => grey), grey]);
+      expect(backgrounds).toEqual(["#4ade80", ...Array.from({ length: 12 }, () => grey), grey]);
       await ui.unmount();
     });
 
@@ -2644,7 +2661,7 @@ describe("cockpit", () => {
   // Past the default of 12 the scan keeps as many requests as the length sets, so every cell draws one.
   test("draws a request in each of 20 cache_hits cells at cache_hits_length 20 once 20 were made", { options: { cache_hits_length: 20 } }, async ($, on) => {
     const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`r${i}`, i + 1, 99.9)));
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "spark"])]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 20 }, () => ["█", "spark"])]);
     await ui.unmount();
   });
 
@@ -2662,7 +2679,7 @@ describe("cockpit", () => {
       hitRow("s2", 6, 1, { agentId: "a1" }),
       hitRow("t2", 7, 99, { agentId: "a2" }),
     ]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(8), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "agent spark"], [" 1↯", "bust"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(8), ["█", "bust"], ["█", "bust"], ["█", "bust"], ["▇", "agent spark"], [" 1↯", "bust"]]);
     await ui.unmount();
   });
 
@@ -2687,10 +2704,10 @@ describe("cockpit", () => {
     agentsOn(on, () => agents);
     // A at minutes 1 and 3, B at minute 2: A's 99.4% a full spark, B's 95% the lowest, A's 97.5% the fifth.
     const ui = await hitsDrawn($, on, [hitRow("a1", 1, 99.4, { agentId: "a" }), hitRow("a2", 3, 97.5, { agentId: "a" }), hitRow("b1", 2, 95, { agentId: "b" })]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(9), ["█", "agent spark"], ["▁", "agent spark"], ["▅", "agent spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(9), ["█", "agent spark"], ["▁", "agent spark"], ["▅", "agent spark"]]);
     agents = [subagent("completed", "a"), subagent("running", "b")];
     await caughtUp(on, ui);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(11), ["▁", "agent spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(11), ["▁", "agent spark"]]);
     await ui.unmount();
   });
 
@@ -2699,10 +2716,10 @@ describe("cockpit", () => {
     ["one whose only request wrote it all", [hitRow("s1", 1, 0, { agentId: "a1" })], [...blanks(11), ["█", "bust"]]],
     ["one that made no request yet", [hitRow("m1", 1, 99)], blanks(12)],
   ] as const)
-    test(`draws the subagent mark, the dim floor and the agent_cache_hits sparkline with no bust count while running ${what}`, async ($, on) => {
+    test(`draws the subagent mark, a space, the floor's badge on the subagents' spark colour and the agent_cache_hits sparkline with no bust count while running ${what}`, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
       const ui = await hitsDrawn($, on, [...rows]);
-      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...cells]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...cells]);
       await ui.unmount();
     });
 
@@ -2710,11 +2727,11 @@ describe("cockpit", () => {
   // fifth at 90, and an amber ▁ at 97. The subagent's 100% beside it is a full spark at any floor.
   const BOTH = [hitRow("m1", 1, 95), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 95, { agentId: "a1" })];
   for (const [title, options, main, sub] of [
-    ["scales agent_cache_hits from agent_cache_hits_floor 90 while cache_hits keeps 95", { agent_cache_hits_floor: 90 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["90 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▅", "agent spark"]]],
-    ["keeps agent_cache_hits at 95 and 12 cells while cache_hits_floor is 90 and cache_hits_length 3", { cache_hits_floor: 90, cache_hits_length: 3 }, [["90 ", "dim"], ...blanks(2), ["▅", "spark"]], [["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]],
-    ["draws the agent_cache_hits floor 97 and 2 cells at agent_cache_hits_floor 97.8 and agent_cache_hits_length 2.7, fractions rounded down", { agent_cache_hits_floor: 97.8, agent_cache_hits_length: 2.7 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["97 ", "dim"], ["█", "agent spark"], ["▁", "low"]]],
-    ["draws the agent_cache_hits floor 50 and 1 cell at agent_cache_hits_floor 30 and agent_cache_hits_length 0", { agent_cache_hits_floor: 30, agent_cache_hits_length: 0 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["50 ", "dim"], ["█", "agent spark"]]],
-    ["draws the agent_cache_hits floor 99 at agent_cache_hits_floor 120", { agent_cache_hits_floor: 120 }, [["95 ", "dim"], ...blanks(11), ["▁", "spark"]], [["99 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "low"]]],
+    ["scales agent_cache_hits from agent_cache_hits_floor 90 while cache_hits keeps 95", { agent_cache_hits_floor: 90 }, [floorBadge(95), ...blanks(11), ["▁", "spark"]], [floorBadge(90, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["▅", "agent spark"]]],
+    ["keeps agent_cache_hits at 95 and 12 cells while cache_hits_floor is 90 and cache_hits_length 3", { cache_hits_floor: 90, cache_hits_length: 3 }, [floorBadge(90), ...blanks(2), ["▅", "spark"]], [floorBadge(95, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]],
+    ["draws the agent_cache_hits floor 97 and 2 cells at agent_cache_hits_floor 97.8 and agent_cache_hits_length 2.7, fractions rounded down", { agent_cache_hits_floor: 97.8, agent_cache_hits_length: 2.7 }, [floorBadge(95), ...blanks(11), ["▁", "spark"]], [floorBadge(97, "black on agent spark"), ["█", "agent spark"], ["▁", "low"]]],
+    ["draws the agent_cache_hits floor 50 and 1 cell at agent_cache_hits_floor 30 and agent_cache_hits_length 0", { agent_cache_hits_floor: 30, agent_cache_hits_length: 0 }, [floorBadge(95), ...blanks(11), ["▁", "spark"]], [floorBadge(50, "black on agent spark"), ["█", "agent spark"]]],
+    ["draws the agent_cache_hits floor 99 at agent_cache_hits_floor 120", { agent_cache_hits_floor: 120 }, [floorBadge(95), ...blanks(11), ["▁", "spark"]], [floorBadge(99, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["▁", "low"]]],
   ] as const)
     test(title, { options }, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
@@ -2728,8 +2745,8 @@ describe("cockpit", () => {
   test("draws a subagent's request at or above the floor in #60a5fa with no colour set, a main one's in #4ade80", async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
     const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(11), ["█", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
     await ui.unmount();
   });
 
@@ -2737,8 +2754,8 @@ describe("cockpit", () => {
   test("draws the agent_cache_hits sparks in agent_hits.spark set blue, the cache_hits ones in their default", { options: { colors: "agent_hits.spark=#0000ff" } }, async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
     const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "blue"], ["█", "blue"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(11), ["█", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "white on blue"), ...blanks(10), ["█", "blue"], ["█", "blue"]]);
     await ui.unmount();
   });
 
@@ -2751,8 +2768,8 @@ describe("cockpit", () => {
     test(title, { options: { colors } }, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
       const ui = await hitsDrawn($, on, BUSTS);
-      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(10), ["█", "spark"], ["█", main], [" 1↯", main]]);
-      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", sub], [" 1↯", sub]]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(10), ["█", "spark"], ["█", main], [" 1↯", main]]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["█", sub], [" 1↯", sub]]);
       await ui.unmount();
     });
 
@@ -2789,16 +2806,17 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  // As the main tag's: the sparkline and the bust count on the grey while explain_row is on, the mark and floor off it.
+  // As the main tag's: the sparkline and the bust count on the grey while explain_row is on, the mark off it and the floor's
+  // badge on the subagents' spark colour.
   for (const [title, options, grey] of [
-    ["draws the agent_cache_hits sparkline and bust count on the grey while explain_row is on, the mark and floor off it", {}, "#373a48"],
+    ["draws the agent_cache_hits sparkline and bust count on the grey while explain_row is on, the mark off it and the floor's badge on the subagents' spark colour", {}, "#373a48"],
     ["draws no part of the agent_cache_hits tag on the grey with explain_row off", { explain_row: false }, undefined],
   ] as const)
     test(title, { options }, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
       const ui = await hitsDrawn($, on, [100, 99, 2].map((rate, i) => hitRow(`s${i}`, i + 1, rate, { agentId: "a1" })));
       const backgrounds = must(await ui.find({ type: "Box", key: "agent_cache_hits" }), "the agent_cache_hits tag").children.map((part) => propsOf(part).backgroundColor);
-      expect(backgrounds).toEqual([undefined, undefined, ...Array.from({ length: 12 }, () => grey), grey]);
+      expect(backgrounds).toEqual([undefined, "#60a5fa", ...Array.from({ length: 12 }, () => grey), grey]);
       await ui.unmount();
     });
 
@@ -2806,7 +2824,7 @@ describe("cockpit", () => {
   test("draws a subagent's request in each of 20 agent_cache_hits cells at agent_cache_hits_length 20 once it made 20", { options: { agent_cache_hits_length: 20 } }, async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
     const ui = await hitsDrawn($, on, Array.from({ length: 20 }, (_, i) => hitRow(`s${i}`, i + 1, 99.9, { agentId: "a1" })));
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...Array.from({ length: 20 }, () => ["█", "agent spark"])]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...Array.from({ length: 20 }, () => ["█", "agent spark"])]);
     await ui.unmount();
   });
 
@@ -2817,7 +2835,7 @@ describe("cockpit", () => {
     let agents = [subagent("running", "a")];
     agentsOn(on, () => agents);
     const ui = await hitsDrawn($, on, [hitRow("m1", 1, 99.4), hitRow("m2", 3, 97.5), hitRow("a1", 2, 95, { agentId: "a" })]);
-    const drawn = ["95 ", ...Array.from({ length: 9 }, () => " "), "█", "▁", "▅"];
+    const drawn = [" 95 ", ...Array.from({ length: 9 }, () => " "), "█", "▁", "▅"];
     expect(await glyphs(ui)).toEqual(drawn);
     agents = [subagent("completed", "a")];
     await caughtUp(on, ui);
@@ -2836,7 +2854,14 @@ describe("cockpit", () => {
       hitRow("m2", 5, 94),
       hitRow("m3", 6, 2),
     ]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(6), ["█", "spark"], ["▇", "agent spark"], ["▁", "blue"], ["█", "blue"], ["▁", "low"], ["█", "bust"], [" 2↯", "bust"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(6), ["█", "spark"], ["▇", "agent spark"], ["▁", "blue"], ["█", "blue"], ["▁", "low"], ["█", "bust"], [" 2↯", "bust"]]);
+    await ui.unmount();
+  });
+
+  // The subagents' spark colour set blue tells the two apart: the merged tag's badge stays on the main tag's.
+  test("draws the merged cache_hits floor's badge on the main tag's spark colour while agent_hits.spark is set blue", { options: { ...MERGED, colors: "agent_hits.spark=#0000ff" } }, async ($, on) => {
+    const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("a1", 2, 100, { agentId: "a" })]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(10), ["█", "spark"], ["█", "blue"]]);
     await ui.unmount();
   });
 
@@ -2851,7 +2876,7 @@ describe("cockpit", () => {
   // Main requests at minutes 1 to 3 and a subagent's 9 at minutes 4 to 12: the subagents' length of 3 cuts none of them.
   test("draws the newest 12 requests of all sources in the merged cache_hits tag at agent_cache_hits_length 3 and cache_hits_length 12", { options: { ...MERGED, agent_cache_hits_length: 3, cache_hits_length: 12 } }, async ($, on) => {
     const ui = await hitsDrawn($, on, [...[1, 2, 3].map((minute) => hitRow(`m${minute}`, minute, 100)), ...Array.from({ length: 9 }, (_, i) => hitRow(`s${i}`, 4 + i, 100, { agentId: "a1" }))]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 3 }, () => ["█", "spark"]), ...Array.from({ length: 9 }, () => ["█", "agent spark"])]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 3 }, () => ["█", "spark"]), ...Array.from({ length: 9 }, () => ["█", "agent spark"])]);
     await ui.unmount();
   });
 
@@ -2862,8 +2887,8 @@ describe("cockpit", () => {
     test(`draws cache_hits and agent_cache_hits as two tags while merge_cache_hits is ${what}`, { options }, async ($, on) => {
       agentsOn(on, () => [subagent("running", "a1")]);
       const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("s1", 2, 100, { agentId: "a1" }), hitRow("s2", 3, 100, { agentId: "a1" })]);
-      expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["█", "spark"]]);
-      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
+      expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(11), ["█", "spark"]]);
+      expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["█", "agent spark"]]);
       await ui.unmount();
     });
 
@@ -2882,13 +2907,13 @@ describe("cockpit", () => {
       hitRow("a2", 8, 99, { agentId: "a" }),
       hitRow("m9", 9, 99),
     ]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(4), ["█", "blue"], ["█", "blue"], ["█", "bust"], ["█", "bust"], ["█", "blue"], ["█", "bust"], ["▇", "agent spark"], ["▇", "spark"], [" 2↯", "blue"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(4), ["█", "blue"], ["█", "blue"], ["█", "bust"], ["█", "bust"], ["█", "blue"], ["█", "bust"], ["▇", "agent spark"], ["▇", "spark"], [" 2↯", "blue"]]);
     await ui.unmount();
   });
 
   test("draws the main conversation's requests alone in the merged cache_hits tag before any subagent made a request", { options: MERGED }, async ($, on) => {
     const ui = await hitsDrawn($, on, [hitRow("m1", 1, 100), hitRow("m2", 2, 94)]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(10), ["█", "spark"], ["▁", "low"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(10), ["█", "spark"], ["▁", "low"]]);
     await ui.unmount();
   });
 
@@ -2903,11 +2928,11 @@ describe("cockpit", () => {
   // the main 95% the lowest spark, the subagent's 100% full and its 95% the lowest.
   const OTHERS = { cache_hits_length: 3, cache_hits_floor: 90, agent_cache_hits_length: 2, agent_cache_hits_floor: 97 };
   for (const [title, options, parts] of [
-    ["draws the merged cache_hits tag at the merged_cache_hits defaults, 12 cells and the floor 95, while the four other cache hits lengths and floors are set", { ...MERGED, ...OTHERS }, [["95 ", "dim"], ...blanks(9), ["▁", "spark"], ["█", "agent spark"], ["▁", "agent spark"]]],
-    ["draws the merged cache_hits tag at merged_cache_hits_length 30 and merged_cache_hits_floor 90 while cache_hits_length is 12", { ...MERGED, merged_cache_hits_length: 30, merged_cache_hits_floor: 90, cache_hits_length: 12 }, [["90 ", "dim"], ...blanks(27), ["▅", "spark"], ["█", "agent spark"], ["▅", "agent spark"]]],
-    ["draws the merged cache_hits floor 97 and 2 cells at merged_cache_hits_floor 97.8 and merged_cache_hits_length 2.7, fractions rounded down", { ...MERGED, merged_cache_hits_floor: 97.8, merged_cache_hits_length: 2.7 }, [["97 ", "dim"], ["█", "agent spark"], ["▁", "low"]]],
-    ["draws the merged cache_hits floor 50 and 1 cell at merged_cache_hits_floor 30 and merged_cache_hits_length 0", { ...MERGED, merged_cache_hits_floor: 30, merged_cache_hits_length: 0 }, [["50 ", "dim"], ["█", "agent spark"]]],
-    ["draws the merged cache_hits floor 99 at merged_cache_hits_floor 120", { ...MERGED, merged_cache_hits_floor: 120 }, [["99 ", "dim"], ...blanks(9), ["▁", "low"], ["█", "agent spark"], ["▁", "low"]]],
+    ["draws the merged cache_hits tag at the merged_cache_hits defaults, 12 cells and the floor 95, while the four other cache hits lengths and floors are set", { ...MERGED, ...OTHERS }, [floorBadge(95), ...blanks(9), ["▁", "spark"], ["█", "agent spark"], ["▁", "agent spark"]]],
+    ["draws the merged cache_hits tag at merged_cache_hits_length 30 and merged_cache_hits_floor 90 while cache_hits_length is 12", { ...MERGED, merged_cache_hits_length: 30, merged_cache_hits_floor: 90, cache_hits_length: 12 }, [floorBadge(90), ...blanks(27), ["▅", "spark"], ["█", "agent spark"], ["▅", "agent spark"]]],
+    ["draws the merged cache_hits floor 97 and 2 cells at merged_cache_hits_floor 97.8 and merged_cache_hits_length 2.7, fractions rounded down", { ...MERGED, merged_cache_hits_floor: 97.8, merged_cache_hits_length: 2.7 }, [floorBadge(97), ["█", "agent spark"], ["▁", "low"]]],
+    ["draws the merged cache_hits floor 50 and 1 cell at merged_cache_hits_floor 30 and merged_cache_hits_length 0", { ...MERGED, merged_cache_hits_floor: 30, merged_cache_hits_length: 0 }, [floorBadge(50), ["█", "agent spark"]]],
+    ["draws the merged cache_hits floor 99 at merged_cache_hits_floor 120", { ...MERGED, merged_cache_hits_floor: 120 }, [floorBadge(99), ...blanks(9), ["▁", "low"], ["█", "agent spark"], ["▁", "low"]]],
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await hitsDrawn($, on, BOTH);
@@ -2918,7 +2943,7 @@ describe("cockpit", () => {
   // Past both tags' own lengths of 12 the scan keeps as many of each source's requests as the merged length sets.
   test("draws a request in each of 30 merged cache_hits cells at merged_cache_hits_length 30 once the main conversation and a subagent made 15 each", { options: { ...MERGED, merged_cache_hits_length: 30 } }, async ($, on) => {
     const ui = await hitsDrawn($, on, [...Array.from({ length: 15 }, (_, i) => hitRow(`m${i}`, i + 1, 100)), ...Array.from({ length: 15 }, (_, i) => hitRow(`s${i}`, 16 + i, 100, { agentId: "a1" }))]);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...Array.from({ length: 15 }, () => ["█", "spark"]), ...Array.from({ length: 15 }, () => ["█", "agent spark"])]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...Array.from({ length: 15 }, () => ["█", "spark"]), ...Array.from({ length: 15 }, () => ["█", "agent spark"])]);
     await ui.unmount();
   });
 
@@ -2942,8 +2967,8 @@ describe("cockpit", () => {
   test("keeps cache_hits and agent_cache_hits at their own lengths and floors at merged_cache_hits_length 3 and merged_cache_hits_floor 90 while merge_cache_hits is off", { options: { merged_cache_hits_length: 3, merged_cache_hits_floor: 90 } }, async ($, on) => {
     agentsOn(on, () => [subagent("running", "a1")]);
     const ui = await hitsDrawn($, on, BOTH);
-    expect(await hitsParts(ui)).toEqual([["95 ", "dim"], ...blanks(11), ["▁", "spark"]]);
-    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, ["95 ", "dim"], ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]);
+    expect(await hitsParts(ui)).toEqual([floorBadge(95), ...blanks(11), ["▁", "spark"]]);
+    expect(await hitsParts(ui, "agent_cache_hits")).toEqual([MARK, floorBadge(95, "black on agent spark"), ...blanks(10), ["█", "agent spark"], ["▁", "agent spark"]]);
     await ui.unmount();
   });
 
@@ -3169,7 +3194,7 @@ describe("cockpit", () => {
     await clock.advance(100);
     await caughtUp(on, ui);
     const sample = await hitsParts(ui);
-    expect(sample[0]).toEqual(["95 ", "dim"]);
+    expect(sample[0]).toEqual(floorBadge(95));
     expect(sample.slice(1, 13).every(([glyph]) => glyph !== " ")).toBe(true);
 
     isOpen = false;
@@ -3196,7 +3221,7 @@ describe("cockpit", () => {
     await clock.advance(100);
     await caughtUp(on, ui);
     const sample = await hitsParts(ui, "agent_cache_hits");
-    expect(sample.slice(0, 2)).toEqual([MARK, ["95 ", "dim"]]);
+    expect(sample.slice(0, 2)).toEqual([MARK, floorBadge(95, "black on agent spark")]);
     expect(sample.slice(2, 14).every(([glyph]) => glyph !== " ")).toBe(true);
     expect(await explanationOf(ui, "agent_cache_hits")).toMatch(/^Subagents' cache hits: \d+ running, their last request read /);
 
@@ -3218,7 +3243,9 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     await caughtUp(on, ui);
     expect(await ui.findAll({ type: "Box", key: "cache_hits" })).toHaveLength(1);
-    const colours = new Set((await hitsParts(ui)).map(([, colour]) => colour));
+    const sample = await hitsParts(ui);
+    expect(sample[0]).toEqual(floorBadge(95));
+    const colours = new Set(sample.map(([, colour]) => colour));
     expect([colours.has("spark"), colours.has("agent spark")]).toEqual([true, true]);
     expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
     await ui.unmount();

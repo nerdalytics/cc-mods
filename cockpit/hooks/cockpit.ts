@@ -2790,15 +2790,18 @@ function cacheParts(Box: Ui["Box"], Text: Ui["Text"], c: StatusCache, now: numbe
     : chipParts(Box, Text, { key: "cache", mark, value: `cold ${usd(c.write)}`, ...stops("cache.cold") });
 }
 
-// A sparkline tag: its mark and a space if it has one, the floor, dim, then a cell per request, the newest right and blank cells left
-// of the oldest, then the bust count while there is one. At or above the floor a request rises through the eight glyphs
-// to 100%; under it a low ▁, and under 50% a bust's full cell in red. The cells and the count are the value, on the grey
-// while the explanation line can show what hovering it explains.
+// A sparkline tag: its mark and a space if it has one, the floor in a badge, as a limit's badge is drawn, so it reads as
+// the tag's label and not a stray number, then a cell per request, the newest right and blank cells left of the oldest,
+// then the bust count while there is one. At or above the floor a request rises through the eight glyphs to 100%; under
+// it a low ▁, and under 50% a bust's full cell in red. The cells and the count are the value, on the grey while the
+// explanation line can show what hovering it explains.
 function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits, tag: HitsTag) {
   const n = barCells[sizedAs(tag)];
   const floor = hitsFloors[sizedAs(tag)];
   const { colors, mark } = HITS_TAGS[tag];
   const backgroundColor = explainRow ? hex(color("empty")) : undefined;
+  // The floor's badge takes the tag's spark colour, so the merged tag's is the main tag's.
+  const spark = color(`${colors}.spark`);
   // A subagent's request draws in the subagents' colours whichever tag draws it; the bust count in the tag's own.
   const cell = ({ rate, agent }: StatusHits["points"][number]) => {
     const set = agent ? "agent_hits" : colors;
@@ -2809,7 +2812,7 @@ function hitsParts(Box: Ui["Box"], Text: Ui["Text"], h: StatusHits, tag: HitsTag
   const points = h.points.slice(-n);
   const children = [
     ...(mark ? [Text({ children: `${mark} ` })] : []),
-    Text({ dimColor: true, children: `${floor} ` }),
+    Text({ color: hex(contrast(spark)), backgroundColor: hex(spark), children: ` ${floor} ` }),
     ...Array.from({ length: n - points.length }, () => Text({ backgroundColor, children: " " })),
     ...points.map(cell),
     ...(h.busts.count > 0 ? [Text({ color: hex(color(`${colors}.bust`)), backgroundColor, children: ` ${h.busts.count}↯` })] : []),
