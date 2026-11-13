@@ -75,6 +75,8 @@ const scopeOf = (node: object): unknown => {
 };
 // The explanation line's explanations: the Boxes laid over it, after what it shows in its flow.
 const explanationsIn = async (ui: { find: Mounted["find"] }) => elements(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position === "absolute");
+// The explanation line's growers: the Boxes in its flow, hidden until a tag's scope is hovered, that give it its rows.
+const growersIn = async (ui: { find: Mounted["find"] }) => leaves(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position !== "absolute" && child.props.display === "none");
 // One tag's explanation as the explanation line holds it, hidden or not.
 const explanationOf = async (ui: { find: Mounted["find"] }, tag: string) => flat((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`));
 // One tag's explanation line by line: each line is an element of its own in the explanation's Box.
@@ -184,8 +186,8 @@ function stubHint(on: On, now?: number): void {
   on("ui.render", { component: "PromptHint" }, ($, e) => $.ui.resolve(e).Text({ children: "? for shortcuts" }));
   on("ui.render", { component: "AbovePrompt" }, ($, e) => $.ui.resolve(e).Text({ children: "" }));
 }
-function mountHint($: Engine, isDraft = false): Promise<Mounted<"terminal", "PromptHint">> {
-  return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" } });
+function mountHint($: Engine, isDraft = false, columns?: number): Promise<Mounted<"terminal", "PromptHint">> {
+  return $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "PromptHint", props: { isDraft, isWorking: false, hint: "? for shortcuts" }, ...(columns === undefined ? {} : { viewport: { columns, rows: 40 } }) });
 }
 // A session started with these limits. By default the 5h is at 70% with 2 hours to its reset, 3 hours into its 5: at that
 // pace it runs out in 1h17m, 42m before it resets.
@@ -1089,7 +1091,7 @@ describe("cockpit", () => {
   // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
   // subagent still running whose one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00,
   // reads it for $0.20.
-  async function explained($: Engine, on: On, { cachedAgo = 10, agents = true } = {}): Promise<Mounted<"terminal", "PromptHint">> {
+  async function explained($: Engine, on: On, { cachedAgo = 10, agents = true, columns = undefined as number | undefined } = {}): Promise<Mounted<"terminal", "PromptHint">> {
     stubHint(on, START);
     const now = clockOn(on).now();
     const at = new Date(now - cachedAgo * 60_000).toISOString();
@@ -1119,7 +1121,7 @@ describe("cockpit", () => {
       return { value: { code: 0, signal: null } };
     });
     await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
-    const ui = await mountHint($);
+    const ui = await mountHint($, false, columns);
     await caughtUp(on, ui);
     return ui;
   }
@@ -1134,17 +1136,66 @@ describe("cockpit", () => {
     });
 
   // A Box placed absolute is clipped by the area its site draws in, so the line itself must grow: an in-flow Box under
-  // each tag's scope, hidden until hovered, takes rows in the line while that tag's explanation shows.
-  test("grows the explanation line while a tag's explanation shows, with a hidden Box in its flow under each tag's scope", async ($, on) => {
+  // each tag's scope, hidden until hovered, takes rows in the line while that tag's explanation shows. The kit lays
+  // nothing out, so the layout is read off the props: in a row, a grower of no width beside the warning, which takes the
+  // whole width, makes the line as tall as the taller of the two, not both; with no grower shown, the warning's rows or one.
+  test("grows the explanation line to the taller of the warning and the explanation while one shows, and to the warning's rows or one line while none does", async ($, on) => {
     const ui = await explained($, on);
-    const inFlow = leaves(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position !== "absolute" && child.props.display === "none");
-    expect(inFlow.map(scopeOf)).toEqual(EXPLAINED.map(([tag]) => `explain-${tag}`));
-    for (const grower of inFlow) {
-      expect(grower).toMatchObject({ hover: { display: "flex" } });
-      expect(grower.props.height).toBeGreaterThan(1);
-    }
+    const line = must(await ui.find({ type: "Box", key: "explain" }), "the explanation line");
+    expect(line.props).toMatchObject({ flexDirection: "row", width: "100%", minHeight: 1 });
+    expect(line.props.height).toBeUndefined();
+    const [warning] = leaves(line.children);
+    expect(warning?.props).toMatchObject({ width: "100%" });
+    expect([warning?.props.height, warning?.props.position]).toEqual([undefined, undefined]);
+    expect(flat(warning)).toMatch(/at this pace/);
+    const growers = await growersIn(ui);
+    expect(growers.map(scopeOf)).toEqual(EXPLAINED.map(([tag]) => `explain-${tag}`));
+    for (const grower of growers) expect(grower).toMatchObject({ props: { width: 0, flexShrink: 0, display: "none" }, hover: { display: "flex" } });
     await ui.unmount();
   });
+
+  // A line of n characters needs at least n / columns rows however it wraps, so no explanation shown is cut while the
+  // line takes at least that for each of its lines.
+  test("gives every tag's explanation the same rows, enough for each explanation shown, and more in a narrower line", { options: { merge_cache_hits: true } }, async ($, on) => {
+    const heights: number[] = [];
+    for (const columns of [130, 40]) {
+      const ui = columns === 130 ? await explained($, on, { columns }) : await mountHint($, false, columns);
+      const rows = new Set((await growersIn(ui)).map((g) => g.props.height));
+      expect(rows.size).toBe(1);
+      const [height] = [...rows] as number[];
+      for (const [tag] of EXPLAINED) {
+        const needs = (await explanationLines(ui, tag)).reduce((sum, line) => sum + Math.ceil(line.length / columns), 0);
+        expect(height).toBeGreaterThanOrEqual(needs);
+      }
+      heights.push(height as number);
+      await ui.unmount();
+    }
+    expect(heights[1]).toBeGreaterThan(heights[0] as number);
+  });
+
+  // Measured once at load from made-up texts, never from what is shown: a session with no subagent and a cold cache, whose
+  // explanations are shorter, gets the same rows as one with both. With the default options the longest is the
+  // subagents' cache hits explanation with 99 running, 999 busts, the last on an earlier day, and $999.99, which wraps
+  // between words onto 7 rows of 40 columns:
+  //   Subagents' cache hits: 99 running, their | last request read 99.9% of its prompt | from the cache. 999 busts among them,
+  //   | the last at Sep 28 11:59 AM, wrote the | cache again for $999.99. Sparks run from | 95% to 100%, amber under 95%, red under
+  //   | 50%.
+  for (const [what, fixture] of [["no subagent and a cold cache", { agents: false, cachedAgo: 120 }], ["a running subagent and a warm cache", { agents: true, cachedAgo: 10 }]] as const)
+    test(`gives the explanation line the rows of the longest made-up explanations with ${what}`, async ($, on) => {
+      const ui = await explained($, on, { ...fixture, columns: 40 });
+      // agent_cache_hits explains nothing without a subagent, so it has no grower then.
+      expect(new Set((await growersIn(ui)).map((g) => g.props.height))).toEqual(new Set([7]));
+      await ui.unmount();
+    });
+
+  // At 1000 columns every line of every explanation fits in one row, so the rows are the most lines any one has: two
+  // with usage_lookup on, where a split cost explanation adds the credits charged on the account as a second line.
+  for (const [lookup, rows] of [[false, 1], [true, 2]] as const)
+    test(`counts each line of an explanation of several lines, ${rows} row${rows > 1 ? "s" : ""} at 1000 columns with usage_lookup ${lookup}`, { options: { usage_lookup: lookup } }, async ($, on) => {
+      const ui = await explained($, on, { columns: 1000 });
+      expect((await growersIn(ui)).map((g) => g.props.height)).toEqual(EXPLAINED.map(() => rows));
+      await ui.unmount();
+    });
 
   test("draws no overlay of its own in any of the nine tags, agent_cache_hits too", async ($, on) => {
     const ui = await explained($, on);
@@ -1162,9 +1213,9 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // The kit lays nothing out, so the wrap is read off the props: placed absolute, an explanation takes no room in the
-  // line, and with no fixed height and nothing cut off, the lines it wraps onto paint over what lies below the line.
-  test("wraps a long explanation between words, its further lines laid over what lies below the line rather than moving it", async ($, on) => {
+  // The kit lays nothing out, so the wrap is read off the props: placed absolute over the line its grower made tall
+  // enough, an explanation has no fixed height and nothing cut off.
+  test("wraps a long explanation between words, with no height or overflow of its own to cut it", async ($, on) => {
     const ui = await explained($, on);
     const explanations = await explanationsIn(ui);
     expect(explanations).toHaveLength(EXPLAINED.length);

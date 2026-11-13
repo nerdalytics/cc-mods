@@ -838,6 +838,10 @@ let mergeCacheHits = false;
 let limitForecast = false;
 // The explain_row option: the explanation line, where hovering a tag shows its explanation.
 let explainRow = false;
+// The longest explanations, built once when the module loads, kept as each line's word lengths; and the rows the longest
+// of them needs, by the line's width, folded from those lengths once for each width the line is drawn at.
+let explainWords: number[][][] = [];
+const explainRows = new Map<number, number>();
 // The usage_lookup option: the credits tag's calls to Anthropic's usage and profile endpoints, off unless the person allows them.
 let usageLookup = false;
 // The lookup pacing: one lookup a minute at most, a wait after a failed one that doubles with each failure in a row. The
@@ -890,6 +894,9 @@ export const register: Register = (on, options) => {
     merged_cache_hits: floorOf(options.merged_cache_hits_floor as number),
   };
   limitStyle = LIMIT_STYLES.find((style) => style === options.limit_style) ?? "classic";
+  // After every option an explanation reads, so the longest texts are the ones these options draw.
+  explainWords = longestExplanations().map((text) => text.split("\n").map((line) => line.split(" ").map((word) => [...word].length)));
+  explainRows.clear();
   overrides = overridesOf(options.colors);
   gradients = options.gradients !== false;
   on("session.start", async ($, e, next) => {
@@ -1109,14 +1116,15 @@ export const register: Register = (on, options) => {
     if (e.surface !== "terminal") return next(e);
     const drawn = await next(e);
     const ui = $.ui.resolve(e);
-    const rows = await drawLines($, ui, belowLines, e.props.isWorking);
+    const rows = await drawLines($, ui, belowLines, e.props.isWorking, e.viewport?.columns ?? FALLBACK_COLUMNS);
     return rows.length === 0 ? drawn : ui.Box({ flexDirection: "column", children: [drawn, ...rows] });
   });
 
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.surface !== "terminal" || e.props.hasSurvey) return next(e);
     const ui = $.ui.resolve(e);
-    const rows = await drawLines($, ui, aboveLines, e.props.isWorking);
+    // The band's columns less the column of padding each side.
+    const rows = await drawLines($, ui, aboveLines, e.props.isWorking, e.props.bodyColumns - 2);
     if (rows.length === 0) return next(e);
     return ui.Box({ flexDirection: "column", paddingX: 1, children: rows });
   });
@@ -1154,7 +1162,7 @@ async function saveColor($: EngineInterface, option: unknown, name: ColorName, t
 // explanation line always draws, so the blank lines around it never meet. While the order pane shows, every blank line
 // draws, each row every tag, and an offer that does not hold, a row with no tags yet, or a blank explanation line, a
 // dim line naming it in its place: a made-up offer would carry buttons that act.
-async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer)[], isWorking: boolean) {
+async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer)[], isWorking: boolean, columns: number) {
   // The panes not reading leaves the lines as they are.
   const ordering = (await $.ui.panes().catch(() => [])).some((pane) => pane.id === ORDER_PANE && pane.isShown);
   const drawn: ReturnType<Ui["Box"]>[] = [];
@@ -1166,7 +1174,7 @@ async function drawLines($: EngineInterface, ui: Ui, names: (Row | Line | Spacer
       : name === SPACER ? [ui.Box({ height: 1 })]
       : name === "fresh" ? [isWorking ? undefined : await freshStartLine($, ui)]
       : name === "compact" ? [await compactLine($, ui)]
-      : [await explainLine($, ui, ordering)];
+      : [await explainLine($, ui, ordering, columns)];
     const empty = isRow(name) ? (name.some(isTag) ? undefined : "empty row: drop tags under its marker") : name === SPACER ? undefined : `${LABELS[name]}: shows when it applies`;
     if (ordering && empty && !found.some((line) => line !== undefined)) found.push(namingLine(ui, empty));
     for (const line of found) {
@@ -1575,33 +1583,60 @@ function paceOf(limit: (typeof LIMITS)[number], found: StatusLimit, now: number,
   return { r: found.percentUsed / (share * target), share, par: share * (target / 100) };
 }
 
-// The rows a revealed explanation adds to the explanation line.
-const EXPLAIN_ROWS = 3;
+// The width the lines are wrapped at where the surface has not measured one: a terminal's classic 80 columns.
+const FALLBACK_COLUMNS = 80;
 
 // The explanation line: unlike the offers it takes a line whether or not it has something to show, and grows for text
 // that wraps. With nothing to show it is blank, or while the order pane shows, a dim line naming it. Over it, hidden
-// until its tag's hover scope is hovered, each shown tag's explanation, and in its flow a Box revealed with it that grows
-// the line, since an explanation laid over the line is cut off at the edge of the area the line draws in.
-async function explainLine($: EngineInterface, ui: Ui, ordering: boolean) {
+// until its tag's hover scope is hovered, each shown tag's explanation. An explanation laid over the line is cut off at
+// the edge of the area the line draws in, so in its flow a Box revealed with it gives the line the rows the longest
+// explanation needs at `columns`, the same for every tag, so the line keeps its height as the pointer moves between tags.
+async function explainLine($: EngineInterface, ui: Ui, ordering: boolean, columns: number) {
   // One live reading for the warning and the explanations, so they agree to the second; the order pane's samples reach
   // the explanations only.
   const live = await snapshotOf($, false);
   const s = live && ordering ? withSamples(live) : live;
   const shown = runOutWarning(ui, live) ?? (ordering ? namingLine(ui, `${LABELS.explain}: the run-out warning shows here`) : undefined);
   const texts = s ? explanations(s) : {};
+  const height = explainRowsAt(columns);
   // Laid over the line after what it shows, on the grey, so a revealed explanation hides the warning beneath it: at
-  // least as tall as the line, so every row of a wrapped warning and every row its grower adds.
+  // least as tall as the line, so every row of a wrapped warning too.
   const grey = hex(color("empty"));
   const overlays = STATUS_ROW.flatMap((tag) => {
     const text = texts[tag];
     if (text === undefined || !isShown(tag)) return [];
-    // shortcut: a fixed EXPLAIN_ROWS whatever the width and the text, so a longer explanation is still cut; replace it
-    // with the rows the longest explanation needs at the line's width, measured once at load.
-    const grower = ui.Box({ height: EXPLAIN_ROWS, display: "none", hover: { scope: explainScope(tag), display: "flex" } });
+    // No width, beside the warning in a row: the line takes the taller of the two, not both.
+    const grower = ui.Box({ width: 0, flexShrink: 0, height, display: "none", hover: { scope: explainScope(tag), display: "flex" } });
     // One Text per line of the explanation, in a column.
     return [grower, ui.Box({ position: "absolute", top: 0, left: 0, width: "100%", minHeight: "100%", flexDirection: "column", display: "none", backgroundColor: grey, hover: { scope: explainScope(tag), display: "flex" }, children: text.split("\n").map((line) => ui.Text({ backgroundColor: grey, children: line })) })];
   });
-  return ui.Box({ key: "explain", flexDirection: "column", width: "100%", minHeight: 1, children: [...(shown ? [shown] : []), ...overlays] });
+  return ui.Box({ key: "explain", flexDirection: "row", width: "100%", minHeight: 1, children: [...(shown ? [ui.Box({ width: "100%", flexDirection: "column", children: [shown] })] : []), ...overlays] });
+}
+
+// The rows the longest explanation needs at `columns`, each of its lines wrapped between words as a Text wraps, a word
+// wider than the line broken across rows.
+function explainRowsAt(columns: number): number {
+  const width = Math.max(1, Math.floor(columns));
+  const known = explainRows.get(width);
+  if (known !== undefined) return known;
+  const rowsOf = (words: number[]) => {
+    let rows = 1;
+    let used = 0;
+    for (const length of words) {
+      if (used > 0 && used + 1 + length <= width) {
+        used += 1 + length;
+        continue;
+      }
+      if (used > 0) rows++;
+      const broken = Math.max(0, Math.ceil(length / width) - 1);
+      rows += broken;
+      used = length - broken * width;
+    }
+    return rows;
+  };
+  const rows = Math.max(1, ...explainWords.map((lines) => lines.reduce((sum, words) => sum + rowsOf(words), 0)));
+  explainRows.set(width, rows);
+  return rows;
 }
 
 // Each status tag's explanation, for a tag the snapshot draws.
@@ -1651,6 +1686,44 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     out.agent_cache_hits = agents.read ? `${running}, their last request ${agents.read} ${agents.busts} ${agents.sparks}` : `${running}, no request yet. ${agents.sparks}`;
   }
   return out;
+}
+
+// Every explanation built from the longest values it can sensibly carry, under the options loaded: the explanation line
+// takes the rows the longest of them needs, so no explanation is cut and the line keeps one height for every tag. The
+// times are fixed local ones that read longest: a 7d reset a week out on today's weekday reads `next Wed 11:59 AM`, a bust
+// on an earlier day `Sep 28 11:59 AM`. Two readings, as a refusal explains a used-up window only while no lookup result
+// does: one with the limits refused and paused, one with usage credits paying, costs split and every other tag at its longest.
+function longestExplanations(): string[] {
+  const nowMs = new Date(2026, 8, 30, 12, 0).getTime();
+  const now = nowMs / 1000;
+  const minute = 60_000;
+  const sevenResets = nowMs + 7 * 86_400_000 - minute;
+  const fiveResets = nowMs + 5 * 3_600_000 - minute;
+  const limits = (seven: number, five: number) => [
+    { kind: "seven_day", percentUsed: seven, resetsAt: new Date(sevenResets).toISOString() },
+    { kind: "five_hour", percentUsed: five, resetsAt: new Date(fiveResets).toISOString() },
+  ];
+  const base: Snapshot = { usage: { context: { tokens: 1, window: 1_000_000 }, rateLimits: limits(100, 99.9) }, model: "", now, phase: 0 };
+  const refused: Snapshot = {
+    ...base,
+    usage: { ...base.usage, rateLimits: limits(100, 100) },
+    rejected: { seven_day: sevenResets },
+    refusals: { seven_day: { at: nowMs - minute, overageStatus: "rejected", overageDisabledReason: "org_level_disabled" } },
+  };
+  const spend = { tokens: 999_990_000, usd: 999.99, requests: 9_999, unpriced: 1, after: 499.99 };
+  const hits: StatusHits = { points: [{ at: nowMs, rate: 99.9 }], busts: { count: 999, at: nowMs - 2 * 86_400_000 - minute, usd: 999.99 } };
+  const paying: Snapshot = {
+    ...base,
+    // The billing month began 12 of its 30 days ago, so the spend has a pace, and with the whole cap spent it runs out any moment.
+    credits: { at: nowMs, enabled: true, spent: 99_999, cap: 99_999, decimals: 2, currency: "CHF", capReached: false, reason: null },
+    billing: 18,
+    creditsBase: { spent: 0 },
+    usedUp: [{ from: nowMs - 3_600_000 }],
+    turns: 9_999,
+    tokens: { main: spend, agents: { ...spend, count: 99 }, cache: { at: nowMs, ttl: 3_600, read: 999.99, write: 999.99, prompt: 999_999, base: 999_999 }, hits },
+    agentHits: { running: 99, hits },
+  };
+  return [refused, paying].flatMap((s) => Object.values(explanations(s)));
 }
 
 // A sparkline tag's explanation in parts: what its newest request read, none before one; the busts it counts, `where`;
