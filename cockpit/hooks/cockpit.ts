@@ -456,6 +456,12 @@ const LABELS: Record<string, string> = {
 type ListKey = "lines" | "tags";
 const isList = (key: string): key is ListKey => key === "lines" || key === "tags";
 type List = { items: string[]; labels: Record<string, string>; fixed: string[] };
+// The merge_turns option: one turns chip counting the requests of the main conversation and every subagent of the session.
+let mergeTurns = false;
+// The merge_costs option: one cost chip for the main conversation and its subagents together.
+let mergeCosts = false;
+// The merge_cache_hits option: one cache_hits sparkline for the main conversation and every subagent of the session.
+let mergeCacheHits = false;
 let lists: Record<ListKey, List> = listsOf(layout, () => true);
 // Changes whenever the lists do, so each list's Client drops a drag it kept from before. A random number, not a count:
 // an option write loads the module again, and a count starting over at 0 could repeat a revision an older copy gave.
@@ -464,13 +470,13 @@ const listProps = (key: ListKey) => ({ ...lists[key], rev });
 
 // The pane's two lists from a layout. The lines: each row as row-N, the prompt marker, the offers switched on and the
 // spacers, then the hidden marker, the spacer and the new row to drag out, and the offers switched off. The tags: each
-// row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags. Merged, the
-// costs are one tag, the total, and the subagents' tag is left out of the lists; a drop then leaves it out of the
-// layout, which puts it back after the costs. With `mergedHits` the cache hits are one tag the same way, and with
-// `mergedTurns` the turns.
-function listsOf(l: Layout, on: (line: Line) => boolean, merged = false, mergedHits = false, mergedTurns = false): Record<ListKey, List> {
-  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents") && !(mergedHits && name === "agent_cache_hits") && !(mergedTurns && name === "agent_turns"));
-  const labels: Record<string, string> = { ...LABELS, turns: mergedTurns ? "total turns" : "turns", tokens: merged ? "total costs" : "main session costs", cache_hits: mergedHits ? "total cache hits" : "cache hits" };
+// row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags. With
+// merge_costs on the costs are one tag, the total, and the subagents' tag is left out of the lists; a drop then leaves
+// it out of the layout, which puts it back after the costs. merge_cache_hits makes the cache hits one tag the same way,
+// and merge_turns the turns.
+function listsOf(l: Layout, on: (line: Line) => boolean): Record<ListKey, List> {
+  const listed = <T extends string>(names: T[]) => names.filter((name) => !(mergeCosts && name === "agents") && !(mergeCacheHits && name === "agent_cache_hits") && !(mergeTurns && name === "agent_turns"));
+  const labels: Record<string, string> = { ...LABELS, turns: mergeTurns ? "total turns" : "turns", tokens: mergeCosts ? "total costs" : "main session costs", cache_hits: mergeCacheHits ? "total cache hits" : "cache hits" };
   const rows = l.lines.filter(isRow).map(listed);
   const id = (i: number) => `row-${i + 1}`;
   const named = (row: Row) => row.filter(isTag).map((tag) => labels[tag] ?? tag);
@@ -842,12 +848,6 @@ let prBusy = false;
 // The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
 // line that closes it; and the rate each such line got, by instance, so a redraw after a later turn keeps its own.
 let turnRate = false;
-// The merge_turns option: one turns chip counting the requests of the main conversation and every subagent of the session.
-let mergeTurns = false;
-// The merge_costs option: one cost chip for the main conversation and its subagents together.
-let mergeCosts = false;
-// The merge_cache_hits option: one cache_hits sparkline for the main conversation and every subagent of the session.
-let mergeCacheHits = false;
 // The limit_forecast option: the run-out warning in the explanation line, when a limit runs out before its reset at the
 // pace so far.
 let limitForecast = false;
@@ -891,7 +891,7 @@ export const register: Register = (on, options) => {
     if (line === "prompt") side = belowLines;
     else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
-  lists = listsOf(layout, shown, mergeCosts, mergeCacheHits, mergeTurns);
+  lists = listsOf(layout, shown);
   rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   barCells = {
@@ -980,7 +980,7 @@ export const register: Register = (on, options) => {
     // A drop in one list can change the other (a new row's marker), so the pane draws both again.
     const now = { ...options, ...saved };
     layout = drop.layout;
-    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts, mergeCacheHits, mergeTurns);
+    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true);
     rev = Math.random();
     $.ui.invalidate("ui.render");
     return { props: listProps(key) };

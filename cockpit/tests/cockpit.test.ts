@@ -3084,7 +3084,7 @@ describe("cockpit", () => {
   test("draws the prompts and the main session's requests in turns, and the subagent mark and 2 / 265 in agent_turns once two finished subagents made 265 requests", async ($, on) => {
     const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
     expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 965 "]);
-    expect(await chipOf(ui, "agent_turns")).toEqual(["  ", " 2 / 265 "]);
+    expect(await chipOf(ui, "agent_turns")).toEqual([" \uf0e7 ", " 2 / 265 "]);
     await ui.unmount();
   });
 
@@ -3110,7 +3110,7 @@ describe("cockpit", () => {
     test(`draws turns and agent_turns as two tags while merge_turns is ${what}`, { options }, async ($, on) => {
       const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
       expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 965 "]);
-      expect(await chipOf(ui, "agent_turns")).toEqual(["  ", " 2 / 265 "]);
+      expect(await chipOf(ui, "agent_turns")).toEqual([" \uf0e7 ", " 2 / 265 "]);
       await ui.unmount();
     });
 
@@ -3123,7 +3123,7 @@ describe("cockpit", () => {
   // Left out of a saved layout, agent_turns goes after the tag before it in the default order, touching it.
   test("draws agent_turns after turns in a saved layout that lists turns but not agent_turns", { options: { layout: withStatus("model,gap-1,turns,gap-1,tokens", "limit_7d,limit_5h,credits,context,agents,cache,cache_hits,agent_cache_hits") } }, async ($, on) => {
     const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
-    expect(rowSpelled((await tagRows(ui))[0]).slice(1, 4)).toEqual(["_1", "⏎  81 / 965", "  2 / 265"]);
+    expect(rowSpelled((await tagRows(ui))[0]).slice(1, 4)).toEqual(["_1", "⏎  81 / 965", "\uf0e7  2 / 265"]);
     await ui.unmount();
   });
 
@@ -3135,7 +3135,7 @@ describe("cockpit", () => {
 
   test("explains the agent_turns tag with how many subagents ran and the requests they made", async ($, on) => {
     const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
-    expect(await explanationOf(ui, "agent_turns")).toBe("Subagents run / their requests:  2 / 265.");
+    expect(await explanationOf(ui, "agent_turns")).toBe("Subagents run / their requests: \uf0e7 2 / 265.");
     await ui.unmount();
   });
 
@@ -3425,8 +3425,8 @@ describe("cockpit", () => {
     test(`draws a made-up agent_turns chip while the order pane shows and no subagent has run, with merge_turns off and merge_costs ${mergeCosts}`, { options: { merge_costs: mergeCosts } }, async ($, on) => {
       on("ui.panes", () => ({ value: ORDERING }));
       const ui = await turnsDrawn($, on, 3);
-      expect(await chipOf(ui, "agent_turns")).toEqual(["  ", expect.stringMatching(/^ [1-9]\d* \/ [1-9]\d* $/)]);
-      expect(await explanationOf(ui, "agent_turns")).toMatch(/^Subagents run \/ their requests:  [1-9]\d* \/ [1-9]\d*\.$/);
+      expect(await chipOf(ui, "agent_turns")).toEqual([" \uf0e7 ", expect.stringMatching(/^ [1-9]\d* \/ [1-9]\d* $/)]);
+      expect(await explanationOf(ui, "agent_turns")).toMatch(/^Subagents run \/ their requests: \uf0e7 [1-9]\d* \/ [1-9]\d*\.$/);
       await ui.unmount();
     });
 
