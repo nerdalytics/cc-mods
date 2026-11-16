@@ -1175,9 +1175,9 @@ describe("cockpit", () => {
 
   // Measured once at load from made-up texts, never from what is shown: a session with no subagent and a cold cache, whose
   // explanations are shorter, gets the same rows as one with both. With the default options the longest is the
-  // subagents' cache hits explanation with 99 running, 999 busts, the last on an earlier day, and $999.99, which wraps
-  // between words onto 7 rows of 40 columns:
-  //   Subagents' cache hits: 99 running, their | last request read 99.9% of its prompt | from the cache. 999 busts among them,
+  // subagents' cache hits explanation with 99 running, a full read, 999 busts, the last on an earlier day, and $999.99,
+  // which wraps between words onto 7 rows of 40 columns:
+  //   Subagents' cache hits: 99 running, their | last request read 100.0% of its prompt | from the cache. 999 busts among them,
   //   | the last at Sep 28 11:59 AM, wrote the | cache again for $999.99. Sparks run from | 95% to 100%, amber under 95%, red under
   //   | 50%.
   for (const [what, fixture] of [["no subagent and a cold cache", { agents: false, cachedAgo: 120 }], ["a running subagent and a warm cache", { agents: true, cachedAgo: 10 }]] as const)
@@ -1187,6 +1187,17 @@ describe("cockpit", () => {
       expect(new Set((await growersIn(ui)).map((g) => g.props.height))).toEqual(new Set([7]));
       await ui.unmount();
     });
+
+  // A full read prints as 100.0%, a character longer than any other rate, so the made-up texts carry it. At 61 columns
+  // the subagents' cache hits explanation with it wraps between words onto 5 rows, where with 99.9% it took 4:
+  //   Subagents' cache hits: 99 running, their last request read | 100.0% of its prompt from the cache. 999 busts among them,
+  //   | the last at Sep 28 11:59 AM, wrote the cache again for | $999.99. Sparks run from 95% to 100%, amber under 95%, red
+  //   | under 50%.
+  test("gives the explanation line the rows of the longest made-up explanations with a full read, 5 at 61 columns", async ($, on) => {
+    const ui = await explained($, on, { columns: 61 });
+    expect(new Set((await growersIn(ui)).map((g) => g.props.height))).toEqual(new Set([5]));
+    await ui.unmount();
+  });
 
   // Above the prompt the band pads its rows a column each side, so a band of 42 columns wraps the line at 40: the same 7
   // rows as under the prompt at 40.

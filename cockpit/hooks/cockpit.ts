@@ -1711,7 +1711,8 @@ function longestExplanations(): string[] {
     refusals: { seven_day: { at: nowMs - minute, overageStatus: "rejected", overageDisabledReason: "org_level_disabled" } },
   };
   const spend = { tokens: 999_990_000, usd: 999.99, requests: 9_999, unpriced: 1, after: 499.99 };
-  const hits: StatusHits = { points: [{ at: nowMs, rate: 99.9 }], busts: { count: 999, at: nowMs - 2 * 86_400_000 - minute, usd: 999.99 } };
+  // A full read prints as 100.0%, a character longer than any other rate.
+  const hits: StatusHits = { points: [{ at: nowMs, rate: 100 }], busts: { count: 999, at: nowMs - 2 * 86_400_000 - minute, usd: 999.99 } };
   const paying: Snapshot = {
     ...base,
     // The billing month began 12 of its 30 days ago, so the spend has a pace, and with the whole cap spent it runs out any moment.
