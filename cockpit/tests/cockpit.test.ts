@@ -58,8 +58,8 @@ async function colourLines(ui: { drawn: () => Promise<unknown> }, labelled = tru
 }
 // What the explanation line shows in its flow, the hidden explanations laid over it left out.
 const shownIn = (line: FoundElement) => elements(line.children).filter((child) => child.props.position !== "absolute").map(flat).join("");
-// The nine tags an explanation stands behind, by the scope each joins and the key its Box draws with.
-const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"], ["cache_hits", "cache_hits"], ["agent_cache_hits", "agent_cache_hits"]] as const;
+// The ten tags an explanation stands behind, by the scope each joins and the key its Box draws with.
+const EXPLAINED = [["limit_7d", "seven_day"], ["limit_5h", "five_hour"], ["context", "context"], ["turns", "turns"], ["agent_turns", "agent_turns"], ["tokens", "tokens"], ["agents", "agents"], ["cache", "cache"], ["cache_hits", "cache_hits"], ["agent_cache_hits", "agent_cache_hits"]] as const;
 // A tag's keyed Box as drawn, its hover included, which FoundElement.props leaves out.
 const drawnTag = async (ui: { findAll: Mounted["findAll"] }, key: string) => {
   for (const box of await ui.findAll({ type: "Box" })) {
@@ -79,8 +79,9 @@ const explanationsIn = async (ui: { find: Mounted["find"] }) => elements(must(aw
 const growersIn = async (ui: { find: Mounted["find"] }) => leaves(must(await ui.find({ type: "Box", key: "explain" }), "the explanation line").children).filter((child) => child.props.position !== "absolute" && child.props.display === "none");
 // One tag's explanation as the explanation line holds it, hidden or not.
 const explanationOf = async (ui: { find: Mounted["find"] }, tag: string) => flat((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`));
-// One tag's explanation line by line: each line is an element of its own in the explanation's Box.
-const explanationLines = async (ui: { find: Mounted["find"] }, tag: string) => elements(((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`) as Drawn).children).map(flat);
+// One tag's explanation line by line: each line is an element of its own in the explanation's Box. None for a tag
+// that explains nothing.
+const explanationLines = async (ui: { find: Mounted["find"] }, tag: string) => elements(((await explanationsIn(ui)).find((e) => scopeOf(e) === `explain-${tag}`) as Drawn | undefined)?.children ?? []).map(flat);
 // The rows of tags: the wrapping Boxes with a gap between their tags, not the offer lines, which wrap with none.
 const tagRows = async (ui: { findAll: Mounted["findAll"] }) => (await ui.findAll({ type: "Box" })).filter((b) => b.props.flexWrap === "wrap" && b.props.columnGap !== undefined);
 // An element with no children of its own (a spacer, a blank line) is drawn with its props alone.
@@ -96,7 +97,7 @@ const rowSpelled = (row: FoundElement | undefined) =>
 // The layout option's rows as by default, and a layout with one row in place of its default. The git row draws above
 // the prompt, the status row and the offers under it.
 const GIT = "folders,gap-1,branch,gap-1,worktree,gap-1,pr,gap-1,review,gap-1,comments,gap-1,sync,gap-1,conflict,gap-1,checks,gap-1,changes";
-const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,tokens,gap-1,agents,gap-1,cache,gap-1,cache_hits,gap-1,agent_cache_hits";
+const STATUS = "model,gap-1,limit_7d,gap-1,limit_5h,gap-1,credits,gap-1,context,gap-1,turns,gap-1,agent_turns,gap-1,tokens,gap-1,agents,gap-1,cache,gap-1,cache_hits,gap-1,agent_cache_hits";
 const withGit = (row: string, hidden = "") => `${row};prompt;${STATUS};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 const withStatus = (row: string, hidden = "") => `${GIT};prompt;${row};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
 // A query the test counts on finding.
@@ -784,12 +785,14 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  // The marks of the turns, costs and subagents' costs chips, in the order the row draws them.
-  const SPLIT = [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]] as const;
+  // The marks of the turns, subagents' turns, costs and subagents' costs chips, in the order the row draws them.
+  const TURNS_SPLIT = [["turns", " ⏎ ", "7 / 1", "7 / 1"], ["agent_turns", " \uf0e7 ", "1 / 2", "\uf0e7 1 / 2"]] as const;
+  const SPLIT = [...TURNS_SPLIT, ["tokens", " Σ ", "$3.24", "1.31M"], ["agents", " \uf0e7 ", "$0.01", "151.0K"]] as const;
   for (const [title, options, chips, marks] of [
-    ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, SPLIT, ["⏎", "Σ", "\uf0e7"]],
-    ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [["turns", " ⏎ ", "7 / 1", "\uf0e7 1 / 2"], ["tokens", " Σ ", "$3.25", "1.46M"]], ["⏎", "Σ"]],
-    ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;explain;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "Σ"]],
+    ["counts the main session's and its subagents' tokens once per request, priced from the live table", {}, SPLIT, ["⏎", "\uf0e7", "Σ", "\uf0e7"]],
+    ["adds the subagents' cost and tokens to the main session's one chip when merge_costs is on", { merge_costs: true }, [...TURNS_SPLIT, ["tokens", " Σ ", "$3.25", "1.46M"]], ["⏎", "\uf0e7", "Σ"]],
+    // agent_turns, left out of the layout, goes after turns.
+    ["draws the subagents' costs as a tag of their own, where the layout puts it", { layout: `prompt;agents,spacer,turns,gap-1,tokens;fresh;compact;explain;hidden;${GIT.replaceAll(",gap-1", "")},model,limit_7d,limit_5h,context,cache` }, SPLIT, ["\uf0e7", "⏎", "\uf0e7", "Σ"]],
   ] as const) {
     test(title, { options }, async ($, on) => {
       stubHint(on, START);
@@ -832,7 +835,8 @@ describe("cockpit", () => {
       expect(argv).toEqual(["find", "/home/u/.claude/projects", "-path", "*sid-1*", "-name", "*.jsonl", "-exec", "grep", "-h", "-e", '"usage"', "-e", '"compact_boundary"', "{}", "+"]);
       // Each chip: a space, its tag, and its value's tag right against it.
       // A: 1,310,000 tokens at Opus 5.5's rates is $3.24. The agent: 151,000 tokens at the over-100k tier is $0.01.
-      // The prompts / the main session's requests: A once though written twice; hovered, one subagent / its two requests.
+      // The prompts / the main session's requests: A once though written twice; the subagents' turns: one subagent / its
+      // two requests.
       for (const [key, tag, value, hover] of chips) {
         const chip = must(await ui.find({ type: "Box", key }), `the ${key} chip`);
         expect(flat(chip.children[0])).toBe(tag);
@@ -1086,7 +1090,7 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // A session that draws all nine explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
+  // A session that draws all ten explained tags, under the prompt by default: the 5h at 70% with 2 hours to its reset,
   // so the run-out warning shows, the 7d at 20%, 120,000 of 200,000 tokens of context left, 7 prompts, and the main
   // session's one request writing 1,000,000 tokens to an hour's cache `cachedAgo` minutes ago. With `agents`, a
   // subagent still running whose one request read 150,000 tokens and wrote 1,000. Opus 5.5 writes the cache for $8.00,
@@ -1127,7 +1131,7 @@ describe("cockpit", () => {
   }
 
   for (const [style, said] of [["classic", ""], ["gauge", ", the gauge's too"]] as const)
-    test(`joins each of the nine tags, agent_cache_hits too, to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
+    test(`joins each of the ten tags, agent_turns and agent_cache_hits too, to a hover scope of its own, which reveals its explanation in the explanation line${said}`, { options: { limit_style: style } }, async ($, on) => {
       const ui = await explained($, on);
       for (const [tag, key] of EXPLAINED) expect(await drawnTag(ui, key)).toMatchObject({ hover: { scope: `explain-${tag}` } });
       // Each explanation hidden until its tag's scope is hovered, then laid over the line from its top left corner.
@@ -1156,7 +1160,8 @@ describe("cockpit", () => {
 
   // A line of n characters needs at least n / columns rows however it wraps, so no explanation shown is cut while the
   // line takes at least that for each of its lines.
-  test("gives every tag's explanation the same rows, enough for each explanation shown, and more in a narrower line", { options: { merge_cache_hits: true } }, async ($, on) => {
+  for (const [merged, options] of [["cache hits", { merge_cache_hits: true }], ["turns", { merge_turns: true }]] as const)
+  test(`gives every tag's explanation the same rows, enough for each explanation shown, and more in a narrower line, the ${merged} merged`, { options }, async ($, on) => {
     const heights: number[] = [];
     for (const columns of [130, 40]) {
       const ui = columns === 130 ? await explained($, on, { columns }) : await mountHint($, false, columns);
@@ -1218,7 +1223,7 @@ describe("cockpit", () => {
       await ui.unmount();
     });
 
-  test("draws no overlay of its own in any of the nine tags, agent_cache_hits too", async ($, on) => {
+  test("draws no overlay of its own in any of the ten tags, agent_turns and agent_cache_hits too", async ($, on) => {
     const ui = await explained($, on);
     for (const [, key] of EXPLAINED) expect(JSON.stringify(await drawnTag(ui, key))).not.toContain('"position":"absolute"');
     await ui.unmount();
@@ -1255,12 +1260,18 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // 7 prompts and the main session's 1 request; once a subagent has run, its count and its 1 request, as the hover had them.
-  for (const [title, agents, shown] of [
-    ["explains the turns tag before any subagent has run with what it shows", false, "7 / 1"],
-    ["explains the turns tag with the subagents' count and requests once one has run", true, " 1 / 1"],
+  // 7 prompts and the main session's 1 request; merged, once a subagent has run, the subagent's 1 request added to them,
+  // and its count and its 1 request, as the hover had them.
+  for (const [title, options, agents, shown] of [
+    ["explains the turns tag before any subagent has run with what it shows", {}, false, "7 / 1"],
+    [
+      "explains the turns tag with the requests of the main session and its subagents together, and the subagents' count and requests, once one has run while merge_turns is on",
+      { merge_turns: true },
+      true,
+      "Prompts sent / the requests of the main session and its subagents for them: 7 / 2. Subagents run / their requests: \uf0e7 1 / 1.",
+    ],
   ] as const)
-    test(title, async ($, on) => {
+    test(title, { options }, async ($, on) => {
       const ui = await explained($, on, { agents });
       expect(await explanationOf(ui, "turns")).toContain(shown);
       await ui.unmount();
@@ -2040,8 +2051,8 @@ describe("cockpit", () => {
     elements(elements(must(await ui.find({ type: "Box", key }), `the ${key} chip`).children)[1]?.children ?? []).map((glyph) => glyph.props.backgroundColor);
   for (const [title, options, agents, cachedAgo, keys, grey] of [
     ["keeps each chip's value on the grey while explain_row is on, the turns before any subagent and a cold cache included", {}, false, 120, ["turns", "tokens", "cache"], "#373a48"],
-    ["keeps each chip's value on the grey while explain_row is on, the subagents' costs and a warm cache included", {}, true, 10, ["turns", "tokens", "agents", "cache"], "#373a48"],
-    ["stands no chip's value on the grey with explain_row off", { explain_row: false }, true, 10, ["turns", "tokens", "agents", "cache"], undefined],
+    ["keeps each chip's value on the grey while explain_row is on, the subagents' turns and costs and a warm cache included", {}, true, 10, ["turns", "agent_turns", "tokens", "agents", "cache"], "#373a48"],
+    ["stands no chip's value on the grey with explain_row off", { explain_row: false }, true, 10, ["turns", "agent_turns", "tokens", "agents", "cache"], undefined],
   ] as const)
     test(title, { options }, async ($, on) => {
       const ui = await explained($, on, { agents, cachedAgo });
@@ -3057,6 +3068,77 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
+  // 81 prompts sent, `main` requests of the main session, and for each subagent by its id the requests it made, its
+  // transcript's lines read by the token scan. No subagent is in the running list: a finished one counts too.
+  async function turnsDrawn($: Engine, on: On, main: number, agents: Record<string, number> = {}) {
+    on("session.turns", () => ({ value: 81 }));
+    const rows = [...Array.from({ length: main }, (_, i) => hitRow(`m${i}`, 1, 100)), ...Object.entries(agents).flatMap(([id, n]) => Array.from({ length: n }, (_, i) => hitRow(`${id}${i}`, 2, 100, { agentId: id })))];
+    return hitsDrawn($, on, rows);
+  }
+  // A chip's mark and value as drawn, or none when the chip did not draw.
+  const chipOf = async (ui: Mounted<"terminal", "PromptHint">, key: string) => {
+    const chip = await ui.find({ type: "Box", key });
+    return chip && [flat(chip.children[0]), flat(chip.children[1])];
+  };
+
+  test("draws the prompts and the main session's requests in turns, and the subagent mark and 2 / 265 in agent_turns once two finished subagents made 265 requests", async ($, on) => {
+    const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+    expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 965 "]);
+    expect(await chipOf(ui, "agent_turns")).toEqual(["  ", " 2 / 265 "]);
+    await ui.unmount();
+  });
+
+  test("draws no agent_turns tag before any subagent has run, and folds the gaps around it", { options: { layout: withStatus("model,gap-1,agent_turns,gap-2,tokens", "limit_7d,limit_5h,credits,context,turns,agents,cache,cache_hits,agent_cache_hits") } }, async ($, on) => {
+    const ui = await turnsDrawn($, on, 3);
+    expect(await ui.findAll({ type: "Box", key: "agent_turns" })).toHaveLength(0);
+    expect(rowSpelled((await tagRows(ui))[0]).slice(0, 2)).toEqual(["Opus 5.5", "_2"]);
+    await ui.unmount();
+  });
+
+  test("draws the prompts and the requests of the main session and every subagent added up in turns, 81 / 1230, and no agent_turns tag where the layout places it, while merge_turns is on", { options: { merge_turns: true, layout: withStatus("model,gap-1,agent_turns,gap-2,turns", "limit_7d,limit_5h,credits,context,tokens,agents,cache,cache_hits,agent_cache_hits") } }, async ($, on) => {
+    const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+    expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 1230 "]);
+    expect(await ui.findAll({ type: "Box", key: "agent_turns" })).toHaveLength(0);
+    expect(rowSpelled((await tagRows(ui))[0]).slice(0, 2)).toEqual(["Opus 5.5", "_2"]);
+    await ui.unmount();
+  });
+
+  for (const [what, options] of [
+    ["unset", {}],
+    ["false", { merge_turns: false }],
+  ] as const)
+    test(`draws turns and agent_turns as two tags while merge_turns is ${what}`, { options }, async ($, on) => {
+      const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+      expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 965 "]);
+      expect(await chipOf(ui, "agent_turns")).toEqual(["  ", " 2 / 265 "]);
+      await ui.unmount();
+    });
+
+  test("draws the turns tag as it does with merge_turns off while it is on and no subagent has run", { options: { merge_turns: true } }, async ($, on) => {
+    const ui = await turnsDrawn($, on, 3);
+    expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 3 "]);
+    await ui.unmount();
+  });
+
+  // Left out of a saved layout, agent_turns goes after the tag before it in the default order, touching it.
+  test("draws agent_turns after turns in a saved layout that lists turns but not agent_turns", { options: { layout: withStatus("model,gap-1,turns,gap-1,tokens", "limit_7d,limit_5h,credits,context,agents,cache,cache_hits,agent_cache_hits") } }, async ($, on) => {
+    const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+    expect(rowSpelled((await tagRows(ui))[0]).slice(1, 4)).toEqual(["_1", "⏎  81 / 965", "  2 / 265"]);
+    await ui.unmount();
+  });
+
+  test("explains the turns tag with the prompts and the main session's requests alone while merge_turns is off and a subagent has run", async ($, on) => {
+    const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+    expect(await explanationOf(ui, "turns")).toBe("Prompts sent / the main session's requests for them: 81 / 965.");
+    await ui.unmount();
+  });
+
+  test("explains the agent_turns tag with how many subagents ran and the requests they made", async ($, on) => {
+    const ui = await turnsDrawn($, on, 965, { a: 200, b: 65 });
+    expect(await explanationOf(ui, "agent_turns")).toBe("Subagents run / their requests:  2 / 265.");
+    await ui.unmount();
+  });
+
   // The folders, branch and worktree are parts of their own, parted by the default order's gaps, or touching without.
   for (const [options, spelled] of [
     [{}, ["spike › cc-mods", "_1", "⎇ develop ⎇ feat/gitline", "_1", "⎇ spike", "_1"]],
@@ -3239,7 +3321,7 @@ describe("cockpit", () => {
     const ui = await mountHint($);
     await caughtUp(on, ui);
     const chips = async () => {
-      const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
+      const keys = await Promise.all(["seven_day", "five_hour", "context", "turns", "agent_turns", "tokens", "agents", "cache"].map(async (key) => ((await ui.find({ type: "Box", key })) ? [key] : [])));
       return keys.flat();
     };
     expect(await chips()).toEqual([]);
@@ -3247,7 +3329,7 @@ describe("cockpit", () => {
     isOpen = true;
     await clock.advance(100);
     await caughtUp(on, ui);
-    expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "tokens", "agents", "cache"]);
+    expect(await chips()).toEqual(["seven_day", "five_hour", "context", "turns", "agent_turns", "tokens", "agents", "cache"]);
     expect(await ui.find({ type: "Text", text: /smart zone: compaction: shows when it applies/ })).toBeDefined();
     // The blank explanation line names itself, dim, inside its own line.
     expect((await ui.find({ type: "Box", key: "explain" }))?.text).toMatch(/explanation line/);
@@ -3335,6 +3417,27 @@ describe("cockpit", () => {
     expect(await ui.findAll({ type: "Box", key: "agent_cache_hits" })).toHaveLength(0);
     await ui.unmount();
   });
+
+  // The token scan has read the main session's 3 requests and no subagent's. The costs merged or not, the subagents' turns
+  // show made-up values while merge_turns is off; on, none, and the turns tag counts the session's own requests alone.
+  const ORDERING = [{ id: "cockpit-order", title: "Cockpit order", isShown: true, isFocused: false, isPlaced: true, plugin: "cockpit" }];
+  for (const mergeCosts of [false, true])
+    test(`draws a made-up agent_turns chip while the order pane shows and no subagent has run, with merge_turns off and merge_costs ${mergeCosts}`, { options: { merge_costs: mergeCosts } }, async ($, on) => {
+      on("ui.panes", () => ({ value: ORDERING }));
+      const ui = await turnsDrawn($, on, 3);
+      expect(await chipOf(ui, "agent_turns")).toEqual(["  ", expect.stringMatching(/^ [1-9]\d* \/ [1-9]\d* $/)]);
+      expect(await explanationOf(ui, "agent_turns")).toMatch(/^Subagents run \/ their requests:  [1-9]\d* \/ [1-9]\d*\.$/);
+      await ui.unmount();
+    });
+
+  for (const mergeCosts of [false, true])
+    test(`draws no made-up agent_turns chip while the order pane shows and merge_turns is on, nor made-up requests in turns, with merge_costs ${mergeCosts}`, { options: { merge_turns: true, merge_costs: mergeCosts } }, async ($, on) => {
+      on("ui.panes", () => ({ value: ORDERING }));
+      const ui = await turnsDrawn($, on, 3);
+      expect(await chipOf(ui, "agent_turns")).toBeUndefined();
+      expect(await chipOf(ui, "turns")).toEqual([" ⏎ ", " 81 / 3 "]);
+      await ui.unmount();
+    });
 
   // No response has come in this session: the samples' resets are set from now, so the pace shows with no reading at all.
   test("draws the 5h sample's pace on a gauge while the order pane shows", { options: { limit_style: "gauge" } }, async ($, on) => {
@@ -4519,9 +4622,9 @@ describe("cockpit", () => {
   }
   // The rows pinned with no gaps, so each tag takes one row of its list. The lines: row-1 (git), ── prompt ──, row-2
   // (status), fresh, compact, explain, ── hidden ── (6), spacer, new row. The tags: ── row 1 ── (0), folders .. changes
-  // (1-10), ── row 2 ── (11), model .. agent_cache_hits (12-22), ── hidden ── (23), spacer, gap-1, gap-2, gap-3 (24-27).
+  // (1-10), ── row 2 ── (11), model .. agent_cache_hits (12-23), ── hidden ── (24), spacer, gap-1, gap-2, gap-3 (25-28).
   const GIT_TAGS = "folders,branch,worktree,pr,review,comments,sync,conflict,checks,changes";
-  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits";
+  const STATUS_TAGS = "model,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits";
   const pinned = (git = GIT_TAGS, status = STATUS_TAGS, hidden = "") => `${git};prompt;${status};fresh;compact;explain${hidden ? `;hidden;${hidden}` : ""}`;
   const PINNED = { layout: pinned() };
 
@@ -4532,17 +4635,17 @@ describe("cockpit", () => {
 
   test("dragging a tag into the hidden zone switches it off and keeps the order of the rest", { options: PINNED }, async ($, on) => {
     // The model tag dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 23)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 12, 24)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model")]]);
   });
 
-  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model") } }, async ($, on) => {
-    // 7d .. agent_cache_hits 12-21, ── hidden ── 22, the spacer and gaps 23-26, model 27: dropped on the 7d limit's line.
-    expect(await dragIn(on, $, PINNED, "tags", 27, 12)).toEqual([["layout", pinned()]]);
+  test("dragging a hidden tag out turns it back on", { options: { layout: pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits", "model") } }, async ($, on) => {
+    // 7d .. agent_cache_hits 12-22, ── hidden ── 23, the spacer and gaps 24-27, model 28: dropped on the 7d limit's line.
+    expect(await dragIn(on, $, PINNED, "tags", 28, 12)).toEqual([["layout", pinned()]]);
   });
 
   test("dragging a tag under another row's marker moves it into that row", { options: PINNED }, async ($, on) => {
     // The folders dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits`)]]);
+    expect(await dragIn(on, $, PINNED, "tags", 1, 12)).toEqual([["layout", pinned("branch,worktree,pr,review,comments,sync,conflict,checks,changes", `model,folders,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits`)]]);
   });
 
   test("dragging the new row out of hidden reserves an empty row", { options: PINNED }, async ($, on) => {
@@ -4552,7 +4655,7 @@ describe("cockpit", () => {
 
   test("a tag dropped under an empty row's marker fills it", { options: { layout: `${GIT_TAGS};;prompt;${STATUS_TAGS};fresh;compact;explain` } }, async ($, on) => {
     // ── row 2 ── (11) has nothing under it, ── row 3 ── is 12, the model 13: dropped on row 3's marker, under row 2.
-    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits;fresh;compact;explain`]]);
+    expect(await dragIn(on, $, PINNED, "tags", 13, 12)).toEqual([["layout", `${GIT_TAGS};model;prompt;limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits;fresh;compact;explain`]]);
   });
 
   test("dragging a row into the hidden zone takes it away and hides its tags", { options: PINNED }, async ($, on) => {
@@ -4566,23 +4669,23 @@ describe("cockpit", () => {
   // Spacers: one waits under each list's hidden marker; dragged out it stays where it is dropped and another waits in
   // its place, and dropped under the marker it is gone.
   test("dragging the spare spacer out of hidden adds a spacer to the row", { options: PINNED }, async ($, on) => {
-    // The spacer (24) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 24, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
+    // The spacer (25) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 25, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
   test("dragging a gap out of hidden adds it to the row", { options: PINNED }, async ($, on) => {
-    // gap-2 (26) dropped on the 7d limit's line, after the model.
-    expect(await dragIn(on, $, PINNED, "tags", 26, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
+    // gap-2 (27) dropped on the 7d limit's line, after the model.
+    expect(await dragIn(on, $, PINNED, "tags", 27, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,gap-2,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
-  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits") };
+  const SPACED = { layout: pinned(GIT_TAGS, "model,spacer,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits") };
   test("a second spacer is there to drag out once one is", { options: SPACED }, async ($, on) => {
-    // model, spacer, 7d .. agent_cache_hits (14-23), ── hidden ── 24, the spare spacer 25: dropped beside the first.
-    expect(await dragIn(on, $, SPACED, "tags", 25, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
+    // model, spacer, 7d .. agent_cache_hits (14-24), ── hidden ── 25, the spare spacer 26: dropped beside the first.
+    expect(await dragIn(on, $, SPACED, "tags", 26, 13)).toEqual([["layout", pinned(GIT_TAGS, "model,spacer,spacer,limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,agents,cache,cache_hits,agent_cache_hits")]]);
   });
 
   test("dragging a spacer into hidden takes it away", { options: SPACED }, async ($, on) => {
-    expect(await dragIn(on, $, SPACED, "tags", 13, 24)).toEqual([["layout", pinned()]]);
+    expect(await dragIn(on, $, SPACED, "tags", 13, 25)).toEqual([["layout", pinned()]]);
   });
 
   test("a spacer among the lines keeps its side of the prompt", { options: PINNED }, async ($, on) => {
@@ -4592,7 +4695,7 @@ describe("cockpit", () => {
 
   test("dragging a git part into the hidden zone switches it off", { options: PINNED }, async ($, on) => {
     // The review dropped on the hidden marker's line.
-    expect(await dragIn(on, $, PINNED, "tags", 5, 23)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
+    expect(await dragIn(on, $, PINNED, "tags", 5, 24)).toEqual([["layout", pinned("folders,branch,worktree,pr,comments,sync,conflict,checks,changes", STATUS_TAGS, "review")]]);
   });
 
   // An offer dropped under hidden keeps its place last in the layout, so only its toggle is written.
@@ -4622,8 +4725,8 @@ describe("cockpit", () => {
     for (let i = 0; i < 2; i++) {
       // The model dropped on the hidden marker's line.
       await ui.pointer({ type: "down", x: 2, y: 12, button: "left", in: "tags" });
-      await ui.pointer({ type: "move", x: 2, y: 23, button: "left", in: "tags" });
-      await ui.pointer({ type: "up", x: 2, y: 23, button: "left", in: "tags" });
+      await ui.pointer({ type: "move", x: 2, y: 24, button: "left", in: "tags" });
+      await ui.pointer({ type: "up", x: 2, y: 24, button: "left", in: "tags" });
       expect(await tags()).toEqual(saved);
     }
     await ui.unmount();
@@ -4656,9 +4759,9 @@ describe("cockpit", () => {
     const ui = await $.ui.mount({ plugin: "cockpit", surface: "terminal", component: "Pane", requestId: "cockpit-order", props: { title: "Cockpit order", isFocused: true, bodyColumns: 80, placement: "dock", ...SITE } });
     // What the pane hands each list's Client: the items, in the order they are drawn.
     const clientProps = async (key: string) => (await ui.find({ type: "Client", key }))?.props.props;
-    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, cache hits, subagents' cache hits and 7 more" } });
+    expect(await clientProps("lines")).toMatchObject({ items: ["row-1", "row-2", "prompt", "fresh", "explain", "hidden", "spacer", "row", "compact"], fixed: ["prompt", "hidden"], labels: { "row-1": "▤ row 1: cache, cache hits, subagents' cache hits and 8 more" } });
     expect(await clientProps("tags")).toMatchObject({
-      items: ["row-1", "cache", "cache_hits", "agent_cache_hits", "model", "limit_5h", "credits", "context", "turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
+      items: ["row-1", "cache", "cache_hits", "agent_cache_hits", "model", "limit_5h", "credits", "context", "turns", "agent_turns", "tokens", "agents", "row-2", "changes", "spacer", "folders", "branch", "worktree", "pr", "review", "comments", "sync", "checks", "hidden", "spacer", "gap-1", "gap-2", "gap-3", "limit_7d", "conflict"],
       fixed: ["row-1", "row-2", "hidden"],
       labels: { "row-2": "━━ row 2 ━━", credits: "usage credits" },
     });
@@ -4675,9 +4778,11 @@ describe("cockpit", () => {
     await ui.unmount();
   });
 
-  // The costs and the cache hits as the row draws them: unmerged, the main session's and the subagents' tag; merged, one
-  // tag for them all.
+  // The turns, the costs and the cache hits as the row draws them: unmerged, the main session's and the subagents' tag;
+  // merged, one tag for them all.
   for (const [option, merged, names, items, labels] of [
+    ["merge_turns", false, ["turns", "agent_turns"], ["turns", "agent_turns"], { turns: "turns", agent_turns: "subagents' turns" }],
+    ["merge_turns", true, ["turns", "agent_turns"], ["turns"], { turns: "total turns" }],
     ["merge_costs", false, ["tokens", "agents"], ["tokens", "agents"], { tokens: "main session costs", agents: "subagent costs" }],
     ["merge_costs", true, ["tokens", "agents"], ["tokens"], { tokens: "total costs" }],
     ["merge_cache_hits", false, ["cache_hits", "agent_cache_hits"], ["cache_hits", "agent_cache_hits"], { cache_hits: "cache hits", agent_cache_hits: "subagents' cache hits" }],
@@ -4696,8 +4801,8 @@ describe("cockpit", () => {
 
   // Merged, the subagents' tag is not in the list, so a drop leaves it out of the layout, which puts it back after the costs.
   test("a drop with the costs merged writes the layout without the subagents' tag", { options: { ...PINNED, merge_costs: true } }, async ($, on) => {
-    // model .. agent_cache_hits without agents (12-21), ── hidden ── 22: the model dropped there.
-    expect(await dragIn(on, $, PINNED, "tags", 12, 22)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,tokens,cache,cache_hits,agent_cache_hits", "model")]]);
+    // model .. agent_cache_hits without agents (12-22), ── hidden ── 23: the model dropped there.
+    expect(await dragIn(on, $, PINNED, "tags", 12, 23)).toEqual([["layout", pinned(GIT_TAGS, "limit_7d,limit_5h,credits,context,turns,agent_turns,tokens,cache,cache_hits,agent_cache_hits", "model")]]);
   });
 
   // A tag left out goes after the one before it in the default order, the first one first in the first row; a prompt
@@ -4805,11 +4910,11 @@ describe("cockpit", () => {
     expect((await ui.findAll({ type: "Text", in: "tags" })).every((t) => t.props.wrap === "truncate-end")).toBe(true);
     // Its second line pressed and dropped on the hidden marker's first line (row 1's marker 0, folders to comments a
     // line each, 1-6, ahead and behind 7-8, conflict to changes 9-11, row 2's marker 12, model to the subagents' cache
-    // hits 13-25 with the main session's costs and the subagents' cache hits on two lines each, the hidden marker from 26):
-    // ahead and behind is switched off.
+    // hits 13-27 with the subagents' turns, the main session's costs and the subagents' cache hits on two lines each, the
+    // hidden marker from 28): ahead and behind is switched off.
     await ui.pointer({ type: "down", x: 3, y: 8, button: "left", in: "tags" });
-    await ui.pointer({ type: "move", x: 3, y: 26, button: "left", in: "tags" });
-    await ui.pointer({ type: "up", x: 3, y: 26, button: "left", in: "tags" });
+    await ui.pointer({ type: "move", x: 3, y: 28, button: "left", in: "tags" });
+    await ui.pointer({ type: "up", x: 3, y: 28, button: "left", in: "tags" });
     await ui.unmount();
     expect(written).toEqual([["layout", pinned("folders,branch,worktree,pr,review,comments,conflict,checks,changes", STATUS_TAGS, "sync")]]);
   });
@@ -5314,6 +5419,27 @@ describe("cockpit", () => {
         expect(lines.slice(at, at + 5)).toEqual(["Subagents' cache hits", "agent_hits.spark=#60a5fa at or above the floor and the floor's badge", "agent_hits.low=#fbbf24 under the floor", "agent_hits.bust=#ef4444 a bust and the bust count", expect.stringMatching(/^Cache chip, warm$/)]);
       });
     });
+
+  // The subagents' costs chip's amber stops, #fbbf24 and #b45309, after the prompts chip's.
+  test("lists the agent_turns chip's agent_turns.from and agent_turns.to in a group of their own after the prompts chip in the colours pane, with the subagents' costs chip's defaults", async ($, on) => {
+    await colorsPane($, on, {}, async (ui) => {
+      const lines = await colourLines(ui);
+      const at = lines.indexOf("Prompts chip");
+      expect(lines.slice(at + 3, at + 7)).toEqual(["Subagents' turns chip", "agent_turns.from=#fbbf24 light end", "agent_turns.to=#b45309 dark end, the mark", "Costs chip"]);
+    });
+  });
+
+  // The mark on the darker stop, the value's first glyph on the lighter.
+  test("draws the agent_turns chip in agent_turns.from and agent_turns.to, and leaves the subagents' costs chip in its own", { options: { colors: "agent_turns.from=#112233,agent_turns.to=#445566" } }, async ($, on) => {
+    const ui = await turnsDrawn($, on, 3, { a: 2 });
+    const stopsOf = async (key: string) => {
+      const [mark, value] = elements(must(await ui.find({ type: "Box", key }), `the ${key} chip`).children);
+      return [mark?.props.backgroundColor, elements(value?.children ?? [])[0]?.props.color];
+    };
+    expect(await stopsOf("agent_turns")).toEqual(["#445566", "#112233"]);
+    expect(await stopsOf("agents")).toEqual(["#b45309", "#fbbf24"]);
+    await ui.unmount();
+  });
 
   test("with gradients off the colours pane lists credits.from alone for the usage credits", { options: { gradients: false } }, async ($, on) => {
     await colorsPane($, on, { gradients: false }, async (ui) => {

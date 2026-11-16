@@ -31,6 +31,9 @@ type Snapshot = {
   model: string;
   tokens?: StatusTokens;
   turns?: number;
+  // The subagents the turns tags count, finished ones included: the token scan's, or while the order pane shows and
+  // merge_turns is off, made-up ones until one has run.
+  turnAgents?: StatusTokens["agents"];
   compactAt?: number;
   sent?: number;
   git?: StatusGit;
@@ -75,7 +78,12 @@ const SEGMENTS = {
   ],
   credits: creditsSegment,
   context: ({ Box, Text }, s) => contextParts(Box, Text, s.usage.context, s.compactAt, smartZone),
-  turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s.tokens)] : []),
+  turns: ({ Box, Text }, s) => (s.turns !== undefined ? [turnParts(Box, Text, s.turns, s)] : []),
+  // The subagents run and their requests, finished ones included, once one has run; merged, in the turns tag.
+  agent_turns: ({ Box, Text }, s) => {
+    const value = mergeTurns ? undefined : agentTurnsOf(s);
+    return value ? [chipParts(Box, Text, { key: "agent_turns", mark: AGENT_MARK, value, ...stops("agent_turns") })] : [];
+  },
   // The main conversation's costs, and its subagents' as a tag of their own; merged, both in the first.
   tokens: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(0, 1) : []),
   agents: ({ Box, Text }, s) => (s.tokens ? tokenParts(Box, Text, s.tokens, mergeCosts).slice(1) : []),
@@ -341,7 +349,7 @@ type Gap = (typeof GAPS)[number];
 const isGap = (name: string): name is Gap => GAPS.some((gap) => gap === name);
 type Filler = Spacer | Gap;
 const isFiller = (name: string): name is Filler => isSpacer(name) || isGap(name);
-const STATUS_ROW = ["model", "limit_7d", "limit_5h", "credits", "context", "turns", "tokens", "agents", "cache", "cache_hits", "agent_cache_hits"] as const;
+const STATUS_ROW = ["model", "limit_7d", "limit_5h", "credits", "context", "turns", "agent_turns", "tokens", "agents", "cache", "cache_hits", "agent_cache_hits"] as const;
 type StatusTag = (typeof STATUS_ROW)[number];
 const GIT_ROW = ["folders", "branch", "worktree", "pr", "review", "comments", "sync", "conflict", "checks", "changes"] as const;
 type GitTag = (typeof GIT_ROW)[number];
@@ -418,6 +426,7 @@ const LABELS: Record<string, string> = {
   credits: "usage credits",
   context: "context",
   turns: "turns",
+  agent_turns: "subagents' turns",
   tokens: "main session costs",
   agents: "subagent costs",
   cache: "cache",
@@ -457,10 +466,11 @@ const listProps = (key: ListKey) => ({ ...lists[key], rev });
 // spacers, then the hidden marker, the spacer and the new row to drag out, and the offers switched off. The tags: each
 // row's marker and its tags, then the hidden marker, the spacer and gaps to drag out, and the hidden tags. Merged, the
 // costs are one tag, the total, and the subagents' tag is left out of the lists; a drop then leaves it out of the
-// layout, which puts it back after the costs. With `mergedHits` the cache hits are one tag the same way.
-function listsOf(l: Layout, on: (line: Line) => boolean, merged = false, mergedHits = false): Record<ListKey, List> {
-  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents") && !(mergedHits && name === "agent_cache_hits"));
-  const labels: Record<string, string> = { ...LABELS, tokens: merged ? "total costs" : "main session costs", cache_hits: mergedHits ? "total cache hits" : "cache hits" };
+// layout, which puts it back after the costs. With `mergedHits` the cache hits are one tag the same way, and with
+// `mergedTurns` the turns.
+function listsOf(l: Layout, on: (line: Line) => boolean, merged = false, mergedHits = false, mergedTurns = false): Record<ListKey, List> {
+  const listed = <T extends string>(names: T[]) => names.filter((name) => !(merged && name === "agents") && !(mergedHits && name === "agent_cache_hits") && !(mergedTurns && name === "agent_turns"));
+  const labels: Record<string, string> = { ...LABELS, turns: mergedTurns ? "total turns" : "turns", tokens: merged ? "total costs" : "main session costs", cache_hits: mergedHits ? "total cache hits" : "cache hits" };
   const rows = l.lines.filter(isRow).map(listed);
   const id = (i: number) => `row-${i + 1}`;
   const named = (row: Row) => row.filter(isTag).map((tag) => labels[tag] ?? tag);
@@ -652,6 +662,9 @@ const COLORS = {
   // The chips' stops, lighter to darker, as the limits' are: the mark sits on the darker.
   "turns.from": { group: "Prompts chip", label: "", rgb: [96, 165, 250] },
   "turns.to": { group: "", label: "the mark", rgb: [37, 99, 235] },
+  // The subagents' costs chip's stops, copied so that either can be changed alone.
+  "agent_turns.from": { group: "Subagents' turns chip", label: "", rgb: [251, 191, 36] },
+  "agent_turns.to": { group: "", label: "the mark", rgb: [180, 83, 9] },
   "costs.from": { group: "Costs chip", label: "", rgb: [217, 70, 239] },
   "costs.to": { group: "", label: "the mark", rgb: [134, 25, 143] },
   "agents.from": { group: "Subagents' costs chip", label: "", rgb: [251, 191, 36] },
@@ -829,6 +842,8 @@ let prBusy = false;
 // The turn_rate option. The last main turn's output tokens, its length and when its end was heard, for the
 // line that closes it; and the rate each such line got, by instance, so a redraw after a later turn keeps its own.
 let turnRate = false;
+// The merge_turns option: one turns chip counting the requests of the main conversation and every subagent of the session.
+let mergeTurns = false;
 // The merge_costs option: one cost chip for the main conversation and its subagents together.
 let mergeCosts = false;
 // The merge_cache_hits option: one cache_hits sparkline for the main conversation and every subagent of the session.
@@ -860,6 +875,7 @@ export const register: Register = (on, options) => {
   keepWarm = typeof options.keep_warm_pings === "number" ? Math.max(0, Math.floor(options.keep_warm_pings)) : 0;
   dismissFor = typeof options.dismiss_minutes === "number" ? Math.max(0, options.dismiss_minutes) * 60_000 : 0;
   turnRate = options.turn_rate === true;
+  mergeTurns = options.merge_turns === true;
   mergeCosts = options.merge_costs === true;
   mergeCacheHits = options.merge_cache_hits === true;
   limitForecast = options.limit_forecast === true;
@@ -875,7 +891,7 @@ export const register: Register = (on, options) => {
     if (line === "prompt") side = belowLines;
     else if (isRow(line) || !isLine(line) || shown(line)) side.push(line);
   }
-  lists = listsOf(layout, shown, mergeCosts, mergeCacheHits);
+  lists = listsOf(layout, shown, mergeCosts, mergeCacheHits, mergeTurns);
   rev = Math.random();
   smartZone = options.smart_zone !== true ? 0 : typeof options.smart_zone_tokens === "number" ? options.smart_zone_tokens : 200_000;
   barCells = {
@@ -964,7 +980,7 @@ export const register: Register = (on, options) => {
     // A drop in one list can change the other (a new row's marker), so the pane draws both again.
     const now = { ...options, ...saved };
     layout = drop.layout;
-    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts, mergeCacheHits);
+    lists = listsOf(layout, (line) => now[LINE_TOGGLES[line]] === true, mergeCosts, mergeCacheHits, mergeTurns);
     rev = Math.random();
     $.ui.invalidate("ui.render");
     return { props: listProps(key) };
@@ -1231,14 +1247,14 @@ async function snapshotOf($: EngineInterface, ordering: boolean): Promise<Snapsh
   // Read as the snapshot is built, so a finished subagent's requests leave the tag the frame it leaves the list.
   const working = (await agentsWorking($)).filter((a) => a.teammateId === undefined);
   const agentHits = working.length > 0 ? { running: working.length, hits: mergedHits(working.map((a) => tokens?.bySubagent?.[a.id]), barCells.agent_cache_hits) } : undefined;
-  const live: Snapshot = { usage, model, tokens, agentHits, turns, compactAt, sent, git, pr, rejected, credits, billing, creditsBase, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
+  const live: Snapshot = { usage, model, tokens, agentHits, turns, turnAgents: tokens?.agents, compactAt, sent, git, pr, rejected, credits, billing, creditsBase, k, usedUp, answeredAt, answeredSent, answeredSeven, refusals, now: Math.floor((await $.clock.now()) / 1000), phase };
   return ordering ? withSamples(live) : live;
 }
 
 // While the order pane shows, a tag with nothing to show draws made-up values, so each one can be placed before it
-// turns up during work: the limits, context, turns, costs, cache and both tags' cache hits; a branch, worktree, commits
-// ahead and behind, conflict and changes; a pull request with its review, comments and checks. The limits' resets are
-// set from now, so they show a pace.
+// turns up during work: the limits, context, turns, the subagents' turns, costs, cache and both tags' cache hits; a
+// branch, worktree, commits ahead and behind, conflict and changes; a pull request with its review, comments and checks.
+// The limits' resets are set from now, so they show a pace.
 function withSamples(s: Snapshot): Snapshot {
   const kinds = s.usage.rateLimits.map((r) => r.kind);
   const limit = (kind: string, percentUsed: number, seconds: number) => ({ kind, percentUsed, resetsAt: new Date((s.now + seconds) * 1000).toISOString() });
@@ -1258,6 +1274,8 @@ function withSamples(s: Snapshot): Snapshot {
     credits: s.credits?.enabled ? s.credits : { at: s.now * 1000, enabled: true, spent: 1011, cap: 1500, decimals: 2, currency: "EUR", capReached: false, reason: null },
     usage: { context: { ...s.usage.context, tokens: s.usage.context.tokens ?? Math.round(s.usage.context.window * 0.3) }, rateLimits },
     turns: s.turns ?? 6,
+    // Merged, the made-up subagents stay out, so the turns tag counts the session's own requests.
+    turnAgents: s.turnAgents?.count || mergeTurns ? s.turnAgents : sampleAgents,
     tokens: { ...tokens, cache: tokens.cache ?? { at: s.now * 1000, ttl: 3_600, read: 0.12, write: 1.5, prompt: 80_000, base: 20_000 }, hits: tokens.hits ?? sampleHits(s.now * 1000, barCells[sizedAs("cache_hits")], mergeCacheHits) },
     // Two made-up subagents while none runs, so the tag can be placed before one does.
     agentHits: s.agentHits ?? { running: 2, hits: sampleHits(s.now * 1000, barCells.agent_cache_hits) },
@@ -1658,9 +1676,14 @@ function explanations(s: Snapshot): Partial<Record<StatusTag, string>> {
     out.context = `Context: ${formatTokens(usable - context.tokens)} tokens left of ${formatTokens(usable)}.`;
   }
   if (s.turns !== undefined) {
-    const { value, agents } = turnsOf(s.turns, t);
-    out.turns = `Prompts sent${t ? " / the main session's requests for them" : ""}: ${value}.${agents ? ` Subagents run / their requests: ${agents}.` : ""}`;
+    const value = turnsOf(s.turns, s);
+    const agents = agentTurnsOf(s);
+    const whose = mergeTurns ? "the requests of the main session and its subagents" : "the main session's requests";
+    out.turns = `Prompts sent${t ? ` / ${whose} for them` : ""}: ${value}.${mergeTurns && agents ? ` Subagents run / their requests: ${AGENT_MARK} ${agents}.` : ""}`;
   }
+  // Merged, the turns explanation names the subagents instead, as the agent_turns tag draws nothing.
+  const agentTurns = mergeTurns ? undefined : agentTurnsOf(s);
+  if (agentTurns) out.agent_turns = `Subagents run / their requests: ${AGENT_MARK} ${agentTurns}.`;
   if (t) {
     const { all, spend } = costsOf(t, mergeCosts);
     const split = (s.usedUp?.length ?? 0) > 0;
@@ -1721,6 +1744,7 @@ function longestExplanations(): string[] {
     creditsBase: { spent: 0 },
     usedUp: [{ from: nowMs - 3_600_000 }],
     turns: 9_999,
+    turnAgents: { ...spend, count: 99 },
     tokens: { main: spend, agents: { ...spend, count: 99 }, cache: { at: nowMs, ttl: 3_600, read: 999.99, write: 999.99, prompt: 999_999, base: 999_999 }, hits },
     agentHits: { running: 99, hits },
   };
@@ -2740,7 +2764,7 @@ function costsOf(t: StatusTokens, merged: boolean): { all: boolean; spend: Statu
   return { all, spend: all ? { ...main, tokens: main.tokens + agents.tokens, usd: main.usd + agents.usd, unpriced: main.unpriced + agents.unpriced, after: main.after + agents.after } : main };
 }
 
-type Chip = { key: "turns" | "tokens" | "agents" | "cache"; mark: string; value: string; from: RGB; to: RGB };
+type Chip = { key: "turns" | "agent_turns" | "tokens" | "agents" | "cache"; mark: string; value: string; from: RGB; to: RGB };
 
 // Two tags side by side, as a limit's badge sits against its bar: the mark on the darker stop in its contrast colour,
 // then the value, a space each side, in a gradient from the lighter stop to the darker.
@@ -2848,17 +2872,20 @@ function linkRun(Box: Ui["Box"], Text: Ui["Text"], Link: Ui["Link"], pieces: Pie
   });
 }
 
-// PROMPT_MARK the prompts sent / the model requests the main session made for them; hovered, the explanation line adds
-// the same for its subagents.
-function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, t: StatusTokens | undefined) {
-  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value: turnsOf(turns, t).value, ...stops("turns") });
+// PROMPT_MARK the prompts sent / the model requests made for them, the main session's, or merged, every subagent's too;
+// hovered while merged, the explanation line adds how many subagents ran and their requests.
+function turnParts(Box: Ui["Box"], Text: Ui["Text"], turns: number, s: Snapshot) {
+  return chipParts(Box, Text, { key: "turns", mark: PROMPT_MARK, value: turnsOf(turns, s), ...stops("turns") });
 }
 
-// The turns tag's value, and once a subagent has run, AGENT_MARK how many ran / the requests they made. The requests
-// come with the token scan, so until it has run the prompts stand alone.
-function turnsOf(turns: number, t: StatusTokens | undefined): { value: string; agents?: string } {
-  return { value: t ? `${turns} / ${t.main.requests}` : String(turns), agents: t?.agents.count ? `${AGENT_MARK} ${t.agents.count} / ${t.agents.requests}` : undefined };
+// The turns tag's value: the prompts / the main session's requests, or merged, every subagent's added to them. The
+// requests come with the token scan, so until it has run the prompts stand alone.
+function turnsOf(turns: number, s: Snapshot): string {
+  return s.tokens ? `${turns} / ${s.tokens.main.requests + (mergeTurns ? (s.turnAgents?.requests ?? 0) : 0)}` : String(turns);
 }
+
+// How many subagents ran / the requests they made, finished ones included; none before one has run.
+const agentTurnsOf = (s: Snapshot) => (s.turnAgents?.count ? `${s.turnAgents.count} / ${s.turnAgents.requests}` : undefined);
 
 // Warm: the time left before the cache expires and what the next prompt's cached prefix costs read; hovered, the
 // explanation line adds what it costs once cold. Cold: the cost of writing it again. Each request that hits the cache
